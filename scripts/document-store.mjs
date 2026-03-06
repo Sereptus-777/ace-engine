@@ -61,7 +61,8 @@ export class DocumentStore extends CategoryStore {
       version: 1,
       worldId: null,
       savedAt: null,
-      documents: {},   // keyed by docId
+      documents: {},      // keyed by docId
+      activeDigests: [],   // global digest IDs enabled for this world
     };
   }
 
@@ -73,19 +74,21 @@ export class DocumentStore extends CategoryStore {
 
   _serialize() {
     return {
-      version:   this._data.version ?? 1,
-      worldId:   this._data.worldId,
-      savedAt:   Date.now(),
-      documents: this._data.documents ?? {},
+      version:       this._data.version ?? 1,
+      worldId:       this._data.worldId,
+      savedAt:       Date.now(),
+      documents:     this._data.documents ?? {},
+      activeDigests: this._data.activeDigests ?? [],
     };
   }
 
   _deserialize(raw) {
     this._data = {
-      version:   raw.version ?? 1,
-      worldId:   raw.worldId ?? null,
-      savedAt:   raw.savedAt ?? null,
-      documents: raw.documents ?? {},
+      version:       raw.version ?? 1,
+      worldId:       raw.worldId ?? null,
+      savedAt:       raw.savedAt ?? null,
+      documents:     raw.documents ?? {},
+      activeDigests: raw.activeDigests ?? [],
     };
   }
 
@@ -353,6 +356,26 @@ export class DocumentStore extends CategoryStore {
     return results
       .sort((a, b) => b.score - a.score)
       .slice(0, maxResults);
+  }
+
+  // ── Active Digests (per-world) ───────────────────────────
+
+  /** Get list of active digest IDs for this world. */
+  getActiveDigests() {
+    return this._data.activeDigests ?? [];
+  }
+
+  /** Toggle a digest on/off for this world. */
+  toggleDigest(digestId, enabled) {
+    const list = this._data.activeDigests ?? [];
+    const idx = list.indexOf(digestId);
+    if (enabled && idx < 0) {
+      list.push(digestId);
+    } else if (!enabled && idx >= 0) {
+      list.splice(idx, 1);
+    }
+    this._data.activeDigests = list;
+    this.markDirty();
   }
 
   // ── Stats ────────────────────────────────────────────────

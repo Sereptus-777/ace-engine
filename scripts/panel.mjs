@@ -49,7 +49,7 @@ async function _aceConfirmDialog(title, content) {
 }
 
 export class AcePanel extends foundry.applications.api.ApplicationV2 {
-  constructor({ aiProvider, sceneCtx, npcMemory, lkMemory, suggestionEngine, reputationEngine, subtleRolls, documentEngine, triggerSfx, stopSfx } = {}) {
+  constructor({ aiProvider, sceneCtx, npcMemory, lkMemory, suggestionEngine, reputationEngine, subtleRolls, documentEngine, digestEngine, triggerSfx, stopSfx } = {}) {
     super();
     this.ai          = aiProvider;
     this.scene       = sceneCtx;
@@ -58,6 +58,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this.reputation  = reputationEngine ?? null;  // ReputationEngine — faction word-of-mouth
     this.subtleRolls = subtleRolls ?? null; // SubtleRollManager — blind checks with AI narration
     this._documentEngine = documentEngine ?? null; // DocumentEngine — reference library
+    this._digestEngine   = digestEngine   ?? null; // DigestEngine — AI-powered structured digests
     this.suggestions = suggestionEngine;
     this.triggerSfx  = triggerSfx ?? (() => {});   // broadcasts SFX to all clients
     this.stopSfx     = stopSfx   ?? (() => {});   // stops SFX audio (thunder etc.)
@@ -199,6 +200,9 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       libEditName:         AcePanel._onLibEditName,
       libEditTags:         AcePanel._onLibEditTags,
       libDeleteDoc:        AcePanel._onLibDeleteDoc,
+      libGenerateDigest:   AcePanel._onLibGenerateDigest,
+      libToggleDigest:     AcePanel._onLibToggleDigest,
+      libDeleteDigest:     AcePanel._onLibDeleteDigest,
     },
   };
 
@@ -4595,8 +4599,52 @@ MAGNITUDE: [local/regional/major/legendary]`;
                  <p class="ace-library-empty-hint">Upload PDFs, text files, or map images to give the AI reference material about your campaign world.</p>
                </div>`}
         </div>
+
+        <!-- AI Digests (global, cross-world) -->
+        ${this._buildDigestSection()}
       </div>
     `;
+  }
+
+  _buildDigestSection() {
+    if (!this._digestEngine) return "";
+    const allDigests = this._digestEngine.getAllDigests();
+    if (!allDigests.length) return "";
+
+    const store = this._documentEngine?._mm?.documents;
+    const activeIds = new Set(store?.getActiveDigests() ?? []);
+
+    return `
+      <div class="ace-digest-section">
+        <div class="ace-digest-header">
+          <i class="fas fa-brain"></i> AI Digests <span class="ace-digest-count">${allDigests.length}</span>
+        </div>
+        <div class="ace-digest-hint">Structured knowledge — shared across all worlds. Toggle on/off per campaign.</div>
+        <div class="ace-digest-list">
+          ${allDigests.map(d => {
+            const active = activeIds.has(d.id);
+            const cats = d.categories ?? {};
+            const totalEntries = Object.values(cats).reduce((n, v) => n + (v ?? 0), 0);
+            return `
+              <div class="ace-digest-card ${active ? "ace-digest-active" : ""}" data-digest-id="${d.id}">
+                <div class="ace-digest-card-info">
+                  <div class="ace-digest-card-name">${d.displayName ?? d.sourceFile ?? "Unknown"}</div>
+                  <div class="ace-digest-card-meta">${totalEntries} entries · ${d.pageCount ?? "?"} pages</div>
+                </div>
+                <div class="ace-digest-card-actions">
+                  <button class="ace-lib-action" data-action="libToggleDigest" data-digest-id="${d.id}"
+                          title="${active ? "Disable" : "Enable"} digest for this world">
+                    <i class="fas ${active ? "fa-toggle-on" : "fa-toggle-off"}"></i>
+                  </button>
+                  <button class="ace-lib-action ace-lib-action-delete" data-action="libDeleteDigest" data-digest-id="${d.id}"
+                          title="Delete digest permanently">
+                    <i class="fas fa-trash-alt"></i>
+                  </button>
+                </div>
+              </div>`;
+          }).join("")}
+        </div>
+      </div>`;
   }
 
   _buildDocumentCard(doc) {
@@ -4634,6 +4682,11 @@ MAGNITUDE: [local/regional/major/legendary]`;
           ${tags.length ? `<div class="ace-library-card-tags">${tags.map(t => `<span class="ace-library-tag">${t}</span>`).join("")}</div>` : ""}
         </div>
         <div class="ace-library-card-actions">
+          ${doc.status === "ready" && chunkCount > 0 ? `
+          <button class="ace-lib-action ace-lib-action-digest" data-action="libGenerateDigest" data-doc-id="${doc.id}"
+                  title="Generate AI Digest — extracts NPCs, locations, items, etc.">
+            <i class="fas fa-brain"></i>
+          </button>` : ""}
           <button class="ace-lib-action" data-action="libToggleDoc" data-doc-id="${doc.id}"
                   title="${doc.enabled ? "Disable" : "Enable"} for AI context">
             <i class="fas ${doc.enabled ? "fa-eye" : "fa-eye-slash"}"></i>
@@ -4791,6 +4844,164 @@ MAGNITUDE: [local/regional/major/legendary]`;
     this._saveDocuments();
     this._refreshLibraryUI();
     ui.notifications.info(`ACE | Deleted document: ${doc.displayName}`);
+  }
+
+  // ── Digest Action Handlers ─────────────────────────────────
+
+  /**
+   * Generate an AI digest for a document.
+   * Triggered by the brain icon on library cards.
+   */
+  static async _onLibGenerateDigest(event, target) {
+    const docId = target.closest("[data-doc-id]")?.dataset.docId;
+    if (!docId) return;
+    await this._generateDigest(docId);
+  }
+
+  /**
+   * Toggle a global digest active/inactive for the current world.
+   */
+  static async _onLibToggleDigest(event, target) {
+    const digestId = target.closest("[data-digest-id]")?.dataset.digestId;
+    const store = this._documentEngine?._mm?.documents;
+    if (!digestId || !store) return;
+
+    const activeIds = new Set(store.getActiveDigests());
+    const newEnabled = !activeIds.has(digestId);
+    store.toggleDigest(digestId, newEnabled);
+    this._saveDocuments();
+    this._refreshLibraryUI();
+
+    const meta = this._digestEngine?.getDigestMeta(digestId);
+    const name = meta?.displayName ?? digestId;
+    ui.notifications.info(`ACE | Digest "${name}" ${newEnabled ? "enabled" : "disabled"} for this world`);
+  }
+
+  /**
+   * Delete a global digest permanently (removes from index, data stays on disk).
+   */
+  static async _onLibDeleteDigest(event, target) {
+    const digestId = target.closest("[data-digest-id]")?.dataset.digestId;
+    if (!digestId || !this._digestEngine) return;
+
+    const meta = this._digestEngine.getDigestMeta(digestId);
+    const name = meta?.displayName ?? digestId;
+
+    const confirmed = await _aceConfirmDialog(
+      "Delete Digest",
+      `<p>Are you sure you want to permanently delete the digest for <strong>${name}</strong>?</p>` +
+      `<p>This removes the structured knowledge index. The JSON data file remains on disk but will no longer be used.</p>`
+    );
+    if (!confirmed) return;
+
+    // Also remove from this world's active list
+    const store = this._documentEngine?._mm?.documents;
+    if (store) {
+      store.toggleDigest(digestId, false);
+      this._saveDocuments();
+    }
+
+    await this._digestEngine.deleteDigest(digestId);
+    this._refreshLibraryUI();
+    ui.notifications.info(`ACE | Deleted digest: ${name}`);
+  }
+
+  /**
+   * Run the full digest generation pipeline for a document.
+   * Shows live progress on the library card, saves results globally,
+   * and auto-activates the digest for the current world.
+   */
+  async _generateDigest(docId) {
+    const store = this._documentEngine?._mm?.documents;
+    const doc = store?.getDocument(docId);
+    if (!doc || !this._digestEngine || !this.ai) {
+      ui.notifications.error("ACE | Cannot generate digest — missing document, digest engine, or AI provider.");
+      return;
+    }
+
+    if (!doc.chunks?.length) {
+      ui.notifications.warn("ACE | No text chunks found. Process the document first.");
+      return;
+    }
+
+    // Disable the generate button during processing
+    const btn = this.element?.querySelector(`.ace-lib-action-digest[data-doc-id="${docId}"]`);
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
+    }
+
+    try {
+      // Progress callback updates the library card status line
+      const onProgress = (batchNum, totalBatches, phase) => {
+        let statusText;
+        if (phase === "extracting") {
+          statusText = `🧠 Digesting batch ${batchNum}/${totalBatches}…`;
+        } else if (phase === "merging") {
+          statusText = `🧠 Merging extracted data…`;
+        } else if (phase === "summary") {
+          statusText = `🧠 Generating summary…`;
+        }
+        this._updateLibraryCardStatus(docId, statusText);
+      };
+
+      // Run the AI digest pipeline
+      const digestResult = await this._digestEngine.generateDigest(doc, this.ai, onProgress);
+
+      // Build the digest record
+      const digestId = `digest_${Math.floor(Date.now() / 1000)}_${Math.random().toString(36).slice(2, 5)}`;
+      const categories = {};
+      for (const key of ["npcs", "locations", "plotHooks", "encounters", "items", "factions", "lore"]) {
+        categories[key] = digestResult[key]?.length ?? 0;
+      }
+
+      const digestData = {
+        version: 1,
+        digestId,
+        sourceFile: doc.fileName,
+        displayName: doc.displayName,
+        createdAt: new Date().toISOString(),
+        pageCount: doc.pageCount ?? 0,
+        chunkCount: doc.chunks?.length ?? 0,
+        digest: digestResult,
+      };
+
+      // Save the digest JSON to global storage
+      this._updateLibraryCardStatus(docId, `🧠 Saving digest…`);
+      await this._digestEngine.saveDigest(digestId, digestData);
+
+      // Update the global index
+      this._digestEngine.updateIndex(digestId, {
+        sourceFile: doc.fileName,
+        displayName: doc.displayName,
+        createdAt: digestData.createdAt,
+        pageCount: digestData.pageCount,
+        chunkCount: digestData.chunkCount,
+        categories,
+      });
+      await this._digestEngine.saveIndex();
+
+      // Auto-activate for this world
+      if (store) {
+        store.toggleDigest(digestId, true);
+        this._saveDocuments();
+      }
+
+      this._updateLibraryCardStatus(docId, "");
+      this._refreshLibraryUI();
+      ui.notifications.info(`ACE | Digest created for "${doc.displayName}" — ${Object.values(categories).reduce((a, b) => a + b, 0)} entries extracted`);
+
+    } catch (err) {
+      console.error(`${MODULE_ID} | Digest generation failed:`, err);
+      this._updateLibraryCardStatus(docId, `❌ Digest failed: ${err.message}`);
+      ui.notifications.error(`ACE | Digest generation failed: ${err.message}`);
+
+      // Re-enable the button
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fas fa-brain"></i>`;
+      }
+    }
   }
 
   // ════════════════════════════════════════════════════════════

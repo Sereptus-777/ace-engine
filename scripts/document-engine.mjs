@@ -281,9 +281,11 @@ export async function loadImageAsBase64(path) {
 export class DocumentEngine {
   /**
    * @param {import("./memory-manager.mjs").MemoryManager} memoryManager
+   * @param {import("./digest-engine.mjs").DigestEngine} [digestEngine]
    */
-  constructor(memoryManager) {
+  constructor(memoryManager, digestEngine = null) {
     this._mm = memoryManager;
+    this._digestEngine = digestEngine;
   }
 
   // ── Extraction Methods (delegated to module-level functions) ──
@@ -324,22 +326,54 @@ export class DocumentEngine {
     const store = this._mm?.documents;
     if (!store) return "";
 
-    const enabledDocs = store.getEnabled();
-    if (!enabledDocs.length) return "";
-
     // 1. Build query keywords from user message + scene context
     const queryKeywords = this._extractQueryKeywords(userMessage, sceneContext, currentScene);
     if (!queryKeywords.length) return "";
 
-    // 2. Search for relevant chunks
-    const scored = store.searchChunks(queryKeywords, 25);
-    if (!scored.length) return "";
+    let digestCtx = "";
+    let digestCharsUsed = 0;
 
-    // 3. Select top chunks within character budget
-    const selected = this._selectWithinBudget(scored, maxChars - 250); // reserve for header
+    // 2. Try digest-based context first (structured, high quality)
+    const activeDigestIds = store.getActiveDigests();
+    if (activeDigestIds.length && this._digestEngine) {
+      const digestBudget = Math.floor((maxChars - 300) * 0.7); // 70% for digests
+      const result = this._digestEngine.buildDigestContext(activeDigestIds, queryKeywords, digestBudget);
+      digestCtx = result.text;
+      digestCharsUsed = result.charsUsed;
+    }
 
-    // 4. Format as context block
-    return this._formatContext(selected);
+    // 3. Fill remaining budget with raw chunk matches (fallback/supplement)
+    let chunkCtx = "";
+    const enabledDocs = store.getEnabled();
+    if (enabledDocs.length) {
+      const chunkBudget = maxChars - digestCharsUsed - 300;
+      if (chunkBudget > 200) {
+        const scored = store.searchChunks(queryKeywords, 25);
+        if (scored.length) {
+          const selected = this._selectWithinBudget(scored, chunkBudget);
+          if (selected.length) {
+            chunkCtx = this._formatChunks(selected);
+          }
+        }
+      }
+    }
+
+    if (!digestCtx && !chunkCtx) return "";
+
+    // 4. Assemble final context block
+    let ctx = "\n\n## REFERENCE LIBRARY\n\n";
+    ctx += "The following information comes from the GM's reference documents. ";
+    ctx += "Use this as background knowledge — do not quote it directly to players.\n\n";
+
+    if (digestCtx) {
+      ctx += "### Structured Reference Data\n";
+      ctx += digestCtx;
+    }
+    if (chunkCtx) {
+      ctx += chunkCtx;
+    }
+
+    return ctx;
   }
 
   /**
@@ -418,17 +452,13 @@ export class DocumentEngine {
   }
 
   /**
-   * Format selected chunks as an AI context block.
+   * Format selected chunks as a context sub-block (no outer header).
    * @private
    */
-  _formatContext(selected) {
+  _formatChunks(selected) {
     if (!selected.length) return "";
 
-    let ctx = "\n\n## REFERENCE LIBRARY\n\n";
-    ctx += "The following excerpts are from the GM's reference documents. ";
-    ctx += "Use this information to inform your responses about world lore, ";
-    ctx += "geography, NPCs, monsters, and setting details. ";
-    ctx += "Do not quote these excerpts directly to players \u2014 use them as background knowledge.\n\n";
+    let ctx = "### Raw Text Excerpts\n";
 
     // Group by document
     const byDoc = {};
@@ -438,7 +468,7 @@ export class DocumentEngine {
     }
 
     for (const [, { name, chunks }] of Object.entries(byDoc)) {
-      ctx += `### From: ${name}\n`;
+      ctx += `**From: ${name}**\n`;
       for (const chunk of chunks) {
         if (chunk.heading) ctx += `**${chunk.heading}** (p.${chunk.page})\n`;
         else if (chunk.page) ctx += `*(p.${chunk.page})*\n`;

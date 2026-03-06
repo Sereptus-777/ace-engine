@@ -16,6 +16,7 @@ import { ReputationEngine }  from "./reputation-engine.mjs";
 import { SubtleRollManager } from "./subtle-rolls.mjs";
 import { FameEngine }        from "./fame-engine.mjs";
 import { DocumentEngine }    from "./document-engine.mjs";
+import { DigestEngine }      from "./digest-engine.mjs";
 import { SimpleCalendarBridge } from "./simple-calendar-bridge.mjs";
 
 const MODULE_ID = "ace-engine";
@@ -215,6 +216,7 @@ let aceMemory      = null;   // MemoryManager — persistent campaign log (8-cat
 let reputationEngine = null; // ReputationEngine — faction awareness / word-of-mouth
 let fameEngine     = null;   // FameEngine — party deed fame / geographic reputation
 let documentEngine = null;   // DocumentEngine — document library / reference RAG
+let digestEngine   = null;   // DigestEngine — AI-powered structured digest (global)
 let calendarBridge = null;   // SimpleCalendarBridge — optional Simple Calendar sync
 let subtleRolls    = null;   // SubtleRollManager — blind skill checks with AI narration
 let _aceReady      = false;  // true after all subsystems (AI, memory, etc.) are initialized
@@ -363,15 +365,26 @@ Hooks.once("ready", async () => {
 
   console.log(`${MODULE_ID} | ACE ready — GM mode active`);
 
-  // ── One-time system prompt migration: add library awareness ──
+  // ── One-time system prompt migrations ──
   try {
-    const LIBRARY_HINT = "REFERENCE LIBRARY section is present";
-    const currentPrompt = game.settings.get(MODULE_ID, "systemPrompt") || "";
-    if (currentPrompt && !currentPrompt.includes(LIBRARY_HINT)) {
-      const libraryClause =
-        `\n\nWhen a REFERENCE LIBRARY section is present in your context, that content has ALREADY been extracted from the GM's uploaded documents (PDFs, text files, etc.). You have it right now — do NOT say "let me retrieve the file" or "give me a moment to access the PDF." Just answer using the reference material provided. If the library section is absent or doesn't cover the question, say so honestly.`;
-      await game.settings.set(MODULE_ID, "systemPrompt", currentPrompt + libraryClause);
-      console.log(`${MODULE_ID} | Migrated system prompt: added library awareness clause`);
+    let currentPrompt = game.settings.get(MODULE_ID, "systemPrompt") || "";
+    let changed = false;
+
+    // Migration 1: library awareness
+    if (currentPrompt && !currentPrompt.includes("REFERENCE LIBRARY section is present")) {
+      currentPrompt += `\n\nWhen a REFERENCE LIBRARY section is present in your context, that content has ALREADY been extracted from the GM's uploaded documents (PDFs, text files, etc.). You have it right now — do NOT say "let me retrieve the file" or "give me a moment to access the PDF." Just answer using the reference material provided.`;
+      changed = true;
+    }
+
+    // Migration 2: structured digest + training knowledge awareness
+    if (currentPrompt && !currentPrompt.includes("STRUCTURED REFERENCE DATA")) {
+      currentPrompt += ` When STRUCTURED REFERENCE DATA is present, it contains AI-extracted entities (NPCs, locations, items, encounters, factions, lore) from the GM's sourcebooks — use it directly. For published content (official D&D modules, Pathfinder adventures, etc.), ALSO use your own training knowledge to fill in gaps the reference data does not cover. If neither reference data nor your training covers the question, say so honestly.`;
+      changed = true;
+    }
+
+    if (changed) {
+      await game.settings.set(MODULE_ID, "systemPrompt", currentPrompt);
+      console.log(`${MODULE_ID} | Migrated system prompt: added library/digest awareness`);
     }
   } catch (_) { /* non-critical — prompt just stays as-is */ }
 
@@ -436,13 +449,33 @@ Hooks.once("ready", async () => {
     console.log(`${MODULE_ID} | Fame engine disabled by settings.`);
   }
 
+  // ── Digest Engine — global AI-powered structured digests ──
+  try {
+    digestEngine = new DigestEngine();
+    await digestEngine.loadIndex();
+    const allDigests = digestEngine.getAllDigests();
+    console.log(`${MODULE_ID} | Digest engine initialized (${allDigests.length} global digests)`);
+  } catch (err) {
+    console.error(`${MODULE_ID} | Digest engine failed:`, err);
+    digestEngine = null;
+  }
+
   // ── Document Engine — reference library (PDF, text, images) ──
   const libEnabled = game.settings.get(MODULE_ID, "enableDocumentLibrary") ?? true;
   if (aceMemory && libEnabled) {
     try {
-      documentEngine = new DocumentEngine(aceMemory);
+      documentEngine = new DocumentEngine(aceMemory, digestEngine);
       const stats = documentEngine.getLibrarySummary();
       console.log(`${MODULE_ID} | Document engine initialized (${stats.totalDocuments} docs, ${stats.totalChunks} chunks, ${stats.totalImages} images)`);
+
+      // Pre-load active digests for this world
+      if (digestEngine) {
+        const activeIds = aceMemory.documents.getActiveDigests();
+        if (activeIds.length) {
+          await digestEngine.loadActiveDigests(activeIds);
+          console.log(`${MODULE_ID} | Loaded ${activeIds.length} active digest(s) for this world`);
+        }
+      }
     } catch (err) {
       console.error(`${MODULE_ID} | Document engine failed:`, err);
       documentEngine = null;
@@ -1985,6 +2018,7 @@ function openPanel() {
       reputationEngine,
       subtleRolls,
       documentEngine,
+      digestEngine,
       triggerSfx: _triggerSfx,
       stopSfx:    stopAllSfx,
     });

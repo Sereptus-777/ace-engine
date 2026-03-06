@@ -2264,6 +2264,115 @@ li.ace-toolbar-btn:hover {
   background: rgba(255, 80, 80, 0.1);
 }
 
+.ace-lib-action-digest {
+  color: var(--ace-gold);
+}
+.ace-lib-action-digest:hover {
+  color: #e6c84d;
+  background: rgba(201, 168, 76, 0.15);
+}
+.ace-lib-action-digest:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── AI Digest Section ──────────────────────────────────── */
+
+.ace-digest-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(201, 168, 76, 0.15);
+}
+
+.ace-digest-header {
+  font-family: var(--ace-font-heading);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ace-gold);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.ace-digest-header i {
+  font-size: 14px;
+}
+
+.ace-digest-count {
+  font-size: 11px;
+  background: rgba(201, 168, 76, 0.15);
+  color: var(--ace-gold);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-family: var(--ace-font-body);
+}
+
+.ace-digest-hint {
+  font-size: 10px;
+  color: var(--ace-text-muted);
+  margin-bottom: 8px;
+  line-height: 1.3;
+}
+
+.ace-digest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ace-digest-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ace-digest-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.ace-digest-card.ace-digest-active {
+  border-color: rgba(201, 168, 76, 0.25);
+  background: rgba(201, 168, 76, 0.04);
+}
+
+.ace-digest-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.ace-digest-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ace-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ace-digest-active .ace-digest-card-name {
+  color: var(--ace-gold);
+}
+
+.ace-digest-card-meta {
+  font-size: 10px;
+  color: var(--ace-text-muted);
+}
+
+.ace-digest-card-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
 /* ═══════════════════════════════════════════════════════════
    CRIT / FUMBLE TABLE
    Two buttons in Encounter tab toolbar, result displayed below.
