@@ -4697,6 +4697,22 @@ MAGNITUDE: [local/regional/major/legendary]`;
     }
   }
 
+  /**
+   * Live-update just the status line on a library card without re-rendering the
+   * entire library panel (avoids flicker during long PDF extraction).
+   */
+  _updateLibraryCardStatus(docId, statusText) {
+    const card = this.element?.querySelector(`.ace-library-card[data-doc-id="${docId}"]`);
+    if (!card) return;
+    let statusEl = card.querySelector(".ace-library-card-status");
+    if (!statusEl) {
+      statusEl = document.createElement("div");
+      statusEl.classList.add("ace-library-card-status");
+      card.querySelector(".ace-library-card-info")?.appendChild(statusEl);
+    }
+    statusEl.textContent = statusText;
+  }
+
   /** Trigger a debounced save of the documents store via MemoryManager. */
   _saveDocuments() {
     this._documentEngine?._mm?._scheduleSave?.("documents");
@@ -4861,9 +4877,13 @@ MAGNITUDE: [local/regional/major/legendary]`;
 
       const pages = await this._documentEngine.extractPdfText(arrayBuffer, (current, total) => {
         console.log(`${MODULE_ID} | Extracting PDF: page ${current}/${total}`);
+        // Live progress update in the library card
+        store.setStatus(docId, "processing", `Extracting page ${current} of ${total}…`);
+        this._updateLibraryCardStatus(docId, `⏳ Extracting page ${current}/${total}…`);
       });
 
       store.setPageCount(docId, pages.length);
+      this._updateLibraryCardStatus(docId, `⏳ Chunking ${pages.length} pages…`);
 
       const chunks = this._documentEngine.chunkPages(pages);
       store.setChunks(docId, chunks);

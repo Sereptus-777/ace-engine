@@ -96,7 +96,13 @@ export class AiProvider {
     let fullSystem = systemPrompt;
     fullSystem += `\n\n## GAME SYSTEM\nThe current game system is: **${gameSystem}**. Answer rules questions for this system.`;
     if (sceneContext) fullSystem += `\n\n## CURRENT SCENE STATE\n${sceneContext}`;
-    if (npcMemory) fullSystem += `\n\n## NPC MEMORY & HISTORY\n${npcMemory}`;
+
+    // Split NPC memory from document library context (separated by "## REFERENCE LIBRARY")
+    const libSplit = npcMemory.indexOf("\n\n## REFERENCE LIBRARY");
+    const npcPart  = libSplit >= 0 ? npcMemory.slice(0, libSplit) : npcMemory;
+    const libPart  = libSplit >= 0 ? npcMemory.slice(libSplit)    : "";
+    if (npcPart.trim()) fullSystem += `\n\n## NPC MEMORY & HISTORY\n${npcPart}`;
+    if (libPart.trim()) fullSystem += libPart;
 
     return [
       { role: "system", content: fullSystem },

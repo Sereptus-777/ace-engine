@@ -56,10 +56,10 @@ export async function extractPdfText(pdfData, onProgress = () => {}) {
       .replace(/\s+/g, " ")
       .trim();
     pages.push({ page: i, text });
-    onProgress(i, pdf.numPages);
 
-    // Yield to UI every 10 pages to prevent blocking
-    if (i % 10 === 0) {
+    // Yield to UI every 5 pages so progress indicator updates visibly
+    if (i % 5 === 0 || i === pdf.numPages) {
+      onProgress(i, pdf.numPages);
       await new Promise(r => setTimeout(r, 0));
     }
   }
