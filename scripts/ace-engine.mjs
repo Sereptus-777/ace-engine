@@ -363,6 +363,18 @@ Hooks.once("ready", async () => {
 
   console.log(`${MODULE_ID} | ACE ready — GM mode active`);
 
+  // ── One-time system prompt migration: add library awareness ──
+  try {
+    const LIBRARY_HINT = "REFERENCE LIBRARY section is present";
+    const currentPrompt = game.settings.get(MODULE_ID, "systemPrompt") || "";
+    if (currentPrompt && !currentPrompt.includes(LIBRARY_HINT)) {
+      const libraryClause =
+        `\n\nWhen a REFERENCE LIBRARY section is present in your context, that content has ALREADY been extracted from the GM's uploaded documents (PDFs, text files, etc.). You have it right now — do NOT say "let me retrieve the file" or "give me a moment to access the PDF." Just answer using the reference material provided. If the library section is absent or doesn't cover the question, say so honestly.`;
+      await game.settings.set(MODULE_ID, "systemPrompt", currentPrompt + libraryClause);
+      console.log(`${MODULE_ID} | Migrated system prompt: added library awareness clause`);
+    }
+  } catch (_) { /* non-critical — prompt just stays as-is */ }
+
   // ── TTS availability diagnostic ────────────────────────────
   {
     const localKey = localCredentials?.elevenLabsApiKey || "";
