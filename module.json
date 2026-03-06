@@ -1,0 +1,44 @@
+{
+  "id": "ace-engine",
+  "title": "ACE \u2014 AI Campaign Engine",
+  "description": "A premium AI-powered Game Master companion for Foundry VTT. Features real-time scene awareness, persistent campaign memory, NPC intelligence, dramatic narration with ElevenLabs TTS, encounter generation, and proactive story suggestions. System-agnostic with enhanced support for popular TTRPG systems.",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "12.0.0",
+    "verified": "13",
+    "maximum": "13"
+  },
+  "authors": [
+    {
+      "name": "Sereptus-777",
+      "url": "https://github.com/Sereptus-777"
+    }
+  ],
+  "relationships": {
+    "optional": [
+      {
+        "id": "ace-envoy",
+        "type": "module"
+      },
+      {
+        "id": "ace-trapmaster",
+        "type": "module"
+      }
+    ]
+  },
+  "esmodules": [
+    "scripts/ace-engine.mjs"
+  ],
+  "styles": [
+    "styles/ace-engine.css"
+  ],
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "languages/en.json"
+    }
+  ],
+  "socket": true,
+  "url": "https://github.com/Sereptus-777/ace-engine"
+}

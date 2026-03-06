@@ -1,0 +1,163 @@
+{
+  "ACE": {
+    "Title": "ACE",
+    "OpenPanel": "Open ACE",
+    "Settings": {
+      "AiProvider": {
+        "Name": "AI Provider",
+        "Hint": "Choose your AI service. OpenAI/ChatGPT has a free tier. URL and model auto-fill when you change this."
+      },
+      "ApiKey": {
+        "Name": "API Key",
+        "Hint": "Your API key for the selected provider. Get one free at platform.openai.com. Stored locally, never shared."
+      },
+      "ApiUrl": {
+        "Name": "API Endpoint URL",
+        "Hint": "Auto-filled for most providers. Only change this for local servers (Ollama, LM Studio) or custom endpoints."
+      },
+      "ModelName": {
+        "Name": "AI Model",
+        "Hint": "Select a model for your chosen provider. Changes automatically when you switch providers."
+      },
+      "UseEnvoyKeys": {
+        "Name": "Share ACE: Envoy API Keys",
+        "Hint": "If ACE: Envoy is installed, use its API provider settings instead of separate keys."
+      },
+      "SystemPrompt": {
+        "Name": "System Prompt",
+        "Hint": "Base system prompt for the AI. Customize the ACE personality."
+      },
+      "GameSystem": {
+        "Name": "Game System",
+        "Hint": "Which TTRPG system are you running? Helps ACE give accurate rules answers."
+      },
+      "AutoSuggestions": {
+        "Name": "Proactive Suggestions",
+        "Hint": "Enable automatic dramatic suggestions based on scene context."
+      },
+      "SuggestionInterval": {
+        "Name": "Suggestion Interval (seconds)",
+        "Hint": "How often to check for proactive suggestions when enabled."
+      },
+      "MaxContextTokens": {
+        "Name": "Max Context Tokens",
+        "Hint": "Maximum tokens to include for scene/actor context."
+      },
+      "MaxResponseTokens": {
+        "Name": "Max Response Tokens",
+        "Hint": "Maximum length of AI responses (in tokens)."
+      },
+      "EnableCritFumble": {
+        "Name": "Crit/Fumble Detection",
+        "Hint": "Automatically detect critical hits and fumbles and offer table rolls."
+      },
+      "EnableSurvivalTracker": {
+        "Name": "Survival Tracker",
+        "Hint": "Show the survival tracker bar (meals, rest, scene count)."
+      },
+      "EnableStoryNotes": {
+        "Name": "Auto Story Notes",
+        "Hint": "Silently append notable events (boss kills, rare items, level-ups) as bullet points to PC biography fields."
+      },
+      "EnableFameSystem": {
+        "Name": "Party Fame & Deeds",
+        "Hint": "Track significant party accomplishments and inject fame context into NPC conversations so they know about the party's reputation."
+      },
+      "EnableNarrativeTime": {
+        "Name": "Narrative Time Tracking",
+        "Hint": "Track approximate in-game day and time of day based on narrative cues, scene transitions, and rests. Advances day on rest, detects time keywords in narrations."
+      },
+      "SyncSimpleCalendar": {
+        "Name": "Sync with Simple Calendar",
+        "Hint": "When enabled and Simple Calendar is installed, ACE's narrative time stays in sync with Simple Calendar. Day advances, rests, and time changes push to Simple Calendar, and Simple Calendar changes update ACE's day counter."
+      },
+      "EnableDocumentLibrary": {
+        "Name": "Document Library",
+        "Hint": "Enable the document library for uploading PDFs, text files, and images as AI reference material. The AI uses relevant excerpts to inform responses about world lore, geography, NPCs, and monsters."
+      },
+      "DocContextBudget": {
+        "Name": "Document Context Budget (chars)",
+        "Hint": "Maximum characters of document text to inject per AI prompt. Higher values give the AI more reference material but cost more tokens. 0 = disabled. Recommended: 2000."
+      },
+      "EnableVisionImages": {
+        "Name": "Vision: Send Map Images",
+        "Hint": "When enabled, relevant map/image uploads are sent to vision-capable AI models alongside text. This allows the AI to 'see' maps and reference visual material. Uses more tokens. Off by default."
+      },
+      "DebugMode": {
+        "Name": "Debug Mode",
+        "Hint": "Enable verbose console logging for troubleshooting."
+      },
+      "EnableSubtleRolls": {
+        "Name": "Subtle Rolls (Blind Checks)",
+        "Hint": "Enable blind skill checks with AI-generated narration. Players roll blind, GM sees the result, and AI generates 3 narration options to choose from."
+      },
+      "SubtleRollSkills": {
+        "Name": "Subtle Roll Skills",
+        "Hint": "Comma-separated dnd5e skill IDs for subtle rolls: ins,his,arc,rel,nat,prc,inv,sur,med. Remove any you don't want available."
+      },
+      "SubtleRollAutoDetect": {
+        "Name": "AI Roll Suggestions",
+        "Hint": "AI proactively suggests when players should make skill checks (e.g. Perception near traps, Insight with deceptive NPCs). Suggestions go to GM only — GM must approve before players see anything."
+      }
+    },
+    "Panel": {
+      "Title": "ACE — AI Campaign Engine",
+      "Placeholder": "Ask ACE anything...",
+      "Send": "Send",
+      "Clear": "Clear Chat",
+      "Context": "Scene Context",
+      "Suggestions": "Suggestions",
+      "Rules": "Rules",
+      "Encounter": "Encounter",
+      "Settings": "Settings",
+      "Thinking": "ACE is thinking...",
+      "NoScene": "No active scene.",
+      "TokenCount": "Tokens in Context",
+      "CopyMessage": "Copy",
+      "ApplyNote": "Save to Journal",
+      "RefreshContext": "Refresh Scene Context",
+      "Library": "Library"
+    },
+    "Library": {
+      "Title": "Document Library",
+      "Upload": "Upload",
+      "DropHint": "Drop files here or click to upload",
+      "Formats": "PDF, TXT, MD, PNG, JPG, WEBP",
+      "Empty": "No documents uploaded yet",
+      "EmptyHint": "Upload PDFs, text files, or map images to give the AI reference material about your campaign world.",
+      "Processing": "Processing...",
+      "Ready": "Ready",
+      "Error": "Error",
+      "Enable": "Enable for AI context",
+      "Disable": "Disable for AI context",
+      "Delete": "Delete document",
+      "EditTags": "Edit tags",
+      "EditName": "Rename document",
+      "ConfirmDelete": "Are you sure you want to delete this document?",
+      "Chunks": "chunks",
+      "Pages": "pages",
+      "Images": "images",
+      "Active": "active",
+      "Documents": "documents"
+    },
+    "Tabs": {
+      "Chat": "Chat",
+      "Narration": "Narration",
+      "Ideas": "Ideas",
+      "Encounter": "Encounter",
+      "Select": "Select"
+    },
+    "Suggestions": {
+      "Dramatic": "Dramatic Moment",
+      "Weather": "Weather/Ambience",
+      "Consequence": "Consequence",
+      "NpcAction": "NPC Action"
+    },
+    "Encounter": {
+      "Analyze": "Analyze Encounter",
+      "PartyStatus": "Party Status",
+      "Difficulty": "Difficulty",
+      "Adjustments": "Suggested Adjustments"
+    }
+  }
+}
