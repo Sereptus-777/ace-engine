@@ -28,6 +28,7 @@ export class SceneContext {
     parts.push(this._gatherCombat());
     parts.push(this._gatherTokens());
     parts.push(this._gatherParty());
+    parts.push(this._gatherChatLog());
 
     // Integrate trap data from ACE: Trapmaster if available
     parts.push(this._gatherTraps());
@@ -280,6 +281,55 @@ export class SceneContext {
     }
 
     return lines.join("\n");
+  }
+
+  /**
+   * Gather recent Foundry chat messages so the AI can reference rolls,
+   * dialogue, and game events that happened in-session.
+   * Skips whispers and blind rolls (GM-only info).
+   */
+  _gatherChatLog() {
+    const messages = game.messages?.contents ?? [];
+    if (!messages.length) return "";
+
+    // Grab the last 20 messages — enough context without overwhelming the prompt
+    const recent = messages.slice(-20);
+    const lines = ["### Recent Chat Log"];
+
+    for (const msg of recent) {
+      // Skip whispers (private GM messages) and blind rolls
+      if ((msg.whisper?.length ?? 0) > 0 && !msg.isContentVisible) continue;
+      if (msg.blind) continue;
+
+      const speaker = msg.speaker?.alias || msg.author?.name || "Unknown";
+      const content = this._stripHtml(msg.content || "").trim();
+
+      // ── Roll messages — show formula + result + flavor ──
+      if (msg.rolls?.length) {
+        const rollSummaries = [];
+        for (const r of msg.rolls) {
+          try {
+            const roll = r instanceof Roll ? r : Roll.fromData(r);
+            rollSummaries.push(`${roll.formula} = **${roll.total}**`);
+          } catch { /* skip unparseable rolls */ }
+        }
+        if (rollSummaries.length) {
+          const flavor = msg.flavor ? this._stripHtml(msg.flavor).trim() : "";
+          const label = flavor || "Roll";
+          lines.push(`- **${speaker}** ${label}: ${rollSummaries.join(", ")}`);
+          continue;
+        }
+      }
+
+      // ── Regular chat messages ──
+      if (content) {
+        // Truncate very long messages to keep context manageable
+        const brief = content.length > 250 ? content.slice(0, 250) + "…" : content;
+        lines.push(`- **${speaker}:** ${brief}`);
+      }
+    }
+
+    return lines.length > 1 ? lines.join("\n") : "";
   }
 
   _gatherTraps() {

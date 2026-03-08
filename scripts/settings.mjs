@@ -44,7 +44,7 @@ export class AceSettings {
         openrouter: "OpenRouter (many models, pay-per-use)",
         custom: "Custom OpenAI-Compatible endpoint",
       },
-      default: "openai",
+      default: "ollama",
     });
 
     s("apiKey", {
@@ -72,7 +72,7 @@ export class AceSettings {
       name: "ACE.Settings.UseEnvoyKeys.Name",
       hint: "ACE.Settings.UseEnvoyKeys.Hint",
       type: Boolean,
-      default: false,
+      default: true,
     });
 
     // ── Game System ─────────────────────────────────────────
@@ -224,6 +224,14 @@ export class AceSettings {
       default: "o3hzbFqcuIw2MRzP8rQf",
     });
 
+    s("elevenLabsFemaleVoiceId", {
+      scope: "client",
+      name: "ElevenLabs Female Voice ID",
+      hint: "Voice ID for female NPCs. Find it at elevenlabs.io → Voices. Leave blank to always use the default (male) voice.",
+      type: String,
+      default: "",
+    });
+
     s("elevenLabsModel", {
       scope: "client",
       name: "ElevenLabs Model",
@@ -241,8 +249,16 @@ export class AceSettings {
     // ── Browser TTS (client-scoped) ─────────────────────────
     s("browserVoiceName", {
       scope: "client",
-      name: "Browser Narrator Voice",
+      name: "Browser Narrator Voice (Male)",
       hint: "Voice used when ElevenLabs is not configured. Type the exact voice name from your OS. Leave blank for auto-detect.",
+      type: String,
+      default: "",
+    });
+
+    s("browserFemaleVoiceName", {
+      scope: "client",
+      name: "Browser Narrator Voice (Female)",
+      hint: "Female voice for browser TTS. Leave blank for auto-detect (picks best available female voice).",
       type: String,
       default: "",
     });
@@ -1282,8 +1298,14 @@ export class AceSettings {
       try {
         const envoyProvider = game.settings.get("ace-envoy", "aiProvider") ?? "ollama";
         const envoyApiKey = game.settings.get("ace-envoy", "openAiKey") ?? "";
-        const apiUrl = envoyProvider === "ollama" ? "http://localhost:11434" : "https://api.openai.com";
-        const modelName = envoyProvider === "ollama" ? "llama3.2" : "gpt-4o";
+        let apiUrl, modelName;
+        if (envoyProvider === "ollama") {
+          apiUrl    = game.settings.get("ace-envoy", "ollamaUrl")   ?? "http://localhost:11434";
+          modelName = game.settings.get("ace-envoy", "ollamaModel") ?? "llama3.2";
+        } else {
+          apiUrl    = "https://api.openai.com";
+          modelName = game.settings.get("ace-envoy", "openAiModel") ?? "gpt-4o";
+        }
         return { provider: envoyProvider, apiKey: envoyApiKey, apiUrl, modelName };
       } catch (e) {
         console.warn(`${MODULE_ID} | Could not read ACE: Envoy settings, using own config`, e);

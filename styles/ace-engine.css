@@ -483,6 +483,27 @@
   cursor: not-allowed;
 }
 
+/* ── Save Session Recap button — red accent on every tab ── */
+.ace-session-recap-btn {
+  background: rgba(140, 20, 20, 0.65) !important;
+  color: #ffcccc !important;
+  border-color: rgba(180, 40, 40, 0.5) !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6) !important;
+}
+.ace-session-recap-btn:hover {
+  background: rgba(180, 30, 30, 0.85) !important;
+  color: #fff !important;
+  box-shadow: 0 0 10px rgba(220, 50, 50, 0.5) !important;
+  text-shadow: 0 0 6px rgba(255, 120, 120, 0.6) !important;
+}
+
+/* Recap-only divider: minimal spacing, right-aligned */
+.ace-recap-divider {
+  justify-content: flex-end;
+  min-height: 28px;
+  padding: 2px 6px;
+}
+
 /* ── Chat Input ───────────────────────────────────────────── */
 .ace-chat-input {
   padding: 8px 12px 12px;
@@ -733,6 +754,45 @@
   background: rgba(138, 138, 187, 0.18) !important;
   border-color: #b8b8f0 !important;
   box-shadow: 0 0 6px rgba(138, 138, 187, 0.3);
+}
+
+/* Voice gender toggle button */
+.ace-btn-voice-gender {
+  font-size: 11px !important;
+  padding: 3px 6px !important;
+  color: #888 !important;
+  background: rgba(128, 128, 128, 0.08) !important;
+  border: 1px solid rgba(128, 128, 128, 0.3) !important;
+  transition: all 0.2s;
+  min-width: 26px;
+}
+.ace-btn-voice-gender:hover {
+  color: #c9a84c !important;
+  background: rgba(201, 168, 76, 0.12) !important;
+  border-color: rgba(201, 168, 76, 0.5) !important;
+  box-shadow: 0 0 6px rgba(201, 168, 76, 0.25);
+}
+.ace-btn-voice-gender.ace-voice-male {
+  color: #5b8dd9 !important;
+  background: rgba(91, 141, 217, 0.1) !important;
+  border-color: rgba(91, 141, 217, 0.4) !important;
+}
+.ace-btn-voice-gender.ace-voice-male:hover {
+  color: #7da8ef !important;
+  background: rgba(91, 141, 217, 0.2) !important;
+  border-color: #7da8ef !important;
+  box-shadow: 0 0 6px rgba(91, 141, 217, 0.3);
+}
+.ace-btn-voice-gender.ace-voice-female {
+  color: #d95ba3 !important;
+  background: rgba(217, 91, 163, 0.1) !important;
+  border-color: rgba(217, 91, 163, 0.4) !important;
+}
+.ace-btn-voice-gender.ace-voice-female:hover {
+  color: #ef7dbe !important;
+  background: rgba(217, 91, 163, 0.2) !important;
+  border-color: #ef7dbe !important;
+  box-shadow: 0 0 6px rgba(217, 91, 163, 0.3);
 }
 
 /* Pulsing dot shown while recording */
@@ -1455,9 +1515,9 @@ li.ace-toolbar-btn:hover {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   GRIMOIRE SPLASH SCREEN
-   Shows the full book-cover.png with a pulsing purple gem.
-   GM clicks the gem to enter the ACE UI.
+   SPLASH SCREEN — Cinematic Title Card
+   Dark cinematic intro with gold light rays, floating particles,
+   and dramatic title reveal. Auto-dismisses or click to skip.
    ═══════════════════════════════════════════════════════════ */
 
 .ace-splash {
@@ -1465,11 +1525,12 @@ li.ace-toolbar-btn:hover {
   width: 100%;
   height: 100%;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: flex-end;   /* hint sits at the bottom */
+  justify-content: center;
   overflow: hidden;
-  animation: ace-splashIn 0.5s ease;
+  background: radial-gradient(ellipse at 50% 45%, #1a1510 0%, #0a0a0c 55%, #050507 100%);
+  cursor: pointer;
+  animation: ace-splashIn 0.6s ease;
 }
 
 @keyframes ace-splashIn {
@@ -1477,132 +1538,241 @@ li.ace-toolbar-btn:hover {
   to   { opacity: 1; }
 }
 
-/* Fade + zoom out when GM clicks the gem */
+/* Fade + zoom out when opening or auto-dismissing */
 .ace-splash.ace-splash-opening {
-  animation: ace-splashOut 0.45s ease forwards;
+  animation: ace-splashOut 0.5s ease forwards;
+  pointer-events: none;
 }
 
 @keyframes ace-splashOut {
   from { opacity: 1; transform: scale(1);    }
-  to   { opacity: 0; transform: scale(1.06); }
+  to   { opacity: 0; transform: scale(1.08); }
 }
 
-/* The book cover fills the entire content area */
-.ace-splash-img {
+/* ── Radial Light Rays ───────────────────────────────────── */
+.ace-splash-rays {
+  position: absolute;
+  inset: -50%;
+  background: conic-gradient(
+    from 0deg at 50% 50%,
+    transparent 0deg,
+    rgba(212, 175, 55, 0.04) 8deg,
+    transparent 16deg,
+    transparent 30deg,
+    rgba(212, 175, 55, 0.05) 38deg,
+    transparent 46deg,
+    transparent 60deg,
+    rgba(212, 175, 55, 0.03) 68deg,
+    transparent 76deg,
+    transparent 90deg,
+    rgba(212, 175, 55, 0.05) 98deg,
+    transparent 106deg,
+    transparent 120deg,
+    rgba(212, 175, 55, 0.04) 128deg,
+    transparent 136deg,
+    transparent 150deg,
+    rgba(212, 175, 55, 0.06) 158deg,
+    transparent 166deg,
+    transparent 180deg,
+    rgba(212, 175, 55, 0.03) 188deg,
+    transparent 196deg,
+    transparent 210deg,
+    rgba(212, 175, 55, 0.05) 218deg,
+    transparent 226deg,
+    transparent 240deg,
+    rgba(212, 175, 55, 0.04) 248deg,
+    transparent 256deg,
+    transparent 270deg,
+    rgba(212, 175, 55, 0.05) 278deg,
+    transparent 286deg,
+    transparent 300deg,
+    rgba(212, 175, 55, 0.03) 308deg,
+    transparent 316deg,
+    transparent 330deg,
+    rgba(212, 175, 55, 0.05) 338deg,
+    transparent 346deg,
+    transparent 360deg
+  );
+  animation: ace-splash-rays-spin 45s linear infinite, ace-splash-rays-glow 3s ease-in-out infinite;
+  pointer-events: none;
+  opacity: 0;
+  animation-delay: 0.3s;
+  animation-fill-mode: forwards;
+}
+
+@keyframes ace-splash-rays-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes ace-splash-rays-glow {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1.0; }
+}
+
+/* ── Floating Gold Particles ─────────────────────────────── */
+.ace-splash-particles {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center top;
-  display: block;
   pointer-events: none;
 }
 
-/* ── Pulsing Gem Button ───────────────────────────────────── */
-/*
- * Positioned absolutely over the purple gem on book-cover.png.
- * --ace-gem-x (left %) and --ace-gem-y (top %) control placement.
- * If the pulse ring doesn't sit on the gem, adjust these two values.
- * Current estimate: 50% left, 58% down — test and tweak as needed.
- */
-.ace-gem-btn {
-  /*
-   * Fine-tune these to align with the actual gem in book-cover.png.
-   * Test it: open the panel and see if the glow rings are over the gem.
-   * x = 43%, y = 47% is the current estimate from the screenshot.
-   */
-  --ace-gem-x: 51.5%; /* ✓ FINAL — calibrated by owner via F12 */
-  --ace-gem-y: 50%;   /* ✓ FINAL — calibrated by owner via F12 */
-
+.ace-splash-particles span {
   position: absolute;
-  top:  var(--ace-gem-y);
-  left: var(--ace-gem-x);
-  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 3px;
+  background: radial-gradient(circle, rgba(212, 175, 55, 0.9), transparent 70%);
+  border-radius: 50%;
+  opacity: 0;
+  animation: ace-particle-float 4s ease-in-out infinite;
+}
 
-  width:  100px;   /* wider makes it easier to click */
-  height: 100px;
-  background: transparent;
-  border: none;
+.ace-splash-particles span:nth-child(1)  { left: 15%; top: 70%; width: 2px; height: 2px; animation-delay: 0.4s; animation-duration: 3.5s; }
+.ace-splash-particles span:nth-child(2)  { left: 30%; top: 80%; width: 4px; height: 4px; animation-delay: 0.8s; animation-duration: 4.2s; }
+.ace-splash-particles span:nth-child(3)  { left: 50%; top: 75%; width: 3px; height: 3px; animation-delay: 0.2s; animation-duration: 3.8s; }
+.ace-splash-particles span:nth-child(4)  { left: 70%; top: 85%; width: 2px; height: 2px; animation-delay: 1.2s; animation-duration: 4.5s; }
+.ace-splash-particles span:nth-child(5)  { left: 85%; top: 70%; width: 4px; height: 4px; animation-delay: 0.6s; animation-duration: 3.2s; }
+.ace-splash-particles span:nth-child(6)  { left: 25%; top: 90%; width: 2px; height: 2px; animation-delay: 1.5s; animation-duration: 4.0s; }
+.ace-splash-particles span:nth-child(7)  { left: 60%; top: 65%; width: 3px; height: 3px; animation-delay: 0.9s; animation-duration: 3.6s; }
+.ace-splash-particles span:nth-child(8)  { left: 40%; top: 88%; width: 5px; height: 5px; animation-delay: 0.3s; animation-duration: 4.8s; }
+.ace-splash-particles span:nth-child(9)  { left: 10%; top: 60%; width: 2px; height: 2px; animation-delay: 1.8s; animation-duration: 3.4s; }
+.ace-splash-particles span:nth-child(10) { left: 78%; top: 78%; width: 3px; height: 3px; animation-delay: 1.0s; animation-duration: 4.1s; }
+.ace-splash-particles span:nth-child(11) { left: 45%; top: 55%; width: 2px; height: 2px; animation-delay: 2.0s; animation-duration: 3.9s; }
+.ace-splash-particles span:nth-child(12) { left: 90%; top: 60%; width: 4px; height: 4px; animation-delay: 0.5s; animation-duration: 4.4s; }
+
+@keyframes ace-particle-float {
+  0%   { opacity: 0;   transform: translateY(0) scale(0.5); }
+  20%  { opacity: 0.8; transform: translateY(-20px) scale(1); }
+  80%  { opacity: 0.6; transform: translateY(-80px) scale(0.8); }
+  100% { opacity: 0;   transform: translateY(-120px) scale(0.3); }
+}
+
+/* ── Horizontal Lens Flare ───────────────────────────────── */
+.ace-splash-flare {
+  position: absolute;
+  top: 43%;
+  left: -20%;
+  right: -20%;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(212, 175, 55, 0.0) 20%,
+    rgba(212, 175, 55, 0.3) 40%,
+    rgba(255, 245, 200, 0.7) 48%,
+    rgba(255, 255, 255, 0.9) 50%,
+    rgba(255, 245, 200, 0.7) 52%,
+    rgba(212, 175, 55, 0.3) 60%,
+    rgba(212, 175, 55, 0.0) 80%,
+    transparent 100%
+  );
+  box-shadow:
+    0 0 20px rgba(212, 175, 55, 0.3),
+    0 0 60px rgba(212, 175, 55, 0.15);
+  pointer-events: none;
+  opacity: 0;
+  animation: ace-splash-flare-in 0.8s ease 0.8s forwards;
+}
+
+@keyframes ace-splash-flare-in {
+  from { opacity: 0; transform: scaleX(0.3); }
+  to   { opacity: 1; transform: scaleX(1); }
+}
+
+/* ── Title Block ─────────────────────────────────────────── */
+.ace-splash-title {
+  position: relative;
+  z-index: 5;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Main "ACE" logo text — large gold gradient */
+.ace-splash-logo {
+  font-family: 'Cinzel Decorative', 'Cinzel', 'Palatino Linotype', serif;
+  font-size: 72px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  margin: 0;
   padding: 0;
-  cursor: pointer;
-  z-index: 10;
+  line-height: 1;
 
-  /* Make the hit-target visible for debugging: set to 1 temporarily */
-  outline: none;
+  background: linear-gradient(
+    to bottom,
+    #f5e6a3 0%,
+    #e8d48a 15%,
+    #d4af37 35%,
+    #c9a028 50%,
+    #d4af37 65%,
+    #e8d48a 85%,
+    #f5e6a3 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+
+  filter: drop-shadow(0 0 30px rgba(212, 175, 55, 0.5))
+          drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
+
+  opacity: 0;
+  animation: ace-splash-title-in 1s ease 0.4s forwards;
 }
 
-/* hover brightness is handled in the .ace-gem-core block above */
-
-/* ── Gem Core — TRANSPARENT, glow-only ──────────────────── */
-/*
- * No fake purple ball — the REAL gem in the image is visible beneath.
- * This element is invisible but emits pulsing light that makes the
- * actual book-cover gem appear to breathe/glow.
- */
-.ace-gem-core {
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width:  52px;   /* wider hit-glow area to frame the real gem */
-  height: 52px;
-  border-radius: 50%;
-  background: transparent;    /* INVISIBLE — real gem shows through */
-
-  box-shadow:
-    0 0 18px rgba(160, 80, 255, 0.6),
-    0 0 40px rgba(120, 50, 220, 0.35);
-
-  animation: ace-gem-glow 2.4s ease-in-out infinite;
-  pointer-events: none;       /* clicks pass through to the button itself */
-}
-
-/* Subtle hover brighten so the GM knows it's clickable */
-.ace-gem-btn:hover .ace-gem-core {
-  box-shadow:
-    0 0 30px rgba(200, 120, 255, 0.90),
-    0 0 68px rgba(138, 91, 191, 0.65),
-    0 0 112px rgba(100, 50, 200, 0.35);
-}
-
-@keyframes ace-gem-glow {
-  0%, 100% {
-    box-shadow:
-      0 0 15px rgba(138, 91, 191, 0.55),
-      0 0 35px rgba(120, 50, 220, 0.28);
+@keyframes ace-splash-title-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+    filter: drop-shadow(0 0 60px rgba(212, 175, 55, 0.8))
+            drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
   }
-  50% {
-    box-shadow:
-      0 0 32px rgba(210, 130, 255, 0.90),
-      0 0 68px rgba(138, 91, 191, 0.60),
-      0 0 105px rgba(100, 50, 200, 0.30);
+  to {
+    opacity: 1;
+    transform: scale(1);
+    filter: drop-shadow(0 0 30px rgba(212, 175, 55, 0.5))
+            drop-shadow(0 2px 4px rgba(0, 0, 0, 0.8));
   }
 }
 
-/* ── Expanding ring pulses (two staggered waves) ─────────── */
-.ace-gem-ring {
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width:  40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 2px solid rgba(138, 91, 191, 0.75);
-  pointer-events: none;
+/* Gold divider line between title and subtitle */
+.ace-splash-divider {
+  width: 0;
+  height: 2px;
+  margin: 14px auto 16px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    #96760a 15%,
+    #d4af37 35%,
+    #f0e0a0 50%,
+    #d4af37 65%,
+    #96760a 85%,
+    transparent 100%
+  );
+  box-shadow: 0 0 8px rgba(212, 175, 55, 0.4);
+  animation: ace-splash-divider-in 0.6s ease 1.0s forwards;
 }
 
-.ace-gem-ring-1 {
-  animation: ace-gem-ring 2.4s ease-out infinite;
+@keyframes ace-splash-divider-in {
+  from { width: 0; opacity: 0; }
+  to   { width: 220px; opacity: 1; }
 }
 
-.ace-gem-ring-2 {
-  animation: ace-gem-ring 2.4s ease-out 1.2s infinite; /* offset by half */
+/* Subtitle — "AI CAMPAIGN ENGINE" */
+.ace-splash-subtitle {
+  font-family: 'Orbitron', 'Segoe UI', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: rgba(212, 175, 55, 0.85);
+  text-shadow: 0 0 12px rgba(212, 175, 55, 0.3);
+  opacity: 0;
+  animation: ace-splash-subtitle-in 0.8s ease 1.2s forwards;
 }
 
-@keyframes ace-gem-ring {
-  0%   { opacity: 0.8; transform: scale(1);   border-color: rgba(180, 120, 255, 0.75); }
-  70%  { opacity: 0.0; transform: scale(2.8); border-color: rgba(138, 91, 191, 0.0);  }
-  100% { opacity: 0.0; transform: scale(2.8); }
+@keyframes ace-splash-subtitle-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Splash Close Button — small X, top-right corner ────── */
@@ -1626,6 +1796,7 @@ li.ace-toolbar-btn:hover {
   font-size: 15px;
   cursor: pointer;
   transition: all 0.2s ease;
+  pointer-events: all;
 }
 
 .ace-splash-close:hover {
@@ -1636,60 +1807,95 @@ li.ace-toolbar-btn:hover {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   SPLASH MODE — applied to the application root element
-   when the grimoire cover is being displayed.
-   Strategy: KEEP the header (it provides the drag handle) but
-   make it fully transparent/invisible. The splash div extends
-   upward behind the transparent header using a negative margin,
-   so the book cover appears to fill the entire panel.
+   SPLASH MODE — applied to the application root element.
+   Centers the panel on-screen with a gold frame.
+   Header stays for drag handle but is invisible.
+   When splash-mode is removed, panel transitions to its
+   normal right-side position (see transition on .ace-panel).
    ═══════════════════════════════════════════════════════════ */
 
-/* Header becomes transparent drag zone — DO NOT display:none
-   because that removes the drag handle and panel won't move */
+/* ── Root: gold border all around + dark bg ────────────────
+   Centering is handled by JS setPosition() in _onRender,
+   which also slides the panel to its final position on dismiss. */
+#ace-panel.ace-splash-mode,
+.ace-panel.ace-splash-mode {
+  background: #0a0a0c !important;
+  border-radius: 6px !important;
+
+  /* Gold frame all the way around */
+  border: 4px solid transparent !important;
+  border-image: linear-gradient(
+    to bottom,
+    #7a6008 0%,
+    #b8922a 15%,
+    #d4af37 30%,
+    #e8d48a 48%,
+    #f0e0a0 52%,
+    #d4af37 70%,
+    #b8922a 85%,
+    #7a6008 100%
+  ) 1 !important;
+
+  box-shadow:
+    0 0 40px rgba(0, 0, 0, 0.95),
+    0 0 12px rgba(212, 175, 55, 0.15),
+    inset 0 0 1px rgba(212, 175, 55, 0.2) !important;
+}
+
+/* ── Header: transparent drag zone ─── */
 #ace-panel.ace-splash-mode .window-header,
 #ace-panel.ace-splash-mode .application-header,
-.ace-panel.ace-splash-mode .window-header {
+#ace-panel.ace-splash-mode header,
+.ace-panel.ace-splash-mode .window-header,
+.ace-panel.ace-splash-mode header {
   background:  transparent !important;
   border:      none !important;
   box-shadow:  none !important;
-  cursor:      move;              /* hint that you can drag here */
+  min-height:  30px !important;
+  cursor:      move;
 }
 
-/* Hide title, close-button, and other header children visually.
-   pointer-events:none so clicks pass through to the splash layer. */
+/* Hide title, close-button, and other header children */
 #ace-panel.ace-splash-mode .window-header > *,
 #ace-panel.ace-splash-mode .application-header > *,
-.ace-panel.ace-splash-mode .window-header > * {
+#ace-panel.ace-splash-mode header > *,
+.ace-panel.ace-splash-mode .window-header > *,
+.ace-panel.ace-splash-mode header > * {
   visibility:     hidden !important;
   pointer-events: none   !important;
 }
 
-/* window-content: transparent bg, allow overflow so the splash
-   image can extend upward into the header area */
+/* window-content: transparent bg, kill side/bottom rails */
 #ace-panel.ace-splash-mode .window-content,
 #ace-panel.ace-splash-mode section.window-content,
 .ace-panel.ace-splash-mode .window-content {
-  background: transparent !important;
-  overflow:   visible    !important;
-  padding:    0          !important;
+  background:    transparent !important;
+  overflow:      hidden     !important;
+  padding:       0          !important;
+  border-image:  none       !important;
+  border-bottom: none       !important;
 }
 
-/* Wrapper: transparent, allow overflow */
+/* Kill the gold side-rail pseudo-elements (we use border-image instead) */
+#ace-panel.ace-splash-mode .window-content::before,
+#ace-panel.ace-splash-mode .window-content::after,
+.ace-panel.ace-splash-mode .window-content::before,
+.ace-panel.ace-splash-mode .window-content::after {
+  display: none !important;
+}
+
+/* Wrapper: transparent */
 #ace-panel.ace-splash-mode .ace-wrapper,
 .ace-panel.ace-splash-mode .ace-wrapper {
   height:     100%;
   background: transparent;
-  overflow:   visible;
 }
 
-/* Splash extends UPWARD behind the transparent header so the
-   book cover fills from the very top of the panel.
-   --ace-header-h matches the panel's min-height from CSS. */
+/* Splash fills the full content area */
 #ace-panel.ace-splash-mode .ace-splash,
 .ace-panel.ace-splash-mode .ace-splash {
-  margin-top: -42px;                   /* negative = pulls up over header */
-  height:     calc(100% + 42px);       /* compensate so bottom edge stays put */
-  border-radius: 4px;
+  height:        100%;
+  border-radius: 0;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -2197,19 +2403,24 @@ li.ace-toolbar-btn:hover {
 
 .ace-library-card-meta {
   font-family: var(--ace-font-body);
-  font-size: 10px;
+  font-size: 11.5px;
   color: var(--ace-text-muted);
   letter-spacing: 0.03em;
 }
 
 .ace-library-card-status {
   font-family: var(--ace-font-body);
-  font-size: 10px;
-  color: var(--ace-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ace-gold);
+  padding: 4px 0 2px;
+  letter-spacing: 0.03em;
+  text-shadow: 0 0 6px rgba(212, 175, 55, 0.3);
 }
 
 .ace-lib-error .ace-library-card-status {
   color: #ff5050;
+  text-shadow: 0 0 6px rgba(255, 80, 80, 0.3);
 }
 
 /* Tags */
@@ -2245,35 +2456,48 @@ li.ace-toolbar-btn:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
   color: var(--ace-text-muted);
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-  font-size: 12px;
+  transition: color 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 .ace-lib-action:hover {
   color: var(--ace-gold);
-  background: rgba(201, 168, 76, 0.1);
+  background: rgba(201, 168, 76, 0.15);
+  border-color: rgba(201, 168, 76, 0.4);
+  box-shadow: 0 0 6px rgba(212, 175, 55, 0.25);
 }
 
 .ace-lib-action-delete:hover {
   color: #ff5050;
-  background: rgba(255, 80, 80, 0.1);
+  background: rgba(255, 80, 80, 0.12);
+  border-color: rgba(255, 80, 80, 0.4);
+  box-shadow: 0 0 6px rgba(255, 80, 80, 0.2);
 }
 
 .ace-lib-action-digest {
   color: var(--ace-gold);
+  border-color: rgba(201, 168, 76, 0.25);
+  background: rgba(201, 168, 76, 0.08);
 }
 .ace-lib-action-digest:hover {
   color: #e6c84d;
-  background: rgba(201, 168, 76, 0.15);
+  background: rgba(201, 168, 76, 0.2);
+  border-color: rgba(201, 168, 76, 0.5);
+  box-shadow: 0 0 8px rgba(212, 175, 55, 0.3);
 }
 .ace-lib-action-digest:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
+  box-shadow: none;
+  border-color: rgba(255, 255, 255, 0.05);
 }
 
 /* ── AI Digest Section ──────────────────────────────────── */
@@ -2984,20 +3208,25 @@ li.ace-toolbar-btn:hover {
   color: #fff;
 }
 
-/* Minimize button in header — matches close button style */
+/* Minimize button in header — visible button on gold bar */
 .ace-btn-minimize {
-  background: none !important;
-  border: none !important;
-  box-shadow: none !important;
+  background: rgba(58, 42, 16, 0.15) !important;
+  border: 1px solid rgba(58, 42, 16, 0.3) !important;
+  border-radius: 4px !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
   color: #3a2a10;
   font-size: 15px;
   cursor: pointer;
-  padding: 4px 6px;
-  transition: color 0.2s;
+  padding: 3px 7px;
+  transition: all 0.2s;
+  line-height: 1;
 }
 
 .ace-btn-minimize:hover {
   color: #1a0e02;
+  background: rgba(58, 42, 16, 0.25) !important;
+  border-color: rgba(58, 42, 16, 0.5) !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3) !important;
 }
 
 /* ── Memory Management button (in SFX bar) ──────────────── */

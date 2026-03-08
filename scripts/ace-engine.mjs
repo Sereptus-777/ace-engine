@@ -327,6 +327,9 @@ function _injectAceControl() {
 
 // ── Ready: initialize for ALL users (socket listener first) ────
 Hooks.once("ready", async () => {
+  // ── Clean up stray CONFIG.debug.hooks left on by other modules (e.g. chat-images)
+  if (CONFIG.debug?.hooks) CONFIG.debug.hooks = false;
+
   // ── Socket listener — runs for ALL users (GM + players) ──────
   // This lets players receive SFX broadcast by the GM.
   game.socket.on(`module.${MODULE_ID}`, (data) => {

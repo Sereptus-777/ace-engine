@@ -33,7 +33,7 @@ const TCC_CONDITION_LIST = [
 // ── Dialog compatibility helper ────────────────────────────────
 // Uses DialogV2 (Foundry v12+) when available, falls back to legacy Dialog.
 // Returns Promise<boolean> — true = confirmed, false = cancelled.
-async function _aceConfirmDialog(title, content) {
+async function _aceConfirmDialog(title, content, { rejectClose = true } = {}) {
   // DialogV2 (v12 ApplicationV2-style)
   if (foundry.applications?.api?.DialogV2?.confirm) {
     return foundry.applications.api.DialogV2.confirm({
@@ -41,11 +41,49 @@ async function _aceConfirmDialog(title, content) {
       content,
       yes:         { label: "Save Summary & Close", icon: "fas fa-book-open" },
       no:          { label: "Close Without Saving", icon: "fas fa-times"     },
-      rejectClose: false,
+      rejectClose,
     });
   }
   // Legacy Dialog (v10/v11 fallback)
   return Dialog.confirm({ title, content, defaultYes: false });
+}
+
+// ── Close-intercept dialog: "Exit & Save" or "Minimize" ────────
+// Returns "save" | "minimize".  Throws (reject) on X → caller cancels close.
+async function _aceCloseDialog(eventCount) {
+  const content =
+    `<p>There are <strong>${eventCount}</strong> unsaved events since your last session summary.</p>` +
+    `<p>What would you like to do?</p>`;
+
+  const DV2 = foundry.applications?.api?.DialogV2;
+  if (DV2) {
+    return new Promise((resolve, reject) => {
+      const dlg = new DV2({
+        window: { title: "Close ACE?" },
+        content,
+        buttons: [
+          { action: "save",     label: "Exit & Save Session", icon: "fas fa-book-open",       default: true, callback: () => resolve("save") },
+          { action: "minimize", label: "Minimize ACE",        icon: "fas fa-window-minimize",                callback: () => resolve("minimize") }
+        ],
+        close: () => reject()
+      });
+      dlg.render(true);
+    });
+  }
+  // Legacy Dialog fallback (v10/v11)
+  return new Promise((resolve, reject) => {
+    const d = new Dialog({
+      title: "Close ACE?",
+      content,
+      buttons: {
+        save:     { icon: '<i class="fas fa-book-open"></i>',       label: "Exit & Save Session", callback: () => resolve("save") },
+        minimize: { icon: '<i class="fas fa-window-minimize"></i>', label: "Minimize ACE",        callback: () => resolve("minimize") }
+      },
+      default: "save",
+      close: () => reject()
+    });
+    d.render(true);
+  });
 }
 
 export class AcePanel extends foundry.applications.api.ApplicationV2 {
@@ -70,6 +108,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this._narrationListening = false;
     this._narrationRecognition = null;
     this._isNarrationStreaming = false;
+    this._voiceGender        = "auto";  // "auto" | "male" | "female"
     // ── Shared ─────────────────────────────────────────────
     this._directions         = [];  // story direction cards
     this._activeTab          = "chat";
@@ -89,10 +128,11 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     // ── Encounter ──────────────────────────────────────────
     this._lastEncounterText  = "";
     // ── Splash screen ─────────────────────────────────────
-    this._showingSplash      = true;  // show grimoire cover on first open
+    this._showingSplash      = true;  // cinematic title card on first open
+    this._splashTimer        = null;  // auto-dismiss timeout handle
     // ── Session memory ─────────────────────────────────────
     this._isGeneratingSummary = false;
-    this._sessionNum          = 1;    // auto-incremented each time End Session is used
+    this._sessionNum          = 1;    // auto-incremented each time Save Session Recap is used
     // ── Minimize badge ───────────────────────────────────
     this._savedPosition       = null; // stores position before minimize
     // ── Simple Calendar sync listener ────────────────────
@@ -140,6 +180,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       saveToJournal:       AcePanel._onSaveToJournal,
       // ── Narration tab ──────────────────────────────────
       narrationVoice:      AcePanel._onNarrationVoice,
+      toggleVoiceGender:   AcePanel._onToggleVoiceGender,
       polishNarration:     AcePanel._onPolishNarration,
       narrateSend:         AcePanel._onNarrateSend,
       clearNarration:      AcePanel._onClearNarration,
@@ -241,13 +282,28 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
 
   _buildSplashHTML() {
     return `
-      <!-- ── Grimoire Splash Screen ──────────────────────────── -->
-      <div class="ace-splash" id="ace-splash">
+      <!-- ── Cinematic Title Card ────────────────────────────── -->
+      <div class="ace-splash" id="ace-splash" data-action="openFromSplash">
 
-        <!-- Full-panel book cover -->
-        <img src="modules/ace-engine/assets/book-cover.png"
-             class="ace-splash-img" alt="ACE Grimoire"
-             onerror="this.style.display='none'">
+        <!-- Radial light rays behind the title -->
+        <div class="ace-splash-rays"></div>
+
+        <!-- Floating gold particles -->
+        <div class="ace-splash-particles">
+          <span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span>
+        </div>
+
+        <!-- Horizontal lens flare -->
+        <div class="ace-splash-flare"></div>
+
+        <!-- Title block -->
+        <div class="ace-splash-title">
+          <h1 class="ace-splash-logo">ACE</h1>
+          <div class="ace-splash-divider"></div>
+          <div class="ace-splash-subtitle">AI CAMPAIGN ENGINE</div>
+        </div>
 
         <!-- Small X — top-right, closes the panel entirely -->
         <button class="ace-splash-close"
@@ -255,17 +311,6 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
                 aria-label="Close ACE"
                 title="Close (Esc)">
           <i class="fas fa-times"></i>
-        </button>
-
-        <!-- Pulsing gem overlay — sits over the amethyst gem on the book cover.
-             Adjust --ace-gem-x / --ace-gem-y in ace-engine.css if alignment is off. -->
-        <button class="ace-gem-btn"
-                data-action="openFromSplash"
-                aria-label="Open ACE"
-                title="Open ACE">
-          <span class="ace-gem-ring ace-gem-ring-1"></span>
-          <span class="ace-gem-ring ace-gem-ring-2"></span>
-          <span class="ace-gem-core"></span>
         </button>
 
       </div>
@@ -328,6 +373,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
                   title="Clear AI conversation">
             <i class="fas fa-trash-alt"></i> Clear
           </button>
+          ${this._renderSessionRecapButton()}
         </div>
         <!-- ── Input Area ── -->
         <div class="ace-chat-input">
@@ -365,12 +411,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
             <i class="fas fa-bolt"></i> Thunder
           </button>
           <div class="ace-input-spacer"></div>
-          <button class="ace-divider-action" data-action="endSession"
-                  ${this._isGeneratingSummary ? "disabled" : ""}
-                  title="Generate a session summary and save it to the ACE journal">
-            <i class="fas ${this._isGeneratingSummary ? "fa-spinner fa-spin" : "fa-book-open"}"></i>
-            ${this._isGeneratingSummary ? "Saving…" : "End Session"}
-          </button>
+          ${this._renderSessionRecapButton()}
           <button class="ace-divider-action" data-action="memoryManagement"
                   title="Open Memory Management — view, export, import, backup category data">
             <i class="fas fa-database"></i> Memory
@@ -398,6 +439,11 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
                     data-action="narrationVoice"
                     title="Speak narration — fills textarea for review before sending">
               <i class="fas ${this._narrationListening ? "fa-circle ace-mic-pulse" : "fa-microphone"}"></i>
+            </button>
+            <button class="ace-btn ace-btn-voice-gender ${this._voiceGender === "female" ? "ace-voice-female" : this._voiceGender === "male" ? "ace-voice-male" : ""}"
+                    data-action="toggleVoiceGender"
+                    title="Voice gender: ${this._voiceGender ?? "auto"} — click to cycle (auto → male → female)">
+              <i class="fas ${this._voiceGender === "female" ? "fa-venus" : this._voiceGender === "male" ? "fa-mars" : "fa-random"}"></i>
             </button>
             <button class="ace-btn ace-btn-polish" data-action="polishNarration"
                     title="AI Polish — add punctuation, capitalize, and clean up spoken text">
@@ -431,6 +477,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         <div class="ace-directions-list" id="ace-suggestions">
           ${this._renderSuggestions()}
         </div>
+        <div class="ace-gold-divider ace-recap-divider">${this._renderSessionRecapButton()}</div>
       </div>
 
       <!-- ═══════════════════════════════════════════════════
@@ -478,7 +525,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         </div>
 
         ${this._renderSubtleRollsSection()}
-
+        <div class="ace-gold-divider ace-recap-divider">${this._renderSessionRecapButton()}</div>
       </div>
 
       <!-- ═══════════════════════════════════════════════════
@@ -486,6 +533,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
            ═══════════════════════════════════════════════════ -->
       <div class="ace-tab-content ${this._activeTab === "elements" ? "active" : ""}" data-tab-content="elements">
         ${this._buildSelectElementsPanel()}
+        <div class="ace-gold-divider ace-recap-divider">${this._renderSessionRecapButton()}</div>
       </div>
 
       <!-- ═══════════════════════════════════════════════════
@@ -493,6 +541,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
            ═══════════════════════════════════════════════════ -->
       <div class="ace-tab-content ${this._activeTab === "library" ? "active" : ""}" data-tab-content="library">
         ${this._buildLibraryPanel()}
+        <div class="ace-gold-divider ace-recap-divider">${this._renderSessionRecapButton()}</div>
       </div>
     `;
   }
@@ -1526,12 +1575,23 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   // ── Lifecycle ──────────────────────────────────────────────
 
   _onRender(context, options) {
-    // Position to right side of screen on first render
+    // Position on first render — center for splash, right side for normal panel
     if (!this._positioned) {
       this._positioned = true;
-      const targetLeft = Math.max(20, window.innerWidth - (this.position?.width ?? 555) - 24);
-      try { this.setPosition({ left: targetLeft }); } catch (_) { /* ignore */ }
+      if (this._showingSplash) {
+        // Center the panel on screen for the cinematic splash
+        const w = this.position?.width  ?? 555;
+        const h = this.position?.height ?? 740;
+        const centerLeft = Math.max(20, (window.innerWidth  - w) / 2);
+        const centerTop  = Math.max(20, (window.innerHeight - h) / 2);
+        try { this.setPosition({ left: centerLeft, top: centerTop }); } catch (_) {}
+      } else {
+        try { this.setPosition({ left: this._getTargetLeft() }); } catch (_) {}
+      }
     }
+
+    // Bind sidebar listener so the panel shifts when sidebar opens/closes
+    this._initSidebarListener();
 
     // Full-panel drag — works in splash AND panel mode, binds once
     this._initPanelDrag();
@@ -1539,6 +1599,12 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     // ── Splash mode: hide Foundry header, skip all panel wiring ──
     if (this._showingSplash) {
       this.element.classList.add("ace-splash-mode");
+      // Auto-dismiss after 3.5 seconds (or click skips immediately)
+      if (this._splashTimer) clearTimeout(this._splashTimer);
+      this._splashTimer = setTimeout(() => {
+        if (!this._showingSplash) return;
+        AcePanel._onOpenFromSplash.call(this, null, null);
+      }, 3500);
       return;
     }
     // Panel mode: ensure header is visible
@@ -1621,15 +1687,13 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   }
 
   /**
-   * Override close() to offer an "End Session" prompt when the GM hits X,
-   * Escape, or any other close trigger — as long as there are unsaved events
-   * and no summary is already in progress.
-   *
-   * Passes _aceForceClose: true internally so the second call bypasses this check
-   * and doesn't recurse.
+   * Override close() to intercept when unsaved events exist.
+   * Offers "Exit & Save Session" or "Minimize ACE" — catching accidental closes.
+   * X on dialog cancels the close entirely.
+   * Passes _aceForceClose: true internally so the recursive call bypasses this check.
    */
   async close(options = {}) {
-    // Only intercept for the GM when there are unsaved events
+    // Only intercept when there are unsaved events and no summary in progress
     if (
       !options._aceForceClose &&
       this.lkMemory &&
@@ -1638,15 +1702,21 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     ) {
       const eventCount = this.lkMemory.getEventsSinceLastSummary().length;
 
-      const content =
-        `<p>There are <strong>${eventCount}</strong> unsaved events since your last session summary.</p>` +
-        `<p>Generate and save a <strong>Session Summary</strong> to the journal before closing?</p>`;
+      let choice;
+      try {
+        choice = await _aceCloseDialog(eventCount);
+      } catch (_) {
+        // User clicked X on dialog — changed their mind, don't close
+        return;
+      }
 
-      // Use DialogV2 (v12+) if available, fall back to legacy Dialog
-      const save = await _aceConfirmDialog("End Session?", content).catch(() => false);
-
-      if (save) {
+      if (choice === "save") {
         await this._runEndSession();
+        // Fall through to super.close()
+      } else if (choice === "minimize") {
+        // Minimize instead of closing — no data loss
+        AcePanel._onMinimizeToBadge.call(this);
+        return;
       }
     }
 
@@ -1655,6 +1725,8 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   }
 
   _onClose(options) {
+    // Clear splash auto-dismiss timer
+    if (this._splashTimer) { clearTimeout(this._splashTimer); this._splashTimer = null; }
     if (this._unsubSuggestions) {
       this._unsubSuggestions();
       this._unsubSuggestions = null;
@@ -1675,6 +1747,11 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     const tab = target.dataset.tab;
     if (!tab) return;
     this._activeTab = tab;
+
+    // Auto-stop voice recognition when switching away from its tab
+    if (tab !== "narration" && this._narrationListening) this._stopNarrationVoice();
+    if (tab !== "chat" && this._isListening) this._stopVoice();
+
     this.element.querySelectorAll(".ace-tab").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.tab === tab);
     });
@@ -1759,14 +1836,34 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   // ── Splash screen Action ───────────────────────────────────
 
   /**
-   * GM clicks the pulsing gem on the grimoire cover → animate it out,
+   * Click anywhere on the splash (or auto-dismiss timer) → animate out,
    * then re-render the full tabbed panel UI.
    */
   static async _onOpenFromSplash(event, target) {
+    // Don't trigger from the close button
+    if (target?.closest("[data-action='closeSplash']")) return;
+
+    // Clear auto-dismiss timer
+    if (this._splashTimer) { clearTimeout(this._splashTimer); this._splashTimer = null; }
+
     const splash = this.element?.querySelector("#ace-splash");
     if (splash) {
       splash.classList.add("ace-splash-opening");
-      await new Promise((r) => setTimeout(r, 450));
+
+      // Slide the panel toward its final right-side position during fade-out,
+      // accounting for the Foundry sidebar width so it doesn't overlap.
+      const el = this.element;
+      if (el) {
+        el.style.transition = "left 0.5s ease, top 0.5s ease";
+        const targetLeft = this._getTargetLeft();
+        const targetTop  = 80;
+        try { this.setPosition({ left: targetLeft, top: targetTop }); } catch (_) {}
+      }
+
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Clean up transition so dragging isn't animated
+      if (el) el.style.transition = "";
     }
     this._showingSplash = false;
     this.render();
@@ -1774,7 +1871,43 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
 
   /** X button — closes the panel entirely without entering the UI. */
   static _onCloseSplash(event, target) {
+    if (this._splashTimer) { clearTimeout(this._splashTimer); this._splashTimer = null; }
     this.close();
+  }
+
+  // ── Sidebar-aware positioning ──────────────────────────────
+
+  /**
+   * Calculate the ideal left position for the panel, accounting for the
+   * Foundry sidebar width so the panel doesn't overlap it.
+   */
+  _getTargetLeft() {
+    const panelW = this.position?.width ?? 555;
+    const gap = 24;
+    let sidebarW = 0;
+    try {
+      const sidebarEl = document.getElementById("sidebar");
+      if (sidebarEl && !sidebarEl.classList.contains("collapsed")) {
+        sidebarW = sidebarEl.offsetWidth || 310;
+      }
+    } catch (_) { /* no sidebar */ }
+    return Math.max(20, window.innerWidth - panelW - gap - sidebarW);
+  }
+
+  /**
+   * Listen for sidebar open/close and reposition the panel to stay clear.
+   * Called once during first render.
+   */
+  _initSidebarListener() {
+    if (this._sidebarListenerBound) return;
+    this._sidebarListenerBound = true;
+
+    Hooks.on("collapseSidebar", (_sidebar, collapsed) => {
+      // Don't reposition during splash or when minimized
+      if (this._showingSplash || this._savedPosition) return;
+      const newLeft = this._getTargetLeft();
+      try { this.setPosition({ left: newLeft }); } catch (_) {}
+    });
   }
 
   // ── Full-Panel Drag ────────────────────────────────────────
@@ -1797,15 +1930,19 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
 
     // Content areas where text selection MUST work — never start drag here
     const TEXT_CONTENT = [
-      ".ace-chat-messages",     // chat response text
+      ".ace-chat-messages",     // chat message list container
+      ".ace-message",           // individual chat messages
+      ".ace-msg-body",          // message body text (rendered markdown)
       ".ace-narration-preview", // narration output
+      ".ace-narration-log",     // narration history
       ".ace-ideas-cards",       // idea cards
       ".ace-encounter-output",  // encounter analysis
       ".ace-select-output",     // select panel output
       ".ace-response",          // any AI response block
       ".ace-cf-result",         // crit/fumble results
-      ".ace-message-body",      // message body text
+      ".ace-message-body",      // message body text (legacy class)
       "pre", "code",            // code blocks
+      "p", "li", "td", "th",   // any paragraph / list / table content
     ].join(", ");
 
     const DRAG_THRESHOLD = 5;
@@ -1952,11 +2089,11 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     }
   }
 
-  /** NE rivet X — close with save (same as End Session + close) */
+  /** NE rivet X — close ACE (shows Exit & Save / Minimize dialog if unsaved events) */
   static async _onBadgeClose(event, target) {
     event.stopPropagation();
     this._teardownBadgeDrag();
-    // Restore first so endSession dialog works
+    // Restore from minimized state first so the dialog is visible
     this.element.classList.remove("ace-minimized");
     if (this._savedPosition) {
       try {
@@ -1967,8 +2104,8 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       } catch (_) { /* ignore */ }
       this._savedPosition = null;
     }
-    // Trigger end session flow (includes save prompt)
-    await AcePanel._onEndSession.call(this, event, target);
+    // Trigger the standard close flow (Exit & Save / Minimize dialog)
+    this.close();
   }
 
   // ── Survival Tracker Actions ────────────────────────────────
@@ -2104,6 +2241,22 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   static _onNarrationVoice(event, target) {
     if (this._narrationListening) this._stopNarrationVoice();
     else this._startNarrationVoice();
+  }
+
+  /** Toggle voice gender: auto → male → female → auto */
+  static _onToggleVoiceGender(event, target) {
+    const cycle = { auto: "male", male: "female", female: "auto" };
+    this._voiceGender = cycle[this._voiceGender] || "auto";
+    // Update button appearance
+    const btn = this.element?.querySelector('[data-action="toggleVoiceGender"]');
+    if (btn) {
+      btn.className = `ace-btn ace-btn-voice-gender ${this._voiceGender === "female" ? "ace-voice-female" : this._voiceGender === "male" ? "ace-voice-male" : ""}`;
+      btn.title = `Voice gender: ${this._voiceGender} — click to cycle (auto → male → female)`;
+      const icon = btn.querySelector("i");
+      if (icon) icon.className = `fas ${this._voiceGender === "female" ? "fa-venus" : this._voiceGender === "male" ? "fa-mars" : "fa-random"}`;
+    }
+    const labels = { auto: "Voice: Auto-detect gender", male: "Voice: Male", female: "Voice: Female" };
+    ui.notifications?.info(labels[this._voiceGender]);
   }
 
   /** AI Polish — send the raw transcript through the AI for punctuation + cleanup. */
@@ -2421,82 +2574,87 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this._setInputState(false);
 
     try {
-      await this.ai.chatStream(text, sceneCtx, fullMem, history, (chunk) => {
-        this._chatHistory[aiMsgIndex].content += chunk;
-        this._updateStreamingMessage(aiMsgIndex);
-      }, visionImages);
-    } catch (err) {
-      console.error(`${MODULE_ID} | Chat error:`, err);
-      const errMsg = err.message || "Unknown error";
-      // Provide actionable guidance based on error type
-      if (errMsg.includes("401") || errMsg.includes("Invalid API") || errMsg.includes("Unauthorized")) {
-        this._chatHistory[aiMsgIndex].content =
-          `**Invalid API Key**\n\nYour API key was rejected. Please check it in **Foundry Settings → Module Settings → ACE → API Key**.\n\n` +
-          `If you don't have a key yet, visit your provider's website to create one (it's free for OpenAI).`;
-      } else if (errMsg.includes("CORS") || errMsg.includes("Failed to fetch") || errMsg.includes("Cannot reach")) {
-        this._chatHistory[aiMsgIndex].content =
-          `**Connection Failed**\n\nCan't reach the AI server. Check that:\n` +
-          `- Your internet connection is working\n` +
-          `- The API URL in **Module Settings → ACE** is correct\n` +
-          `- For local AI (Ollama): make sure it's running and set \`OLLAMA_ORIGINS=*\``;
-      } else if (errMsg.includes("429") || errMsg.includes("Rate limit")) {
-        this._chatHistory[aiMsgIndex].content =
-          `**Rate Limited**\n\nThe AI provider says you're sending too many requests. Wait a moment and try again.\n\n` +
-          `Free tiers have lower limits — consider upgrading or using a local provider like Ollama.`;
-      } else if (errMsg.includes("model") || errMsg.includes("404")) {
-        this._chatHistory[aiMsgIndex].content =
-          `**Model Not Found**\n\nThe model "${this.ai?.config?.modelName ?? "unknown"}" wasn't found by your provider.\n\n` +
-          `Go to **Module Settings → ACE → AI Model** and pick a valid model from the dropdown.`;
-      } else {
-        this._chatHistory[aiMsgIndex].content = `**Error:** ${errMsg}\n\nCheck **Module Settings → ACE** to verify your AI provider configuration.`;
-      }
-    }
-
-    // ── Disposition tag parsing ──────────────────────────────
-    // Check if AI response includes a [DISPOSITION:...] tag (reputation system)
-    const dispEnabled = game.settings.get(MODULE_ID, "enableDispositionTags") ?? true;
-    if (dispEnabled && this.reputation && this._chatHistory[aiMsgIndex]) {
+      // ── AI call ──
       try {
-        const fullResponse = this._chatHistory[aiMsgIndex].content;
-        const dispTag = this.reputation.parseDispositionTag(fullResponse);
-        if (dispTag && dispTag.value !== null) {
-          // Strip the tag from the displayed message
-          this._chatHistory[aiMsgIndex].content = fullResponse.replace(dispTag.raw, "").trim();
+        await this.ai.chatStream(text, sceneCtx, fullMem, history, (chunk) => {
+          this._chatHistory[aiMsgIndex].content += chunk;
+          this._updateStreamingMessage(aiMsgIndex);
+        }, visionImages);
+      } catch (err) {
+        console.error(`${MODULE_ID} | Chat error:`, err);
+        const errMsg = err.message || "Unknown error";
+        // Provide actionable guidance based on error type
+        if (errMsg.includes("401") || errMsg.includes("Invalid API") || errMsg.includes("Unauthorized")) {
+          this._chatHistory[aiMsgIndex].content =
+            `**Invalid API Key**\n\nYour API key was rejected. Please check it in **Foundry Settings → Module Settings → ACE → API Key**.\n\n` +
+            `If you don't have a key yet, visit your provider's website to create one (it's free for OpenAI).`;
+        } else if (errMsg.includes("CORS") || errMsg.includes("Failed to fetch") || errMsg.includes("Cannot reach")) {
+          this._chatHistory[aiMsgIndex].content =
+            `**Connection Failed**\n\nCan't reach the AI server. Check that:\n` +
+            `- Your internet connection is working\n` +
+            `- The API URL in **Module Settings → ACE** is correct\n` +
+            `- For local AI (Ollama): make sure it's running and set \`OLLAMA_ORIGINS=*\``;
+        } else if (errMsg.includes("429") || errMsg.includes("Rate limit")) {
+          this._chatHistory[aiMsgIndex].content =
+            `**Rate Limited**\n\nThe AI provider says you're sending too many requests. Wait a moment and try again.\n\n` +
+            `Free tiers have lower limits — consider upgrading or using a local provider like Ollama.`;
+        } else if (errMsg.includes("model") || errMsg.includes("404")) {
+          this._chatHistory[aiMsgIndex].content =
+            `**Model Not Found**\n\nThe model "${this.ai?.config?.modelName ?? "unknown"}" wasn't found by your provider.\n\n` +
+            `Go to **Module Settings → ACE → AI Model** and pick a valid model from the dropdown.`;
+        } else {
+          this._chatHistory[aiMsgIndex].content = `**Error:** ${errMsg}\n\nCheck **Module Settings → ACE** to verify your AI provider configuration.`;
+        }
+      }
 
-          // Find the NPC to apply the change to:
-          // Priority: current combatant → selected NPC → controlled token
-          let npcName = game.combat?.combatant?.name;
-          if (!npcName || game.combat?.combatant?.actor?.hasPlayerOwner) {
-            // Try selected NPC tokens
-            for (const tokenId of this._selectedTokens) {
-              const tok = canvas?.tokens?.placeables?.find(t =>
-                t.id === tokenId || t.actor?.id === tokenId
-              );
-              if (tok && !tok.actor?.hasPlayerOwner) {
-                npcName = tok.name;
-                break;
+      // ── Disposition tag parsing ──────────────────────────────
+      // Check if AI response includes a [DISPOSITION:...] tag (reputation system)
+      try {
+        const dispEnabled = game.settings.get(MODULE_ID, "enableDispositionTags") ?? true;
+        if (dispEnabled && this.reputation && this._chatHistory[aiMsgIndex]) {
+          const fullResponse = this._chatHistory[aiMsgIndex].content;
+          const dispTag = this.reputation.parseDispositionTag(fullResponse);
+          if (dispTag && dispTag.value !== null) {
+            // Strip the tag from the displayed message
+            this._chatHistory[aiMsgIndex].content = fullResponse.replace(dispTag.raw, "").trim();
+
+            // Find the NPC to apply the change to:
+            // Priority: current combatant → selected NPC → controlled token
+            let npcName = game.combat?.combatant?.name;
+            if (!npcName || game.combat?.combatant?.actor?.hasPlayerOwner) {
+              // Try selected NPC tokens
+              for (const tokenId of this._selectedTokens) {
+                const tok = canvas?.tokens?.placeables?.find(t =>
+                  t.id === tokenId || t.actor?.id === tokenId
+                );
+                if (tok && !tok.actor?.hasPlayerOwner) {
+                  npcName = tok.name;
+                  break;
+                }
               }
             }
-          }
-          // Fallback: controlled NPC token
-          if (!npcName) {
-            const ctrl = canvas?.tokens?.controlled?.find(t => !t.actor?.hasPlayerOwner);
-            if (ctrl) npcName = ctrl.name;
-          }
+            // Fallback: controlled NPC token
+            if (!npcName) {
+              const ctrl = canvas?.tokens?.controlled?.find(t => !t.actor?.hasPlayerOwner);
+              if (ctrl) npcName = ctrl.name;
+            }
 
-          if (npcName) {
-            await this.reputation.applyDispositionChange(npcName, dispTag.value);
+            if (npcName) {
+              await this.reputation.applyDispositionChange(npcName, dispTag.value);
+            }
           }
         }
       } catch (err) {
         console.warn(`${MODULE_ID} | Disposition tag parsing failed:`, err);
       }
+    } finally {
+      // ALWAYS reset streaming state — even if an unexpected error occurs above.
+      // Without this, a thrown error permanently locks the input field.
+      this._isStreaming = false;
+      this._setInputState(true);
+      this._refreshChatUI();
+      this._scrollChatToBottom();
     }
-
-    this._isStreaming = false;
-    this._setInputState(true);
-    this._refreshChatUI();
-    this._scrollChatToBottom();
     // Note: AI chat responses are NOT read aloud — TTS is Narration tab only.
   }
 
@@ -2512,10 +2670,16 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     if (this._narrationListening) this._stopNarrationVoice();
 
     const input = this.element.querySelector("#ace-narration-input");
-    const text  = input?.value?.trim();
+    let   text  = input?.value?.trim();
     if (!text || this._isNarrationStreaming) return;
 
     input.value = "";
+
+    // ── Voice gender detection ──
+    // Parse [voice:female] / [voice:male] tags from text (AI can prepend these)
+    const voiceGender = this._resolveVoiceGender(text);
+    // Strip the tag from displayed text
+    text = text.replace(/^\[voice:(male|female)\]\s*/i, "");
 
     // Sanitise for inline HTML
     const safe = text
@@ -2564,7 +2728,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     } catch (_) { /* non-critical */ }
 
     // Always speak narration aloud — ElevenLabs if key set, browser TTS otherwise
-    this._speakText(text);
+    this._speakText(text, voiceGender);
   }
 
   // ── Session End ────────────────────────────────────────────
@@ -2640,7 +2804,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     const count = participants.length;
     this._pushSystemNote(
       `⚔️ **Combat ended** — ${count} participant${count !== 1 ? "s" : ""}: ${participants.slice(0, 6).join(", ")}${count > 6 ? "…" : ""}.\n\n` +
-      `When the session is over, click **End Session** on the Narration tab to save a journal summary.`
+      `When the session is over, click **Save Session Recap** (available on every tab) to save a journal summary.`
     );
   }
 
@@ -2662,13 +2826,24 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   /**
    * Update the End Session button state without a full re-render.
    */
+  /** Render the Save Session Recap button (used on every tab). */
+  _renderSessionRecapButton() {
+    return `<button class="ace-divider-action ace-session-recap-btn" data-action="endSession"
+                    ${this._isGeneratingSummary ? "disabled" : ""}
+                    title="Generate a session summary and save it to the ACE journal">
+              <i class="fas ${this._isGeneratingSummary ? "fa-spinner fa-spin" : "fa-book-open"}"></i>
+              ${this._isGeneratingSummary ? "Saving…" : "Save Session Recap"}
+            </button>`;
+  }
+
   _updateEndSessionButton() {
-    const btn = this.element?.querySelector("[data-action='endSession']");
-    if (!btn) return;
-    btn.disabled = this._isGeneratingSummary;
-    btn.innerHTML = this._isGeneratingSummary
-      ? '<i class="fas fa-spinner fa-spin"></i> Saving…'
-      : '<i class="fas fa-book-open"></i> End Session';
+    // Update ALL recap buttons across every tab
+    this.element?.querySelectorAll("[data-action='endSession']").forEach(btn => {
+      btn.disabled = this._isGeneratingSummary;
+      btn.innerHTML = this._isGeneratingSummary
+        ? '<i class="fas fa-spinner fa-spin"></i> Saving…'
+        : '<i class="fas fa-book-open"></i> Save Session Recap';
+    });
   }
 
   // ── Story Direction → Narration Textarea ──────────────────
@@ -2691,7 +2866,8 @@ Write a short read-aloud passage (2-4 sentences) the GM speaks to players RIGHT 
 - Vivid sensory detail — one sound, one sight, one feeling
 - End with a hook that draws players toward this direction
 - No game mechanics, dice, or stats
-- Keep it concise — this is spoken aloud at the table`;
+- Keep it concise — this is spoken aloud at the table
+- VOICE TAG: If the passage contains dialogue spoken by a female character, start your response with [voice:female]. If spoken by a male character or mixed/narrator, start with [voice:male]. This controls the TTS voice used to read it aloud.`;
 
     // Switch to Narration tab
     this._switchToTab("narration");
@@ -2937,7 +3113,9 @@ Appropriate loot, XP, and story rewards.
           interim += segment;
         }
       }
-      if (input) input.value = this._narFinalTranscript + interim;
+      // Query fresh — ApplicationV2 may have re-rendered since voice started
+      const freshInput = this.element?.querySelector("#ace-narration-input");
+      if (freshInput) freshInput.value = this._narFinalTranscript + interim;
     };
 
     this._narrationRecognition.onerror = (event) => {
@@ -3067,7 +3245,10 @@ Appropriate loot, XP, and story rewards.
         }
       }
       this._chatVoiceCommitted = committed;
-      if (input) input.value = (committed + interim).trim();
+      // Query the input element fresh — ApplicationV2 may have re-rendered
+      // since voice started, making the original reference stale.
+      const freshInput = this.element?.querySelector("#ace-input");
+      if (freshInput) freshInput.value = (committed + interim).trim();
     };
 
     this._recognition.onerror = (event) => {
@@ -3155,17 +3336,35 @@ Appropriate loot, XP, and story rewards.
     </div>`;
   }
 
-  async _speakText(text) {
+  /**
+   * Determine voice gender for TTS.
+   * Priority: manual toggle override → [voice:*] tag in text → default "male".
+   */
+  _resolveVoiceGender(text) {
+    // 1. Manual toggle override (male/female)
+    if (this._voiceGender === "male" || this._voiceGender === "female") {
+      return this._voiceGender;
+    }
+    // 2. Auto: parse [voice:female] or [voice:male] tag from text
+    const tagMatch = text.match(/^\[voice:(male|female)\]/i);
+    if (tagMatch) return tagMatch[1].toLowerCase();
+    // 3. Default
+    return "male";
+  }
+
+  async _speakText(text, gender = "male") {
     if (!text) return;
     this._cancelTTS();
-    const clean = this._cleanForSpeech(text);
+    // Strip any leftover voice tags before speech
+    const stripped = text.replace(/^\[voice:(male|female)\]\s*/i, "");
+    const clean = this._cleanForSpeech(stripped);
     if (!clean) return;
     try {
       const { key: elevenKey, source } = this._getElevenLabsKey();
 
       if (elevenKey) {
-        console.log(`${MODULE_ID} | TTS: ElevenLabs key found (from ${source}) — using ElevenLabs narrator`);
-        await this._speakElevenLabs(clean, elevenKey);
+        console.log(`${MODULE_ID} | TTS: ElevenLabs (${source}), gender=${gender}`);
+        await this._speakElevenLabs(clean, elevenKey, gender);
       } else {
         // One-time warning per session so the user knows why they're hearing the robot voice
         if (!this._browserTtsWarned) {
@@ -3181,11 +3380,11 @@ Appropriate loot, XP, and story rewards.
             { permanent: false }
           );
         }
-        await this._speakBrowser(clean);
+        await this._speakBrowser(clean, gender);
       }
     } catch (err) {
       console.error(`${MODULE_ID} | TTS error (outer):`, err);
-      try { await this._speakBrowser(clean); } catch (_) {}
+      try { await this._speakBrowser(clean, gender); } catch (_) {}
       ui.notifications?.warn("ACE: TTS failed — check console. Trying browser voice as fallback.");
     }
   }
@@ -3208,17 +3407,28 @@ Appropriate loot, XP, and story rewards.
       .slice(0, 2400);
   }
 
-  async _speakElevenLabs(text, apiKey) {
+  async _speakElevenLabs(text, apiKey, gender = "male") {
     // config.local.json takes priority; fall back to Settings, then hardcoded defaults
-    const voiceId =
+    const maleVoiceId =
       localCredentials?.elevenLabsVoiceId ||
       game.settings.get(MODULE_ID, "elevenLabsVoiceId") ||
       "o3hzbFqcuIw2MRzP8rQf";
+
+    // Female voice: setting → local config → empty (falls back to male)
+    let femaleVoiceId = "";
+    try { femaleVoiceId = game.settings.get(MODULE_ID, "elevenLabsFemaleVoiceId") || ""; } catch (_) {}
+    if (!femaleVoiceId) femaleVoiceId = localCredentials?.elevenLabsFemaleVoiceId || "";
+
+    const voiceId = (gender === "female" && femaleVoiceId) ? femaleVoiceId : maleVoiceId;
+
     const modelId =
       localCredentials?.elevenLabsModel ||
       game.settings.get(MODULE_ID, "elevenLabsModel") ||
       "eleven_multilingual_v2";
     const endpoint = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+    if (gender === "female" && femaleVoiceId) {
+      console.log(`${MODULE_ID} | TTS: Using FEMALE ElevenLabs voice (${voiceId})`);
+    }
 
     try {
       const resp = await fetch(endpoint, {
@@ -3233,7 +3443,7 @@ Appropriate loot, XP, and story rewards.
 
       if (!resp.ok) {
         console.warn(`${MODULE_ID} | ElevenLabs error ${resp.status}`);
-        await this._speakBrowser(text);
+        await this._speakBrowser(text, gender);
         return;
       }
 
@@ -3246,7 +3456,7 @@ Appropriate loot, XP, and story rewards.
       await this._ttsAudio.play();
     } catch (err) {
       console.error(`${MODULE_ID} | ElevenLabs TTS failed:`, err);
-      await this._speakBrowser(text);
+      await this._speakBrowser(text, gender);
     }
   }
 
@@ -3280,10 +3490,11 @@ Appropriate loot, XP, and story rewards.
    * Pick the best available browser voice from the loaded list.
    * Priority: user setting → Windows Neural → macOS natural → legacy → any English.
    */
-  _pickBrowserVoice(voices) {
+  _pickBrowserVoice(voices, gender = "male") {
     // 1) User-specified voice name from settings
+    const settingKey = gender === "female" ? "browserFemaleVoiceName" : "browserVoiceName";
     let userVoiceName = "";
-    try { userVoiceName = game.settings.get(MODULE_ID, "browserVoiceName") ?? ""; } catch (_) {}
+    try { userVoiceName = game.settings.get(MODULE_ID, settingKey) ?? ""; } catch (_) {}
     if (userVoiceName.trim()) {
       const exact = voices.find((v) => v.name === userVoiceName.trim());
       if (exact) return exact;
@@ -3292,9 +3503,30 @@ Appropriate loot, XP, and story rewards.
     }
 
     // 2) Auto-detect best available voice (priority: neural/online > Google > legacy > any)
-    // Filter to English voices first
     const enVoices = voices.filter(v => /^en/i.test(v.lang));
 
+    if (gender === "female") {
+      // Female voice auto-detect priority
+      return (
+        // Windows Neural "Online" female voices
+        enVoices.find((v) => /online/i.test(v.name) && /microsoft/i.test(v.name) && /\b(jenny|aria|sara|cortana|zira)\b/i.test(v.name))
+        // Any Windows Neural female
+        || enVoices.find((v) => /online/i.test(v.name) && /\b(jenny|aria|sara|female)\b/i.test(v.name))
+        // Google female voices
+        || enVoices.find((v) => /google uk english female/i.test(v.name))
+        // macOS female voices
+        || enVoices.find((v) => /\b(samantha|kate|moira|tessa|fiona|victoria)\b/i.test(v.name))
+        // Windows legacy female voices
+        || enVoices.find((v) => /microsoft zira/i.test(v.name))
+        || enVoices.find((v) => /microsoft hazel/i.test(v.name))
+        || enVoices.find((v) => /\b(female|jenny|linda|susan|cortana)\b/i.test(v.name))
+        // Any English voice as last resort
+        || enVoices[0]
+        || null
+      );
+    }
+
+    // Male voice auto-detect (original logic)
     return (
       // Windows 10/11 Neural "Online" voices — sound excellent
       enVoices.find((v) => /online/i.test(v.name) && /microsoft/i.test(v.name))
@@ -3317,7 +3549,7 @@ Appropriate loot, XP, and story rewards.
     );
   }
 
-  async _speakBrowser(text) {
+  async _speakBrowser(text, gender = "male") {
     try {
       if (!window.speechSynthesis) {
         console.warn(`${MODULE_ID} | Browser TTS unavailable — speechSynthesis not found.`);
@@ -3352,11 +3584,15 @@ Appropriate loot, XP, and story rewards.
         );
       }
 
-      const chosen = this._pickBrowserVoice(voices);
+      const chosen = this._pickBrowserVoice(voices, gender);
 
       if (chosen) {
         this._ttsUtterance.voice = chosen;
-        console.log(`${MODULE_ID} | Browser TTS: using voice "${chosen.name}" (${chosen.lang})`);
+        // Adjust pitch for female if using auto-detect (slightly higher pitch for feminine voice)
+        if (gender === "female" && userPitch <= 1.0) {
+          this._ttsUtterance.pitch = Math.min(userPitch + 0.15, 1.5);
+        }
+        console.log(`${MODULE_ID} | Browser TTS: using voice "${chosen.name}" (${chosen.lang}), gender=${gender}`);
       } else {
         console.warn(`${MODULE_ID} | Browser TTS: no preferred voice found — using system default. ${voices.length} voices available: ${voices.map(v => v.name).join(", ")}`);
       }
@@ -3973,17 +4209,29 @@ Appropriate loot, XP, and story rewards.
     // NPCs show flavor only on crits — no mechanical bonus readout
     const showMech = isPC || type === "fumble";
 
-    // 2. Ask AI for a unique 1-sentence narrative
+    // 2. Ask AI for a single punchy line — short & glorious
     const weapon   = weaponName || "their weapon";
     const target   = targetName ? ` against ${targetName}` : "";
     const aiPrompt = type === "crit"
-      ? `You are a vivid D&D narrator. Write ONE dramatic sentence (max 25 words) describing ${actorName} scoring a critical hit with ${weapon}${target}. Be specific to these characters. Flavor only — no game mechanics.`
-      : `You are a vivid D&D narrator. Write ONE dramatic yet slightly comic sentence (max 25 words) describing ${actorName} fumbling an attack with ${weapon}. Be specific to this character. Flavor only — no game mechanics.`;
+      ? `[D&D narrator — ONE sentence only, max 15 words, no preamble]\n${actorName} scores a critical hit with ${weapon}${target}. Describe the strike — visceral, dramatic, specific.`
+      : `[D&D narrator — ONE sentence only, max 15 words, no preamble]\n${actorName} fumbles with ${weapon}. Describe the mishap — comedic, specific, punchy.`;
 
     let narrative = "";
     try {
       await this.ai.chatStream(aiPrompt, "", "", [], (chunk) => { narrative += chunk; });
       narrative = narrative.trim().replace(/^["'""'']|["'""'']$/gu, "").trim();
+
+      // Hard guardrail: take only the first sentence, cap at 25 words
+      if (narrative) {
+        // Strip any "Here is…" or "Sure…" preamble the AI might add
+        narrative = narrative.replace(/^(?:here(?:'s| is)[^:]*:|sure[,!.]?\s*)/i, "").trim();
+        // Take first sentence only (split on sentence-ending punctuation followed by space/end)
+        const firstSentence = narrative.match(/^[^.!?]*[.!?]/);
+        if (firstSentence) narrative = firstSentence[0].trim();
+        // Hard word cap
+        const words = narrative.split(/\s+/);
+        if (words.length > 25) narrative = words.slice(0, 25).join(" ") + "…";
+      }
     } catch (err) {
       console.error(`${MODULE_ID} | AI crit/fumble narrative failed:`, err);
     }
@@ -4054,8 +4302,8 @@ Appropriate loot, XP, and story rewards.
       console.error(`${MODULE_ID} | Failed to post crit/fumble chat message:`, err);
     }
 
-    // 5. Speak via TTS narrator
-    const ttsText = `${evtLabel}! ${narrative}${showMech ? " " + mechText : ""}`;
+    // 5. Speak via TTS narrator — just the dramatic line, not the mechanic text
+    const ttsText = `${evtLabel}! ${narrative}`;
     this._speakText(ttsText);
 
     // 5b. Push to ACE Narration log so the GM can see it in the panel
@@ -4837,7 +5085,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
       "Delete Document",
       `<p>Are you sure you want to delete <strong>${doc.displayName}</strong>?</p>` +
       `<p>This removes the document record and all extracted text chunks. The original file in the library/ folder is not deleted.</p>`
-    );
+    ).catch(() => false);
     if (!confirmed) return;
 
     store.removeDocument(docId);
@@ -4891,7 +5139,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
       "Delete Digest",
       `<p>Are you sure you want to permanently delete the digest for <strong>${name}</strong>?</p>` +
       `<p>This removes the structured knowledge index. The JSON data file remains on disk but will no longer be used.</p>`
-    );
+    ).catch(() => false);
     if (!confirmed) return;
 
     // Also remove from this world's active list
