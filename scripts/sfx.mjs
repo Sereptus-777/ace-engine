@@ -1,6 +1,6 @@
 // ============================================================
 // ACE — AI Campaign Engine — Sound & Visual Effects (SFX)
-// Lightning flash + Thunder.wav playback
+// Lightning flash + Thunder.wav, Earthquake shake + rumble
 // ============================================================
 
 let _currentSfxAudio = null;
@@ -59,6 +59,67 @@ function _playThunder() {
   });
   _currentSfxAudio.onended = () => { _currentSfxAudio = null; };
 }
+
+/* ── Earthquake ──────────────────────────────────────────── */
+
+export function triggerEarthquake() {
+  _shakeScreen();
+  _spawnDebris();
+  setTimeout(() => _playRumble(), 100);
+}
+
+function _shakeScreen() {
+  document.body.classList.remove("ace-earthquake-shake");
+  // Force reflow so re-adding the class restarts the animation
+  void document.body.offsetWidth;
+  document.body.classList.add("ace-earthquake-shake");
+
+  // Clean up after animation completes (~2.4s)
+  setTimeout(() => {
+    document.body.classList.remove("ace-earthquake-shake");
+  }, 2600);
+}
+
+function _spawnDebris() {
+  const count = 18;
+  const colors = ["#8b7355", "#6b5a3c", "#9e8b6e", "#554430", "#a09080"];
+  const frags = [];
+
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement("div");
+    el.className = "ace-debris-particle";
+    const size = 3 + Math.random() * 6;              // 3–9px
+    el.style.width  = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.left   = `${Math.random() * 100}vw`;
+    el.style.top    = `-${10 + Math.random() * 30}px`;
+    el.style.background = colors[Math.floor(Math.random() * colors.length)];
+    el.style.animationDuration  = `${2.0 + Math.random() * 1.2}s`;  // 2.0–3.2s
+    el.style.animationDelay     = `${Math.random() * 0.6}s`;         // stagger
+    document.body.appendChild(el);
+    frags.push(el);
+  }
+
+  // Cleanup all particles after longest possible animation
+  setTimeout(() => frags.forEach((f) => f.remove()), 4000);
+}
+
+function _playRumble() {
+  if (_currentSfxAudio) {
+    _currentSfxAudio.pause();
+    _currentSfxAudio.currentTime = 0;
+    _currentSfxAudio = null;
+  }
+
+  _currentSfxAudio = new Audio("modules/ace-engine/assets/Earthquake.wav");
+  _currentSfxAudio.volume = 0.85;
+  _currentSfxAudio.play().catch((err) => {
+    console.warn("ACE SFX | Earthquake rumble playback error:", err);
+  });
+  _currentSfxAudio.onended = () => { _currentSfxAudio = null; };
+}
+
+/* ── Stop all ────────────────────────────────────────────── */
 
 export function stopAllSfx() {
   if (_currentSfxAudio) {

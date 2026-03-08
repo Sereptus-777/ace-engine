@@ -10,7 +10,7 @@ import { AiProvider }         from "./ai-provider.mjs";
 import { SuggestionEngine }   from "./suggestion-engine.mjs";
 import { NpcMemoryReader }    from "./npc-memory.mjs";
 import { MemoryManager }      from "./memory-manager.mjs";
-import { triggerLightning, stopAllSfx } from "./sfx.mjs";
+import { triggerLightning, triggerEarthquake, stopAllSfx } from "./sfx.mjs";
 import { CanvasHighlight }   from "./canvas-highlight.mjs";
 import { ReputationEngine }  from "./reputation-engine.mjs";
 import { SubtleRollManager } from "./subtle-rolls.mjs";
@@ -789,7 +789,8 @@ function _triggerSfx(effect) {
 
 function _handleRemoteSfx({ effect }) {
   switch (effect) {
-    case "lightning": triggerLightning(); break;
+    case "lightning":  triggerLightning();  break;
+    case "earthquake": triggerEarthquake(); break;
     // Laugh variants dormant — uncomment when adding a dedicated SFX panel:
     // case "laughMale":     playEvilLaugh("male");     break;
     // case "laughFemale":   playEvilLaugh("female");   break;

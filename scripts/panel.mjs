@@ -144,7 +144,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     // ── Tactical Command Center ──────────────────────────
     this._tccExpanded  = { stats: false, rolls: false, bulk: false, initiative: false };
     this._tccRollType  = "skill";   // "skill" | "save" | "check"
-    this._tccRollMode  = "gm";     // "gm" | "request"
+    this._tccRollMode  = "gm";     // "gm" | "subtle" | "request"
     // ── Adventure / Survival Tracker ──────────────────────
     this._tracker = {
       scenesSinceMeal:  0,
@@ -186,6 +186,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       clearNarration:      AcePanel._onClearNarration,
       copyNarration:       AcePanel._onCopyNarration,
       sfxLightning:        AcePanel._onSfxLightning,
+      sfxEarthquake:       AcePanel._onSfxEarthquake,
       // ── Ideas tab ──────────────────────────────────────
       generateSuggestions: AcePanel._onGenerateSuggestions,
       acceptDirection:     AcePanel._onAcceptDirection,
@@ -377,7 +378,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         </div>
         <!-- ── Input Area ── -->
         <div class="ace-chat-input">
-          <textarea id="ace-input"
+          <textarea id="ace-input" spellcheck="true"
                     placeholder="${game.i18n.localize("ACE.Panel.Placeholder")}"
                     rows="2"></textarea>
           <div class="ace-input-actions">
@@ -410,15 +411,13 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
                   title="Lightning flash + booming thunder — all players see &amp; hear it">
             <i class="fas fa-bolt"></i> Thunder
           </button>
+          <button class="ace-divider-action" data-action="sfxEarthquake"
+                  title="Earthquake shake + falling debris + bass rumble — all players see &amp; hear it">
+            <i class="fas fa-mountain"></i> Earthquake
+          </button>
           <div class="ace-input-spacer"></div>
           ${this._renderSessionRecapButton()}
-          <button class="ace-divider-action" data-action="memoryManagement"
-                  title="Open Memory Management — view, export, import, backup category data">
-            <i class="fas fa-database"></i> Memory
-          </button>
         </div>
-        <!-- TTS Status Indicator -->
-        ${this._renderTtsStatus()}
         <!-- Quick Note Bar -->
         <div class="ace-note-bar">
           <input type="text" id="ace-note-input" class="ace-note-input"
@@ -431,7 +430,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         </div>
         <!-- Narration Input -->
         <div class="ace-chat-input">
-          <textarea id="ace-narration-input"
+          <textarea id="ace-narration-input" spellcheck="true"
                     placeholder="Type or speak narration to send to all players… (accepted story ideas stream here for review)"
                     rows="3"></textarea>
           <div class="ace-input-actions">
@@ -469,13 +468,16 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       <div class="ace-tab-content ${this._activeTab === "suggestions" ? "active" : ""}" data-tab-content="suggestions">
         <div class="ace-ideas-toolbar">
           <span class="ace-ideas-hint"><i class="fas fa-compass"></i> Where should the story go next?</span>
-          <button class="ace-btn ace-btn-sm" data-action="generateSuggestions"
-                  title="Generate new directions">
-            <i class="fas fa-sync-alt"></i> Refresh
-          </button>
         </div>
         <div class="ace-directions-list" id="ace-suggestions">
           ${this._renderSuggestions()}
+        </div>
+        <div class="ace-ideas-bottom-bar">
+          <textarea id="ace-ideas-gm-input" rows="2" spellcheck="true"
+            placeholder="Steer the AI: 'I like idea 2 but with zombies' or 'the party should find a hidden tomb soon'..."></textarea>
+          <button class="ace-btn ace-btn-primary ace-btn-refresh-ideas" data-action="generateSuggestions">
+            <i class="fas fa-sync-alt"></i> REFRESH IDEAS
+          </button>
         </div>
         <div class="ace-gold-divider ace-recap-divider">${this._renderSessionRecapButton()}</div>
       </div>
@@ -497,13 +499,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
             <i class="fas fa-copy"></i>
           </button>
         </div>
-        <div class="ace-encounter-gen-input-wrap">
-          <textarea id="ace-encounter-prompt"
-                    class="ace-encounter-gen-input"
-                    placeholder="Describe what you want (e.g. 'goblin ambush on a forest road'). Leave blank to auto-generate from scene."
-                    rows="3"></textarea>
-        </div>
-        <!-- ── Crit / Fumble Tables — above encounter so result is never clipped ── -->
+        <!-- ── Crit / Fumble Tables ── -->
         <div class="ace-cf-bar">
           <span class="ace-cf-label">Roll:</span>
           <button class="ace-btn ace-btn-crit" data-action="rollCrit"
@@ -524,7 +520,13 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
           </p>
         </div>
 
-        ${this._renderSubtleRollsSection()}
+        <!-- Prompt moved to bottom for consistency -->
+        <div class="ace-encounter-gen-input-wrap">
+          <textarea id="ace-encounter-prompt" spellcheck="true"
+                    class="ace-encounter-gen-input"
+                    placeholder="Describe what you want (e.g. 'goblin ambush on a forest road'). Leave blank to auto-generate from scene."
+                    rows="3"></textarea>
+        </div>
         <div class="ace-gold-divider ace-recap-divider">${this._renderSessionRecapButton()}</div>
       </div>
 
@@ -549,28 +551,9 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   // ── Survival Bar Builder ────────────────────────────────────
 
   _buildSurvivalBar() {
-    const m = this._tracker.scenesSinceMeal;
-    const r = this._tracker.scenesSinceRest;
-    const mealClass = m >= 8  ? "ace-survival-crit" : m >= 4  ? "ace-survival-warn" : "";
-    const restClass = r >= 15 ? "ace-survival-crit" : r >= 8  ? "ace-survival-warn" : "";
-    const mealHrs = Math.round((Date.now() - this._tracker.mealTime) / 3_600_000 * 10) / 10;
-    const restHrs = Math.round((Date.now() - this._tracker.restTime) / 3_600_000 * 10) / 10;
     return `
       <div class="ace-survival-bar" id="ace-survival-bar">
         <span class="ace-survival-label">Track:</span>
-        <span class="ace-survival-chip ${mealClass}" id="ace-chip-meal"
-              title="Scenes since last meal (${mealHrs}h real time)">
-          🍖 ${m} scene${m !== 1 ? "s" : ""}
-        </span>
-        <button class="ace-survival-reset" data-action="mealReset"
-                title="Mark — party just ate a meal">✓ Meal</button>
-        <span class="ace-survival-sep">|</span>
-        <span class="ace-survival-chip ${restClass}" id="ace-chip-rest"
-              title="Scenes since last rest (${restHrs}h real time)">
-          💤 ${r} scene${r !== 1 ? "s" : ""}
-        </span>
-        <button class="ace-survival-reset" data-action="restReset"
-                title="Mark — party just took a rest">✓ Rest</button>
         ${this._buildDayCounterHtml()}
         <span class="ace-survival-sep">|</span>
         <button class="ace-deed-toggle" data-action="toggleDeedLogger" title="Log a notable deed">📜</button>
@@ -581,42 +564,46 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
 
   // ── Select Scene Elements — Data Gathering ────────────────
 
-  /** Get all player character tokens (always available, regardless of scene) */
+  /** Get player character tokens on the current scene only */
   _getPlayerTokens() {
+    if (!canvas.ready || !canvas.tokens?.placeables) {
+      // Fallback to user-assigned characters if canvas isn't ready
+      const seen = new Set();
+      const players = [];
+      for (const user of game.users) {
+        const actor = user.character;
+        if (!actor || seen.has(actor.id)) continue;
+        seen.add(actor.id);
+        players.push({
+          id: actor.id, name: actor.name,
+          img: actor.prototypeToken?.texture?.src || actor.img,
+          type: "player", selected: this._selectedTokens.has(actor.id),
+          hp: actor.system?.attributes?.hp?.value ?? null,
+          hpMax: actor.system?.attributes?.hp?.max ?? null,
+        });
+      }
+      return players;
+    }
+
     const seen = new Set();
-    const players = [];
-
-    // 1. User-assigned characters (always)
-    for (const user of game.users) {
-      const actor = user.character;
-      if (!actor) continue;
-      if (seen.has(actor.id)) continue;
-      seen.add(actor.id);
-      players.push({
-        id:       actor.id,
-        name:     actor.name,
-        img:      actor.prototypeToken?.texture?.src || actor.img,
+    return canvas.tokens.placeables
+      .filter(t => {
+        const actor = t.actor;
+        if (!actor || !actor.hasPlayerOwner) return false;
+        if (t.document.hidden) return false;
+        if (seen.has(actor.id)) return false;
+        seen.add(actor.id);
+        return true;
+      })
+      .map(t => ({
+        id:       t.actor.id,
+        name:     t.document.name,
+        img:      t.document.texture?.src || t.actor?.prototypeToken?.texture?.src || t.actor?.img,
         type:     "player",
-        selected: this._selectedTokens.has(actor.id),
-      });
-    }
-
-    // 2. Any "character"-type actors with player ownership (catches unassigned PCs)
-    for (const actor of game.actors) {
-      if (actor.type !== "character") continue;
-      if (seen.has(actor.id)) continue;
-      if (!actor.hasPlayerOwner) continue;
-      seen.add(actor.id);
-      players.push({
-        id:       actor.id,
-        name:     actor.name,
-        img:      actor.prototypeToken?.texture?.src || actor.img,
-        type:     "player",
-        selected: this._selectedTokens.has(actor.id),
-      });
-    }
-
-    return players;
+        selected: this._selectedTokens.has(t.actor.id),
+        hp:       t.actor.system?.attributes?.hp?.value ?? null,
+        hpMax:    t.actor.system?.attributes?.hp?.max ?? null,
+      }));
   }
 
   /** Get NPC tokens in the current scene only */
@@ -634,6 +621,9 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         img:      t.document.texture?.src || t.actor?.img,
         type:     "npc",
         selected: this._selectedTokens.has(t.id),
+        hp:       t.actor?.system?.attributes?.hp?.value ?? null,
+        hpMax:    t.actor?.system?.attributes?.hp?.max ?? null,
+        defeated: t.combatant?.defeated ?? false,
       }));
   }
 
@@ -730,12 +720,16 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     const isLinked = el.type === "npc" && el.actorId && this._isActorLinked(el.actorId);
     const linkedClass = isLinked ? "ace-el-linked" : "";
 
+    // Dead/defeated detection
+    const isDead = (el.hp !== null && el.hp !== undefined && el.hp <= 0) || el.defeated;
+    const deadClass = isDead ? "ace-el-defeated" : "";
+
     return `
-      <div class="ace-el-card ${el.selected ? "ace-el-selected" : ""} ${linkedClass}"
+      <div class="ace-el-card ${el.selected ? "ace-el-selected" : ""} ${linkedClass} ${deadClass}"
            data-action="toggleElement"
            data-el-id="${el.id}" data-el-type="${el.type}"
            data-actor-id="${el.actorId ?? ""}"
-           title="${el.name}${isLinked ? " (ACE Linked — memory persists)" : ""}">
+           title="${el.name}${isLinked ? " (ACE Linked — memory persists)" : ""}${isDead ? " [DEAD]" : ""}">
         <div class="ace-el-img-wrap">
           <img class="ace-el-img" src="${el.img}" alt="${el.name}" loading="lazy"
                onerror="this.src='icons/svg/mystery-man.svg'"/>
@@ -1082,10 +1076,12 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     const type = this._tccRollType;
     const mode = this._tccRollMode;
 
+    const modeLabels = { gm: "Roll for Selected", subtle: "Send Subtle Roll", request: "Request from Players" };
+
     return `
       <div class="ace-tcc-section ${exp ? "expanded" : ""}">
         <div class="ace-tcc-section-header" data-action="tccToggleSection" data-tcc-section="rolls">
-          <i class="fas fa-dice"></i> GROUP ROLLS
+          <i class="fas fa-dice"></i> ROLLS FOR SELECTED
           <i class="fas fa-chevron-down ace-tcc-chevron"></i>
         </div>
         <div class="ace-tcc-section-body" style="display:${exp ? "block" : "none"}">
@@ -1094,15 +1090,29 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
             <button class="ace-tcc-roll-type-btn ${type === "save"  ? "active" : ""}" data-roll-type="save">Save</button>
             <button class="ace-tcc-roll-type-btn ${type === "check" ? "active" : ""}" data-roll-type="check">Check</button>
           </div>
-          <select class="ace-tcc-roll-select" id="ace-tcc-roll-id">
-            ${this._buildTccRollOptions(type)}
-          </select>
-          <div class="ace-tcc-roll-mode">
-            <button class="ace-tcc-mode-btn ${mode === "gm"      ? "active" : ""}" data-roll-mode="gm">GM Roll</button>
-            <button class="ace-tcc-mode-btn ${mode === "request" ? "active" : ""}" data-roll-mode="request">Request</button>
+          <div class="ace-roll-system">
+            <select class="ace-tcc-roll-select" id="ace-tcc-roll-id">
+              ${this._buildTccRollOptions(type)}
+            </select>
+            <div class="ace-roll-dc-wrap">
+              <label for="ace-tcc-dc">DC</label>
+              <input id="ace-tcc-dc" type="number" class="ace-roll-dc-input" value="15" min="1" max="30" step="1" />
+            </div>
           </div>
-          <button class="ace-btn ace-tcc-roll-execute" data-action="tccGroupRoll">
-            <i class="fas fa-dice-d20"></i> ${mode === "gm" ? "Roll for Selected" : "Request from Players"}
+          <div class="ace-roll-mode-btns">
+            <button class="ace-roll-mode-btn ${mode === "gm"      ? "active" : ""}" data-roll-mode="gm"
+                    title="Secret roll — result shown only to GM in ACE panel">🎲 GM Roll</button>
+            <button class="ace-roll-mode-btn ${mode === "subtle"  ? "active" : ""}" data-roll-mode="subtle"
+                    title="Secret roll + optional whispered flavor text to the player">🔒 Subtle</button>
+            <button class="ace-roll-mode-btn ${mode === "request" ? "active" : ""}" data-roll-mode="request"
+                    title="Open roll request sent to selected players via Foundry chat">📢 Request</button>
+          </div>
+          <div class="ace-roll-flavor-wrap ${mode === "subtle" ? "visible" : ""}">
+            <input id="ace-tcc-flavor" type="text" class="ace-roll-flavor"
+                   placeholder="Flavor text: 'Something feels off about this place...'" />
+          </div>
+          <button class="ace-btn ace-btn-roll-execute" data-action="tccGroupRoll">
+            <i class="fas fa-dice-d20"></i> ${modeLabels[mode] ?? modeLabels.gm}
           </button>
         </div>
       </div>`;
@@ -1276,10 +1286,38 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     const rollType = this._tccRollType;
     const rollId   = this.element.querySelector("#ace-tcc-roll-id")?.value;
     const rollMode = this._tccRollMode;
+    const dc       = parseInt(this.element.querySelector("#ace-tcc-dc")?.value) || 15;
+    const flavor   = this.element.querySelector("#ace-tcc-flavor")?.value?.trim() ?? "";
     if (!rollId) { ui.notifications?.warn("ACE: Select a roll type."); return; }
 
     target.disabled = true;
     let rolled = 0;
+
+    // ── Subtle mode: use SubtleRolls system for blind checks ──
+    if (rollMode === "subtle") {
+      if (!this.subtleRolls) {
+        ui.notifications?.warn("ACE: Subtle Rolls not enabled. Check Module Settings.");
+        target.disabled = false;
+        return;
+      }
+      for (const { actor, isPlayer } of actors) {
+        const ownerUser = isPlayer
+          ? game.users.find(u => !u.isGM && actor.testUserPermission(u, "OWNER"))
+          : null;
+        await this.subtleRolls.requestRoll({
+          targetUserId: ownerUser?.id ?? game.user.id,
+          actorId: actor.id,
+          skill: rollId,
+          dc,
+          flavor,
+        });
+        rolled++;
+      }
+      target.disabled = false;
+      ui.notifications?.info(`ACE: ${rolled} subtle roll${rolled !== 1 ? "s" : ""} sent.`);
+      return;
+    }
+
     for (const { actor, isPlayer } of actors) {
       // Request mode: whisper to owning player to ask them to roll
       if (rollMode === "request" && isPlayer) {
@@ -1290,7 +1328,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
           const typeLabel = rollType === "skill" ? "Skill Check"
                           : rollType === "save"  ? "Saving Throw" : "Ability Check";
           await ChatMessage.create({
-            content: `<div class="ace-group-roll-request"><i class="fas fa-dice-d20"></i> <strong>${actor.name}</strong>, please roll a <strong>${label} ${typeLabel}</strong>.</div>`,
+            content: `<div class="ace-group-roll-request"><i class="fas fa-dice-d20"></i> <strong>${actor.name}</strong>, please roll a <strong>${label} ${typeLabel}</strong> (DC ${dc}).</div>`,
             whisper: [ownerUser.id],
             speaker: ChatMessage.getSpeaker({ alias: "ACE" }),
           });
@@ -1435,18 +1473,22 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       });
     }
 
-    // Mode buttons (GM Roll / Request)
-    const modeButtons = this.element.querySelectorAll(".ace-tcc-mode-btn");
+    // Mode buttons (GM Roll / Subtle / Request)
+    const modeButtons = this.element.querySelectorAll(".ace-roll-mode-btn");
     for (const btn of modeButtons) {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         this._tccRollMode = btn.dataset.rollMode;
         modeButtons.forEach(b => b.classList.toggle("active", b === btn));
-        const execBtn = this.element.querySelector(".ace-tcc-roll-execute");
+        // Show/hide flavor text input (only for subtle mode)
+        const flavorWrap = this.element.querySelector(".ace-roll-flavor-wrap");
+        if (flavorWrap) flavorWrap.classList.toggle("visible", this._tccRollMode === "subtle");
+        // Update execute button label
+        const execBtn = this.element.querySelector(".ace-btn-roll-execute");
         if (execBtn) {
-          execBtn.innerHTML = this._tccRollMode === "gm"
-            ? '<i class="fas fa-dice-d20"></i> Roll for Selected'
-            : '<i class="fas fa-paper-plane"></i> Request from Players';
+          const labels = { gm: "Roll for Selected", subtle: "Send Subtle Roll", request: "Request from Players" };
+          const icons  = { gm: "fa-dice-d20", subtle: "fa-eye-slash", request: "fa-paper-plane" };
+          execBtn.innerHTML = `<i class="fas ${icons[this._tccRollMode] ?? "fa-dice-d20"}"></i> ${labels[this._tccRollMode] ?? labels.gm}`;
         }
       });
     }
@@ -1679,6 +1721,9 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
 
     this._scrollChatToBottom();
     this._scrollNarrationToBottom();
+
+    // Force spellcheck on all textareas (Foundry V13 may override)
+    this.element.querySelectorAll("textarea").forEach(t => t.setAttribute("spellcheck", "true"));
 
     // Wire hover events for Select Scene Elements panel
     if (this._activeTab === "elements") {
@@ -2113,6 +2158,8 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   static _onMealReset(event, target) {
     this._tracker.scenesSinceMeal = 0;
     this._tracker.mealTime        = Date.now();
+    this._mealWarned4 = false;
+    this._mealWarned8 = false;
     this._updateTrackerUI();
     ui.notifications.info("🍖 Meal logged — tracker reset.");
   }
@@ -2120,6 +2167,8 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   static _onRestReset(event, target) {
     this._tracker.scenesSinceRest = 0;
     this._tracker.restTime        = Date.now();
+    this._restWarned8  = false;
+    this._restWarned15 = false;
     this._updateTrackerUI();
 
     // ── Advance day counter on rest (long rest ≈ new day) ────
@@ -2317,20 +2366,27 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this.triggerSfx("lightning");
   }
 
+  static _onSfxEarthquake(event, target) {
+    target.disabled = true;
+    setTimeout(() => { target.disabled = false; }, 3000);
+    this.triggerSfx("earthquake");
+  }
+
   // ── Ideas tab Actions ──────────────────────────────────────
 
   static async _onGenerateSuggestions(event, target) {
     target.disabled = true;
-    target.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    target.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating…';
     try {
-      const directions = await this.suggestions.generateSuggestions();
+      const gmInput = this.element.querySelector("#ace-ideas-gm-input")?.value || "";
+      const directions = await this.suggestions.generateSuggestions(gmInput);
       this._directions = [...directions];
       this._refreshSuggestionsUI();
     } catch (err) {
       ui.notifications.error(`ACE: ${err.message}`);
     }
     target.disabled = false;
-    target.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+    target.innerHTML = '<i class="fas fa-sync-alt"></i> REFRESH IDEAS';
   }
 
   static async _onAcceptDirection(event, target) {
@@ -3325,15 +3381,20 @@ Appropriate loot, XP, and story rewards.
   _renderTtsStatus() {
     const { key, source } = this._getElevenLabsKey();
     if (key) {
+      // Subtle green pill when ElevenLabs is active
       return `<div class="ace-tts-status ace-tts-eleven">
         <i class="fas fa-broadcast-tower"></i>
         <span>ElevenLabs TTS active <span class="ace-tts-src">(${source})</span></span>
       </div>`;
     }
-    return `<div class="ace-tts-status ace-tts-browser" data-action="openTtsSettings" style="cursor:pointer;" title="Click to open Module Settings">
-      <i class="fas fa-volume-up"></i>
-      <span>Browser TTS — set ElevenLabs key in <em>Module Settings → ElevenLabs API Key</em> for premium voice</span>
-    </div>`;
+    // No banner — just a one-time toast on first narration tab view
+    if (!this._browserTtsWarned) {
+      this._browserTtsWarned = true;
+      setTimeout(() => {
+        ui.notifications?.info("ACE: Using browser TTS. Set ElevenLabs key in Module Settings for premium voice.");
+      }, 500);
+    }
+    return "";
   }
 
   /**
@@ -4122,43 +4183,29 @@ Appropriate loot, XP, and story rewards.
   }
 
   _updateTrackerUI() {
-    if (!this.element || this._showingSplash) return;
-    const m = this._tracker.scenesSinceMeal;
-    const r = this._tracker.scenesSinceRest;
-
-    // Update meal chip
-    const mealChip = this.element.querySelector("#ace-chip-meal");
-    if (mealChip) {
-      mealChip.textContent = `🍖 ${m} scene${m !== 1 ? "s" : ""}`;
-      mealChip.className   = "ace-survival-chip" +
-        (m >= 8 ? " ace-survival-crit" : m >= 4 ? " ace-survival-warn" : "");
-    }
-
-    // Update rest chip
-    const restChip = this.element.querySelector("#ace-chip-rest");
-    if (restChip) {
-      restChip.textContent = `💤 ${r} scene${r !== 1 ? "s" : ""}`;
-      restChip.className   = "ace-survival-chip" +
-        (r >= 15 ? " ace-survival-crit" : r >= 8 ? " ace-survival-warn" : "");
-    }
+    // Meal/rest chips removed in v1.2 — tracker runs silently in background
+    // Day counter updates itself via _updateDayCounterUI()
   }
 
   _checkSurvivalReminders() {
     const m = this._tracker.scenesSinceMeal;
     const r = this._tracker.scenesSinceRest;
 
-    // Warn at 4 scenes without food, critical at 8
-    if (m === 4) {
-      this._pushSystemNote("🍖 The party hasn't eaten in a while. If this is Ravenloft or a survival campaign, consider prompting for a meal — or start tracking exhaustion.");
-    } else if (m === 8) {
-      this._pushSystemNote("🍖⚠️ **Hunger Warning** — The party has gone through 8+ scenes without eating. In survival rules, they may be risking exhaustion. Consider a meal check or prompt.", true);
+    // Popup warnings — each fires once per threshold crossing
+    if (m >= 8 && !this._mealWarned8) {
+      this._mealWarned8 = true;
+      ui.notifications?.error("🍖 Hunger Warning — The party risks exhaustion without food! (8+ scenes without eating)");
+    } else if (m >= 4 && !this._mealWarned4) {
+      this._mealWarned4 = true;
+      ui.notifications?.warn("⏰ The party hasn't eaten in a while. Consider a meal break. (4+ scenes)");
     }
 
-    // Warn at 8 scenes without rest, critical at 15
-    if (r === 8) {
-      this._pushSystemNote("💤 The party has been active for 8+ scenes without rest. Consider offering a short rest opportunity.");
-    } else if (r === 15) {
-      this._pushSystemNote("💤⚠️ **Exhaustion Warning** — The party has pushed through 15+ scenes without a long rest. Exhaustion rules may apply. Time for camp?", true);
+    if (r >= 15 && !this._restWarned15) {
+      this._restWarned15 = true;
+      ui.notifications?.error("💤 Exhaustion Warning — 15+ scenes without rest! Exhaustion rules may apply.");
+    } else if (r >= 8 && !this._restWarned8) {
+      this._restWarned8 = true;
+      ui.notifications?.warn("⏰ The party has been active for 8+ scenes. They may need rest soon.");
     }
   }
 
@@ -4650,6 +4697,11 @@ Appropriate loot, XP, and story rewards.
     if (!this.lkMemory) return;
     this.lkMemory.advanceDay(1, this.lkMemory.getTimeOfDay());
     this._updateDayCounterUI();
+    // Advancing a day implies the party rested — reset rest tracker
+    this._tracker.scenesSinceRest = 0;
+    this._tracker.restTime        = Date.now();
+    this._restWarned8  = false;
+    this._restWarned15 = false;
   }
 
   // ── Manual Deed Logger ──────────────────────────────────────
@@ -4675,7 +4727,7 @@ Appropriate loot, XP, and story rewards.
       <div id="ace-deed-logger" class="ace-deed-hidden">
         <div class="ace-deed-header">📜 Log Notable Deed</div>
         <div class="ace-deed-row">
-          <textarea id="ace-deed-input" class="ace-deed-input"
+          <textarea id="ace-deed-input" class="ace-deed-input" spellcheck="true"
                     placeholder="Describe what happened (type or use mic)..."
                     rows="2"></textarea>
           <button class="ace-deed-mic" data-action="deedVoice" title="Speak a deed">🎤</button>
@@ -4865,7 +4917,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
     return `
       <div class="ace-digest-section">
         <div class="ace-digest-header">
-          <i class="fas fa-brain"></i> AI Digests <span class="ace-digest-count">${allDigests.length}</span>
+          🧠 AI Digests <span class="ace-digest-count">${allDigests.length}</span>
         </div>
         <div class="ace-digest-hint">Structured knowledge — shared across all worlds. Toggle on/off per campaign.</div>
         <div class="ace-digest-list">
@@ -4896,8 +4948,6 @@ MAGNITUDE: [local/regional/major/legendary]`;
   }
 
   _buildDocumentCard(doc) {
-    const typeIcons = { pdf: "fa-file-pdf", txt: "fa-file-alt", md: "fa-file-code", image: "fa-image" };
-    const icon = typeIcons[doc.type] ?? "fa-file";
     const statusClass = doc.status === "ready" ? "ace-lib-ready"
                       : doc.status === "processing" ? "ace-lib-processing"
                       : doc.status === "error" ? "ace-lib-error" : "";
@@ -4906,42 +4956,52 @@ MAGNITUDE: [local/regional/major/legendary]`;
                       : doc.status === "uploading" ? "\u{1F4E4} Uploading\u2026" : "";
 
     const chunkCount = doc.chunks?.length ?? 0;
-    const imageCount = doc.images?.length ?? 0;
     const tags = doc.tags ?? [];
 
+    // Compact meta line — just type + page count + size
     let meta = doc.type.toUpperCase();
-    if (doc.pageCount) meta += ` \u00B7 ${doc.pageCount} pages`;
-    if (chunkCount) meta += ` \u00B7 ${chunkCount} chunks`;
-    if (imageCount) meta += ` \u00B7 ${imageCount} image${imageCount !== 1 ? "s" : ""}`;
-
+    if (doc.pageCount) meta += ` · ${doc.pageCount} pg`;
     const sizeKB = doc.fileSize ? Math.round(doc.fileSize / 1024) : 0;
-    if (sizeKB) meta += ` \u00B7 ${sizeKB >= 1024 ? (sizeKB / 1024).toFixed(1) + " MB" : sizeKB + " KB"}`;
+    if (sizeKB) meta += ` · ${sizeKB >= 1024 ? (sizeKB / 1024).toFixed(1) + " MB" : sizeKB + " KB"}`;
+
+    // Icon / thumbnail: use cover image if available, else type-based icon
+    const coverImg = doc.images?.[0]?.src ?? doc.coverImage ?? null;
+    const typeIcons = { pdf: "fa-book", txt: "fa-file-alt", md: "fa-file-code", image: "fa-scroll" };
+    const fallbackIcon = typeIcons[doc.type] ?? "fa-file";
+
+    const iconHtml = (doc.type === "image" && doc.filePath)
+      ? `<img class="ace-library-card-thumb" src="${doc.filePath}" alt="${doc.displayName}" loading="lazy"
+              onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+         <div class="ace-library-card-icon-fallback" style="display:none"><i class="fas fa-scroll"></i></div>`
+      : coverImg
+        ? `<img class="ace-library-card-thumb" src="${coverImg}" alt="${doc.displayName}" loading="lazy"
+                onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+           <div class="ace-library-card-icon-fallback" style="display:none"><i class="fas ${fallbackIcon}"></i></div>`
+        : `<div class="ace-library-card-icon-fallback"><i class="fas ${fallbackIcon}"></i></div>`;
 
     return `
       <div class="ace-library-card ${statusClass} ${!doc.enabled ? "ace-lib-disabled" : ""}" data-doc-id="${doc.id}">
-        <div class="ace-library-card-icon">
-          <i class="fas ${icon}"></i>
-        </div>
-        <div class="ace-library-card-info">
-          <div class="ace-library-card-name" data-action="libEditName" data-doc-id="${doc.id}"
-               title="Click to rename">${doc.displayName}</div>
-          <div class="ace-library-card-meta">${meta}</div>
-          ${statusLabel ? `<div class="ace-library-card-status">${statusLabel}</div>` : ""}
-          ${tags.length ? `<div class="ace-library-card-tags">${tags.map(t => `<span class="ace-library-tag">${t}</span>`).join("")}</div>` : ""}
+        <div class="ace-library-card-top">
+          <div class="ace-library-card-icon">
+            ${iconHtml}
+          </div>
+          <div class="ace-library-card-info">
+            <div class="ace-library-card-title" data-action="libEditName" data-doc-id="${doc.id}"
+                 title="Click to rename">${doc.displayName}</div>
+            <div class="ace-library-card-meta">${meta}</div>
+            ${statusLabel ? `<div class="ace-library-card-status">${statusLabel}</div>` : ""}
+            ${tags.length ? `<div class="ace-library-card-tags">${tags.map(t => `<span class="ace-library-tag">${t}</span>`).join("")}</div>` : ""}
+          </div>
         </div>
         <div class="ace-library-card-actions">
           ${doc.status === "ready" && chunkCount > 0 ? `
           <button class="ace-lib-action ace-lib-action-digest" data-action="libGenerateDigest" data-doc-id="${doc.id}"
                   title="Generate AI Digest — extracts NPCs, locations, items, etc.">
-            <i class="fas fa-brain"></i>
+            🧠 Digest
           </button>` : ""}
           <button class="ace-lib-action" data-action="libToggleDoc" data-doc-id="${doc.id}"
                   title="${doc.enabled ? "Disable" : "Enable"} for AI context">
-            <i class="fas ${doc.enabled ? "fa-eye" : "fa-eye-slash"}"></i>
-          </button>
-          <button class="ace-lib-action" data-action="libEditTags" data-doc-id="${doc.id}"
-                  title="Edit tags">
-            <i class="fas fa-tags"></i>
+            <i class="fas ${doc.enabled ? "fa-eye" : "fa-eye-slash"}"></i> ${doc.enabled ? "On" : "Off"}
           </button>
           <button class="ace-lib-action ace-lib-action-delete" data-action="libDeleteDoc" data-doc-id="${doc.id}"
                   title="Delete document">

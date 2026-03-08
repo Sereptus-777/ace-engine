@@ -60,13 +60,18 @@ export class SuggestionEngine {
     if (this._interval) { clearInterval(this._interval); this._interval = null; }
   }
 
-  async generateSuggestions() {
+  async generateSuggestions(gmInput = "") {
     try {
       const sceneCtx = this.scene.gatherCompact();
       if (!sceneCtx) return [];
 
+      const gmDirective = gmInput.trim()
+        ? `\n\nGM DIRECTION: The Game Master wants: "${gmInput}". Shape 2 of the 3 suggestions around this direction while keeping the 3rd as a fresh independent idea.`
+        : "";
+
+      const prompt = DIRECTION_PROMPT + gmDirective;
       const npcMem = this.memory.getSceneNpcMemories();
-      const response = await this.ai.chat(DIRECTION_PROMPT, sceneCtx, npcMem, []);
+      const response = await this.ai.chat(prompt, sceneCtx, npcMem, []);
       const directions = this._parseDirections(response);
       if (directions.length) this._notify(directions);
       return directions;

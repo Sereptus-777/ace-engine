@@ -200,7 +200,10 @@ export class SceneContext {
     const classInfo = this._extractClass(actor);
     const level = this._extractLevel(actor);
 
+    // Tag dead/defeated NPCs so AI doesn't suggest interacting with them
+    const isDead = hp && hp.current <= 0 && !isPC;
     let header = `- **${actor.name}**`;
+    if (isDead) header += ` [DEAD]`;
     if (level !== null) header += ` \u2014 Level ${level}`;
     if (classInfo) header += ` ${classInfo}`;
     lines.push(header);
