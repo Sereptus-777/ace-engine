@@ -3746,7 +3746,14 @@ Appropriate loot, XP, and story rewards.
     return "male";
   }
 
-  async _speakText(text, gender = "male") {
+  /**
+   * Speak text via TTS (ElevenLabs or browser fallback).
+   * @param {string} text
+   * @param {"male"|"female"} gender
+   * @param {object} [opts]
+   * @param {boolean} [opts.broadcast=false] — also send audio to all players via socket
+   */
+  async _speakText(text, gender = "male", { broadcast = false } = {}) {
     if (!text) return;
     this._cancelTTS();
     // Strip any leftover voice tags before speech
@@ -3758,7 +3765,7 @@ Appropriate loot, XP, and story rewards.
 
       if (elevenKey) {
         console.log(`${MODULE_ID} | TTS: ElevenLabs (${source}), gender=${gender}`);
-        await this._speakElevenLabs(clean, elevenKey, gender);
+        await this._speakElevenLabs(clean, elevenKey, gender, broadcast);
       } else {
         // One-time warning per session so the user knows why they're hearing the robot voice
         if (!this._browserTtsWarned) {
@@ -3774,11 +3781,11 @@ Appropriate loot, XP, and story rewards.
             { permanent: false }
           );
         }
-        await this._speakBrowser(clean, gender);
+        await this._speakBrowser(clean, gender, broadcast);
       }
     } catch (err) {
       console.error(`${MODULE_ID} | TTS error (outer):`, err);
-      try { await this._speakBrowser(clean, gender); } catch (_) {}
+      try { await this._speakBrowser(clean, gender, false); } catch (_) {}
       ui.notifications?.warn("ACE: TTS failed — check console. Trying browser voice as fallback.");
     }
   }
@@ -3801,7 +3808,7 @@ Appropriate loot, XP, and story rewards.
       .slice(0, 2400);
   }
 
-  async _speakElevenLabs(text, apiKey, gender = "male") {
+  async _speakElevenLabs(text, apiKey, gender = "male", broadcast = false) {
     // config.local.json takes priority; fall back to Settings, then hardcoded defaults
     const maleVoiceId =
       localCredentials?.elevenLabsVoiceId ||
@@ -3838,11 +3845,39 @@ Appropriate loot, XP, and story rewards.
 
       if (!resp.ok) {
         console.warn(`${MODULE_ID} | ElevenLabs error ${resp.status}`);
-        await this._speakBrowser(text, gender);
+        await this._speakBrowser(text, gender, broadcast);
         return;
       }
 
       const blob    = await resp.blob();
+
+      // ── Broadcast audio to all players via socket ───────────────
+      if (broadcast) {
+        try {
+          const base64 = await AcePanel._blobToBase64(blob);
+          // Socket.io handles ~1MB fine; base64 adds ~33% overhead
+          if (base64.length < 700_000) {
+            game.socket.emit(`module.${MODULE_ID}`, {
+              type: "narration-audio",
+              audio: base64,
+              userId: game.user.id,
+            });
+            console.log(`${MODULE_ID} | TTS: Broadcast ElevenLabs audio to players (${(base64.length / 1024).toFixed(0)} KB)`);
+          } else {
+            // Audio too large for socket — send text for browser TTS fallback
+            game.socket.emit(`module.${MODULE_ID}`, {
+              type: "narration-tts",
+              text,
+              gender,
+              userId: game.user.id,
+            });
+            console.warn(`${MODULE_ID} | TTS: Audio too large for socket (${(base64.length / 1024).toFixed(0)} KB) — broadcasting text instead`);
+          }
+        } catch (bcastErr) {
+          console.warn(`${MODULE_ID} | TTS: Audio broadcast failed — players will see text only:`, bcastErr);
+        }
+      }
+
       const blobUrl = URL.createObjectURL(blob);
       this._ttsAudio = new Audio(blobUrl);
       this._ttsAudio.playbackRate = 1.1;  // ~10% faster narration
@@ -3866,8 +3901,18 @@ Appropriate loot, XP, and story rewards.
       await this._ttsAudio.play();
     } catch (err) {
       console.error(`${MODULE_ID} | ElevenLabs TTS failed:`, err);
-      await this._speakBrowser(text, gender);
+      await this._speakBrowser(text, gender, broadcast);
     }
+  }
+
+  /** Convert a Blob to base64 string (no data URI prefix). */
+  static _blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result.split(",")[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
   }
 
   /**
@@ -3959,7 +4004,22 @@ Appropriate loot, XP, and story rewards.
     );
   }
 
-  async _speakBrowser(text, gender = "male") {
+  async _speakBrowser(text, gender = "male", broadcast = false) {
+    // ── Broadcast text to players so they hear browser TTS too ───
+    if (broadcast) {
+      try {
+        game.socket.emit(`module.${MODULE_ID}`, {
+          type: "narration-tts",
+          text,
+          gender,
+          userId: game.user.id,
+        });
+        console.log(`${MODULE_ID} | TTS: Broadcast narration text to players for browser TTS`);
+      } catch (bcastErr) {
+        console.warn(`${MODULE_ID} | TTS: Text broadcast failed:`, bcastErr);
+      }
+    }
+
     try {
       if (!window.speechSynthesis) {
         console.warn(`${MODULE_ID} | Browser TTS unavailable — speechSynthesis not found.`);
@@ -4770,7 +4830,7 @@ Appropriate loot, XP, and story rewards.
 
     // 5. Speak via TTS narrator — just the dramatic line, not the mechanic text
     const ttsText = `${evtLabel}! ${narrative}`;
-    this._speakText(ttsText);
+    this._speakText(ttsText, undefined, { broadcast: true });
 
     // 5b. Push to ACE Narration log so the GM can see it in the panel
     const lkEntry = `${emoji} **${evtLabel} — ${actorName}**: "${narrative}"${showMech ? "\n\n" + mechText : ""}`;
@@ -5411,7 +5471,7 @@ Appropriate loot, XP, and story rewards.
       }
     } catch (_) { /* non-critical */ }
 
-    this._speakText(text, voiceGender);
+    this._speakText(text, voiceGender, { broadcast: true });
   }
 
   /* ──────────────────────────────────────────────────────────────────────────── */

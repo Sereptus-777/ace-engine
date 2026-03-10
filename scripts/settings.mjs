@@ -244,6 +244,16 @@ export class AceSettings {
       default: "eleven_multilingual_v2",
     });
 
+    // ── Narration Volume (client-scoped — players control this) ──
+    s("narrationVolume", {
+      scope: "client",
+      name: "Narration Audio Volume",
+      hint: "Volume of narration audio from the GM. Each player sets their own level. 0 = muted, 1.0 = full volume.",
+      type: Number,
+      default: 0.8,
+      range: { min: 0, max: 1, step: 0.05 },
+    });
+
     // ── Browser TTS (client-scoped) ─────────────────────────
     s("browserVoiceName", {
       scope: "client",

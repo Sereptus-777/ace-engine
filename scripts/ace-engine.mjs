@@ -326,9 +326,9 @@ function _injectAceControl() {
 }
 
 // ── Standalone browser TTS for players (no panel, no ElevenLabs) ──────
-// Used by the socket handler when a player receives a subtle-narration-tts
-// broadcast. Players don't have an AcePanel instance or ElevenLabs key.
-function _speakBrowserTTS(text) {
+// Used by socket handlers when a player receives narration broadcast.
+// Players don't have an AcePanel instance or ElevenLabs key.
+function _speakBrowserTTS(text, volume = 1.0) {
   if (!text || !window.speechSynthesis) return;
   window.speechSynthesis.cancel();
   const clean = text
@@ -342,11 +342,43 @@ function _speakBrowserTTS(text) {
   const utter = new SpeechSynthesisUtterance(clean);
   utter.rate = 1.0;
   utter.pitch = 1.0;
+  utter.volume = Math.max(0, Math.min(1, volume));
   // Try to find a decent English voice
   const voices = window.speechSynthesis.getVoices();
   const preferred = voices.find(v => /David|Daniel|Google US English/i.test(v.name) && v.lang.startsWith("en"));
   if (preferred) utter.voice = preferred;
   window.speechSynthesis.speak(utter);
+}
+
+// ── Play narration audio from base64 (ElevenLabs quality on player side) ──
+let _narrationAudio = null;
+
+function _playNarrationAudio(base64, volume = 0.8) {
+  // Stop any previous narration audio
+  if (_narrationAudio) {
+    try { _narrationAudio.pause(); _narrationAudio.src = ""; } catch (_) {}
+    _narrationAudio = null;
+  }
+  try {
+    const binary = atob(base64);
+    const bytes  = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob   = new Blob([bytes], { type: "audio/mpeg" });
+    const url    = URL.createObjectURL(blob);
+    _narrationAudio = new Audio(url);
+    _narrationAudio.volume      = Math.max(0, Math.min(1, volume));
+    _narrationAudio.playbackRate = 1.1;  // match GM's playback speed
+    _narrationAudio.onended = () => { URL.revokeObjectURL(url); _narrationAudio = null; };
+    _narrationAudio.onerror = () => { URL.revokeObjectURL(url); _narrationAudio = null; };
+    _narrationAudio.play().catch(err => {
+      console.warn(`${MODULE_ID} | Narration audio playback failed:`, err);
+      URL.revokeObjectURL(url);
+      _narrationAudio = null;
+    });
+    console.log(`${MODULE_ID} | Playing narration audio from GM (${(base64.length / 1024).toFixed(0)} KB, vol=${volume})`);
+  } catch (err) {
+    console.warn(`${MODULE_ID} | Narration audio decode failed:`, err);
+  }
 }
 
 // ── Ready: initialize for ALL users (socket listener first) ────
@@ -371,6 +403,26 @@ Hooks.once("ready", async () => {
       } else {
         _speakBrowserTTS(data.text);
       }
+    }
+
+    // ── Narration audio broadcast (ElevenLabs quality) ────────────
+    if (data?.type === "narration-audio" && data.audio) {
+      if (data.userId === game.user.id) return;  // sender already plays locally
+      if (data.userId && !game.users.get(data.userId)?.isGM) return; // GM-only
+      let vol = 0.8;
+      try { vol = game.settings.get(MODULE_ID, "narrationVolume") ?? 0.8; } catch (_) {}
+      if (vol <= 0) return;  // muted
+      _playNarrationAudio(data.audio, vol);
+    }
+
+    // ── Narration text broadcast (browser TTS fallback) ───────────
+    if (data?.type === "narration-tts" && data.text) {
+      if (data.userId === game.user.id) return;  // sender already plays locally
+      if (data.userId && !game.users.get(data.userId)?.isGM) return; // GM-only
+      let vol = 0.8;
+      try { vol = game.settings.get(MODULE_ID, "narrationVolume") ?? 0.8; } catch (_) {}
+      if (vol <= 0) return;  // muted
+      _speakBrowserTTS(data.text, vol);
     }
   });
 
