@@ -6,6 +6,56 @@
 
 import { MODULE_ID } from "./ace-engine.mjs";
 
+// ── Weather effect lookup (module-scope constant, created once) ────────────
+const WEATHER_MAP = {
+  // Foundry native
+  "rain":           "Rain",         "rainweathereffect":       "Rain",
+  "snow":           "Snow",         "snowweathereffect":       "Snow",
+  "leaves":         "Falling leaves","leavesweathereffect":    "Falling leaves",
+  "fog":            "Fog",          "fogweathereffect":        "Fog",
+  // FXMaster types
+  "raintop":        "Rain",         "raintopweathereffect":    "Rain",
+  "snowstorm":      "Snowstorm",    "snowstormweathereffect":  "Snowstorm",
+  "blizzard":       "Blizzard",     "blizzardweathereffect":   "Blizzard",
+  "hail":           "Hail",         "hailweathereffect":       "Hail",
+  "sandstorm":      "Sandstorm",    "sandstormweathereffect":  "Sandstorm",
+  "embers":         "Embers",       "embersweathereffect":     "Embers",
+  "clouds":         "Cloudy",       "cloudsweathereffect":     "Cloudy",
+  "autumnleaves":   "Autumn leaves","autumnleavesweathereffect":"Autumn leaves",
+  "bubbles":        "Bubbles",      "bubblesweathereffect":    "Bubbles",
+  "stars":          "Starry sky",   "starsweathereffect":      "Starry sky",
+  "fireflies":      "Fireflies",    "firefliesweathereffect":  "Fireflies",
+  "sakurablossoms": "Cherry blossoms","sakurablossomsweathereffect":"Cherry blossoms",
+  "sakurabloom":    "Cherry blossoms","sakurabloomweathereffect":"Cherry blossoms",
+  "magiccrystals":  "Magical energy","magiccrystalsweathereffect":"Magical energy",
+  "ghosts":         "Ghostly apparitions","ghostsweathereffect":"Ghostly apparitions",
+  // FXMaster Config class names (sometimes stored with "Config" suffix)
+  "snowweathereffectsconfig":       "Snow",
+  "snowstormweathereffectsconfig":  "Snowstorm",
+  "rainweathereffectsconfig":       "Rain",
+  "raintopweathereffectsconfig":    "Rain",
+  "fogweathereffectsconfig":        "Fog",
+  "hailweathereffectsconfig":       "Hail",
+  "sandstormweathereffectsconfig":  "Sandstorm",
+  "embersweathereffectsconfig":     "Embers",
+  "cloudsweathereffectsconfig":     "Cloudy",
+  "autumnleavesweathereffectsconfig":"Autumn leaves",
+  "batsweathereffectsconfig":       "Bats flying",
+  "birdsweathereffectsconfig":      "Birds flying",
+  "crowsweathereffectsconfig":      "Crows flying",
+  "eaglesweathereffectsconfig":     "Eagles flying",
+  "ratsweathereffectsconfig":       "Rats scurrying",
+  "spidersweathereffectsconfig":    "Spiders crawling",
+  "fishweathereffectsconfig":       "Fish swimming",
+  "bubblesweathereffectsconfig":    "Bubbles rising",
+  "starsweathereffectsconfig":      "Starry sky",
+  "firefliesweathereffectsconfig":  "Fireflies",
+  "sakurablossomsweathereffectsconfig":"Cherry blossoms",
+  "sakurabloomweathereffectsconfig": "Cherry blossoms",
+  "magiccrystalsweathereffectsconfig":"Magical energy",
+  "ghostsweathereffectsconfig":     "Ghostly apparitions",
+};
+
 export class SceneContext {
   constructor() {
     this._cache = null;
@@ -155,56 +205,6 @@ export class SceneContext {
   _weatherKeyToLabel(key) {
     if (!key || typeof key !== "string") return "";
 
-    // Lookup table: known weather class/type identifiers → readable labels
-    const WEATHER_MAP = {
-      // Foundry native
-      "rain":           "Rain",         "rainweathereffect":       "Rain",
-      "snow":           "Snow",         "snowweathereffect":       "Snow",
-      "leaves":         "Falling leaves","leavesweathereffect":    "Falling leaves",
-      "fog":            "Fog",          "fogweathereffect":        "Fog",
-      // FXMaster types
-      "raintop":        "Rain",         "raintopweathereffect":    "Rain",
-      "snowstorm":      "Snowstorm",    "snowstormweathereffect":  "Snowstorm",
-      "blizzard":       "Blizzard",     "blizzardweathereffect":   "Blizzard",
-      "hail":           "Hail",         "hailweathereffect":       "Hail",
-      "sandstorm":      "Sandstorm",    "sandstormweathereffect":  "Sandstorm",
-      "embers":         "Embers",       "embersweathereffect":     "Embers",
-      "clouds":         "Cloudy",       "cloudsweathereffect":     "Cloudy",
-      "autumnleaves":   "Autumn leaves","autumnleavesweathereffect":"Autumn leaves",
-      "bubbles":        "Bubbles",      "bubblesweathereffect":    "Bubbles",
-      "stars":          "Starry sky",   "starsweathereffect":      "Starry sky",
-      "fireflies":      "Fireflies",    "firefliesweathereffect":  "Fireflies",
-      "sakurablossoms": "Cherry blossoms","sakurablossomsweathereffect":"Cherry blossoms",
-      "sakurabloom":    "Cherry blossoms","sakurabloomweathereffect":"Cherry blossoms",
-      "magiccrystals":  "Magical energy","magiccrystalsweathereffect":"Magical energy",
-      "ghosts":         "Ghostly apparitions","ghostsweathereffect":"Ghostly apparitions",
-      // FXMaster Config class names (sometimes stored with "Config" suffix)
-      "snowweathereffectsconfig":       "Snow",
-      "snowstormweathereffectsconfig":  "Snowstorm",
-      "rainweathereffectsconfig":       "Rain",
-      "raintopweathereffectsconfig":    "Rain",
-      "fogweathereffectsconfig":        "Fog",
-      "hailweathereffectsconfig":       "Hail",
-      "sandstormweathereffectsconfig":  "Sandstorm",
-      "embersweathereffectsconfig":     "Embers",
-      "cloudsweathereffectsconfig":     "Cloudy",
-      "autumnleavesweathereffectsconfig":"Autumn leaves",
-      "batsweathereffectsconfig":       "Bats flying",
-      "birdsweathereffectsconfig":      "Birds flying",
-      "crowsweathereffectsconfig":      "Crows flying",
-      "eaglesweathereffectsconfig":     "Eagles flying",
-      "ratsweathereffectsconfig":       "Rats scurrying",
-      "spidersweathereffectsconfig":    "Spiders crawling",
-      "fishweathereffectsconfig":       "Fish swimming",
-      "bubblesweathereffectsconfig":    "Bubbles rising",
-      "starsweathereffectsconfig":      "Starry sky",
-      "firefliesweathereffectsconfig":  "Fireflies",
-      "sakurablossomsweathereffectsconfig":"Cherry blossoms",
-      "sakurabloomweathereffectsconfig": "Cherry blossoms",
-      "magiccrystalsweathereffectsconfig":"Magical energy",
-      "ghostsweathereffectsconfig":     "Ghostly apparitions",
-    };
-
     // Normalize: strip module prefix (e.g. "fxmaster.Snow..." → "Snow..."),
     // remove dots/hyphens, lowercase for lookup
     let normalized = key.replace(/^fxmaster\./i, "")
@@ -302,30 +302,6 @@ export class SceneContext {
     return lines.join("\n");
   }
 
-  _gatherParty() {
-    // Only include PCs who have a token on the CURRENT scene.
-    // _gatherTokens() already provides detailed info for scene tokens,
-    // so this section is a safety net — it won't duplicate if tokens cover all PCs.
-    const sceneActorIds = new Set(
-      (canvas?.scene?.tokens ?? [])
-        .filter(td => td.actor?.hasPlayerOwner)
-        .map(td => td.actor.id)
-    );
-
-    const partyActors = game.actors?.filter((a) =>
-      a.hasPlayerOwner && a.type === "character" && sceneActorIds.has(a.id)
-    ) ?? [];
-    if (!partyActors.length) return "";
-
-    const lines = ["### Party Overview"];
-
-    for (const actor of partyActors) {
-      lines.push(this._buildDetailedActorBlock(actor, true));
-    }
-
-    return lines.join("\n");
-  }
-
   /**
    * Build a detailed text block for an actor — includes spells, features,
    * equipment, saves, resistances, and all relevant game state.
@@ -356,6 +332,23 @@ export class SceneContext {
       if (ac) hpLine += ` | AC: ${ac}`;
       lines.push(hpLine);
     }
+
+    // ── NPCs: minimal tactical profile only (saves tokens) ──
+    // Full detail is reserved for PCs — NPCs only need HP/AC, conditions,
+    // weapons, defenses, and senses for the AI to give good tactical advice.
+    if (!isPC) {
+      const conditions = this._getActorConditions(actor);
+      if (conditions.length) lines.push(`  Conditions: ${conditions.join(", ")}`);
+      const equipment = this._extractEquipment(actor);
+      if (equipment) lines.push(equipment);
+      const defenses = this._extractDefenses(actor);
+      if (defenses) lines.push(defenses);
+      const senses = this._extractSenses(actor);
+      if (senses) lines.push(`  Senses: ${senses}`);
+      return lines.join("\n");
+    }
+
+    // ── PCs: full detail below ──────────────────────────────
 
     // Spell slots remaining
     const slots = this._extractSpellSlots(actor);
@@ -792,16 +785,6 @@ export class SceneContext {
   _getActorConditions(actor) {
     const effects = actor?.effects?.filter((e) => !e.disabled) ?? [];
     return effects.map((e) => e.name ?? e.label ?? "Unknown Effect");
-  }
-
-  _dispositionLabel(d) {
-    switch (d) {
-      case 1: return "Friendly";
-      case 0: return "Neutral";
-      case -1: return "Hostile";
-      case -2: return "Secret";
-      default: return "Unknown";
-    }
   }
 
   _stripHtml(html) {

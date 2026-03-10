@@ -132,6 +132,30 @@ When suggesting these features, be natural — weave them into your advice. For 
     return section;
   }
 
+  // ── History Trimming ────────────────────────────────────
+
+  /**
+   * Trim chat history to fit within a character budget.
+   * Drops oldest messages first, always keeps at least the last 4 exchanges.
+   * Prevents unbounded context growth that can exceed provider limits or rack up costs.
+   * @param {Array} history — chat history messages
+   * @param {number} budgetChars — max total characters (~3.5 chars per token)
+   * @returns {Array} trimmed history
+   */
+  _trimHistory(history, budgetChars = 24000) {
+    if (!history.length) return history;
+    let total = history.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : 200), 0);
+    if (total <= budgetChars) return history;
+
+    const trimmed = [...history];
+    while (trimmed.length > 4 && total > budgetChars) {
+      const removed = trimmed.shift();
+      total -= typeof removed.content === "string" ? removed.content.length : 200;
+    }
+    console.log(`${MODULE_ID} | Trimmed chat history: ${history.length} → ${trimmed.length} messages (budget: ${budgetChars} chars)`);
+    return trimmed;
+  }
+
   // ── Message Builder ──────────────────────────────────────
 
   _buildMessages(userMessage, sceneContext, npcMemory, history) {
@@ -150,18 +174,21 @@ When suggesting these features, be natural — weave them into your advice. For 
     if (npcPart.trim()) fullSystem += `\n\n## NPC MEMORY & HISTORY\n${npcPart}`;
     if (libPart.trim()) fullSystem += libPart;
 
+    const trimmedHistory = this._trimHistory(history);
+
     const messages = [
       { role: "system", content: fullSystem },
-      ...history,
+      ...trimmedHistory,
       { role: "user", content: userMessage },
     ];
 
     // Log prompt size for performance debugging
     const totalChars = messages.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : 0), 0);
     const estTokens  = Math.round(totalChars / 3.5);  // rough char-to-token estimate
+    const trimNote   = trimmedHistory.length < history.length ? ` (trimmed from ${history.length})` : "";
     console.log(`${MODULE_ID} | Prompt: ~${totalChars.toLocaleString()} chars (~${estTokens.toLocaleString()} tokens) `
       + `| system: ${fullSystem.length.toLocaleString()} `
-      + `| history: ${history.length} msgs `
+      + `| history: ${trimmedHistory.length} msgs${trimNote} `
       + `| library: ${libPart.length.toLocaleString()} chars`);
 
     return messages;

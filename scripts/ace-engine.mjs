@@ -357,7 +357,11 @@ Hooks.once("ready", async () => {
   // ── Socket listener — runs for ALL users (GM + players) ──────
   // This lets players receive SFX broadcast by the GM.
   game.socket.on(`module.${MODULE_ID}`, (data) => {
-    if (data?.type === "sfx") _handleRemoteSfx(data);
+    if (data?.type === "sfx") {
+      // Only accept SFX from GM users (prevents player socket spoofing)
+      if (data.userId && !game.users.get(data.userId)?.isGM) return;
+      _handleRemoteSfx(data);
+    }
     if (data?.type === "subtle-narration-tts" && data.text) {
       // Player receives narration TTS broadcast — speak it aloud
       if (data.targetUserId && data.targetUserId !== game.user.id) return;
@@ -866,7 +870,7 @@ Hooks.once("ready", async () => {
 // ── SFX: play locally + broadcast to all other clients ─────────
 function _triggerSfx(effect) {
   _handleRemoteSfx({ effect });                                       // play on GM screen
-  game.socket.emit(`module.${MODULE_ID}`, { type: "sfx", effect });   // broadcast to players
+  game.socket.emit(`module.${MODULE_ID}`, { type: "sfx", effect, userId: game.user.id });
 }
 
 function _handleRemoteSfx({ effect }) {
