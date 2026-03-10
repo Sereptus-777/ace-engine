@@ -19,14 +19,26 @@ const _FP = () =>
   foundry.applications?.apps?.FilePicker?.implementation ?? // v13+
   globalThis.FilePicker;                                     // v12 fallback
 
-/** Upload a file silently — suppresses Foundry v13 notification toast. */
+/** Upload a file silently — suppresses Foundry v13 notification toast.
+ *  Uses refcount so concurrent uploads don't clobber the restore. */
+let _silentDepth = 0;
+let _origNotifyInfo = null;
 async function _silentUpload(source, dir, file) {
-  const orig = ui.notifications?.info;
   try {
-    if (ui.notifications) ui.notifications.info = () => {};
+    if (ui.notifications) {
+      if (_silentDepth === 0) _origNotifyInfo = ui.notifications.info;
+      _silentDepth++;
+      ui.notifications.info = () => {};
+    }
     return await _FP().upload(source, dir, file, { notify: false });
   } finally {
-    if (ui.notifications && orig) ui.notifications.info = orig;
+    if (ui.notifications && _silentDepth > 0) {
+      _silentDepth--;
+      if (_silentDepth === 0 && _origNotifyInfo) {
+        ui.notifications.info = _origNotifyInfo;
+        _origNotifyInfo = null;
+      }
+    }
   }
 }
 
@@ -87,7 +99,7 @@ export class MemoryManager {
     await this._ensureDirectories();
 
     // Check for old monolithic file and migrate if needed
-    const migrated = await this._migrateIfNeeded();
+    await this._migrateIfNeeded();
 
     // Load all stores
     const loadPromises = [];

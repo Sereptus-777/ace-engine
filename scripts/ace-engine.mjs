@@ -1025,7 +1025,7 @@ Hooks.on("canvasReady", () => {
       // Check if scene was visited before (use SceneStore)
       const sceneRec = aceMemory.scenes?.getRecord(newScene);
       const visitCount = sceneRec?.visitCount ?? 0;
-      if (visitCount <= 1) {  // first visit (just logged above)
+      if (visitCount === 1) {  // first visit (visitCount was just incremented by logSceneChange)
         aceMemory.logDeed({
           text:      `Arrived in ${newScene}`,
           magnitude: "trivial",

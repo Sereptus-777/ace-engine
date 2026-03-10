@@ -2163,6 +2163,11 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     this._stopVoice();
     this._stopNarrationVoice();
     this._cancelTTS();
+    // Stop deed voice recognition if active
+    if (this._deedRecognition) {
+      this._deedRecognition.abort();
+      this._deedRecognition = null;
+    }
   }
 
   // ── Tab Actions ────────────────────────────────────────────
@@ -2922,81 +2927,6 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
    * Render the Subtle Rolls section HTML for the Encounter tab.
    * Includes skill dropdown, DC input, player checkboxes, and send button.
    */
-  _renderSubtleRollsSection() {
-    let enabled;
-    try { enabled = game.settings.get(MODULE_ID, "enableSubtleRolls"); } catch { enabled = false; }
-    if (!enabled) return "";
-
-    // Build skill options from setting
-    let skillIds;
-    try { skillIds = (game.settings.get(MODULE_ID, "subtleRollSkills") || "ins,his,arc,rel,nat,prc,inv,sur,med").split(",").map(s => s.trim()); }
-    catch { skillIds = ["ins","his","arc","rel","nat","prc","inv","sur","med"]; }
-
-    const SKILL_LABELS = {
-      acr: "Acrobatics",  ani: "Animal Handling", arc: "Arcana",
-      ath: "Athletics",   dec: "Deception",       his: "History",
-      ins: "Insight",     itm: "Intimidation",    inv: "Investigation",
-      med: "Medicine",    nat: "Nature",          prc: "Perception",
-      prf: "Performance", per: "Persuasion",      rel: "Religion",
-      slt: "Sleight of Hand", ste: "Stealth",     sur: "Survival",
-    };
-
-    const skillOptions = skillIds
-      .filter(id => SKILL_LABELS[id])
-      .map(id => `<option value="${id}">${SKILL_LABELS[id]}</option>`)
-      .join("");
-
-    // Build player checkboxes (non-GM users with characters)
-    const playerCheckboxes = (game.users?.filter(u => !u.isGM && u.active) ?? [])
-      .map(u => {
-        const char = u.character;
-        if (!char) return "";
-        const name = char.name || u.name;
-        return `<label class="ace-subtle-player-label">
-          <input type="checkbox" class="ace-subtle-player-cb"
-                 data-user-id="${u.id}" data-actor-id="${char.id}" checked />
-          ${name}
-        </label>`;
-      })
-      .filter(Boolean)
-      .join("");
-
-    return `
-      <!-- ── Subtle Rolls Section ─────────────────────── -->
-      <div class="ace-subtle-rolls-section">
-        <div class="ace-subtle-header">
-          <i class="fas fa-eye-slash"></i> Subtle Rolls — Blind Checks
-        </div>
-
-        <div class="ace-subtle-controls">
-          <div class="ace-subtle-row">
-            <label class="ace-subtle-label" for="ace-subtle-skill">Skill</label>
-            <select id="ace-subtle-skill" class="ace-subtle-select">
-              ${skillOptions}
-            </select>
-          </div>
-          <div class="ace-subtle-row">
-            <label class="ace-subtle-label" for="ace-subtle-dc">DC</label>
-            <input id="ace-subtle-dc" type="number" class="ace-subtle-input"
-                   value="15" min="1" max="30" step="1" />
-          </div>
-        </div>
-
-        <div class="ace-subtle-players">
-          ${playerCheckboxes || '<span class="ace-subtle-no-players">No active players</span>'}
-        </div>
-
-        <div class="ace-subtle-flavor-wrap">
-          <input id="ace-subtle-flavor" type="text" class="ace-subtle-flavor"
-                 placeholder="Flavor text (optional): 'Something about this story doesn't add up...'" />
-        </div>
-
-        <button class="ace-btn ace-btn-subtle-send" data-action="sendSubtleRoll">
-          <i class="fas fa-eye-slash"></i> Send Blind Roll Request
-        </button>
-      </div>`;
-  }
-
   // ── Core: AI Chat ──────────────────────────────────────────
 
   async _sendMessage() {
@@ -5049,9 +4979,6 @@ Appropriate loot, XP, and story rewards.
     const creatureRe1 = /\*?\*?(\d+)\s*[×xX]\s*(.+?)\*?\*?\s*$/gm;
     // Pattern 2: "- **2 × Shadow**" markdown list format
     const creatureRe2 = /[-*]\s+\*?\*?(\d+)\s*[×xX]\s*(.+?)\*?\*?\s*$/gm;
-    // Pattern 3: fallback "- Name (CR X)" with no quantity → quantity = 1
-    const creatureRe3 = /[-*]\s+\*?\*?(.+?)\*?\*?\s*(?:\(CR\s*[\d/]+\))?\s*$/gm;
-
     let matched = false;
     let m;
     while ((m = creatureRe1.exec(enemyText)) !== null) {
@@ -5551,37 +5478,6 @@ Appropriate loot, XP, and story rewards.
 
   // ── Crit / Fumble Table ─────────────────────────────────────
 
-  _showCritFumble(type) {
-    const table  = type === "crit" ? AcePanel.CRIT_TABLE : AcePanel.FUMBLE_TABLE;
-    const idx    = Math.floor(Math.random() * table.length);
-    const roll   = idx + 1;
-    const result = table[idx];
-    const label  = type === "crit" ? "🎯 Critical Hit" : "💥 Fumble";
-    const cls    = type === "crit" ? "ace-cf-crit"      : "ace-cf-fumble";
-
-    const container = this.element?.querySelector("#ace-cf-result");
-    if (!container) return;
-
-    container.style.display = "";
-    container.className     = `ace-cf-result ${cls}`;
-    container.innerHTML     = `
-      <div class="ace-cf-header">
-        <span class="ace-cf-type-label">${label}
-          <span class="ace-cf-roll-num">d${table.length}: ${roll}</span>
-        </span>
-        <div class="ace-msg-actions">
-          <button class="ace-icon-btn" data-action="copyCritFumble" title="Copy">
-            <i class="fas fa-copy"></i>
-          </button>
-        </div>
-      </div>
-      ${result}
-    `;
-    this._lastCfHtml  = container.innerHTML;
-    this._lastCfClass = cls;
-    container.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
-  }
-
   // ── Crit Table (d20) — fun, memorable, mostly harmless ────────
 
   static CRIT_TABLE = [
@@ -6005,7 +5901,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
                       : doc.status === "error" ? "ace-lib-error"
                       : doc.status === "no_text" ? "ace-lib-no-text" : "";
     const statusLabel = doc.status === "processing" ? "\u23F3 Processing\u2026"
-                      : doc.status === "error" ? `\u274C ${doc.error || "Error"}`
+                      : doc.status === "error" ? `\u274C ${this._escapeHtml(doc.error || "Error")}`
                       : doc.status === "uploading" ? "\u{1F4E4} Uploading\u2026"
                       : doc.status === "no_text" ? "\u26A0\uFE0F Scanned PDF \u2014 no extractable text" : "";
 

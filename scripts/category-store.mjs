@@ -15,14 +15,26 @@ const _FP = () =>
  * Upload a file silently — suppresses Foundry's upload notification toast.
  * In Foundry v13, FilePicker.upload() ignores the { notify: false } option,
  * so we temporarily mute ui.notifications.info() during the upload.
+ * Uses refcount so concurrent uploads don't clobber the restore.
  */
+let _silentDepth = 0;
+let _origNotifyInfo = null;
 async function _silentUpload(source, dir, file) {
-  const orig = ui.notifications?.info;
   try {
-    if (ui.notifications) ui.notifications.info = () => {};
+    if (ui.notifications) {
+      if (_silentDepth === 0) _origNotifyInfo = ui.notifications.info;
+      _silentDepth++;
+      ui.notifications.info = () => {};
+    }
     return await _FP().upload(source, dir, file, { notify: false });
   } finally {
-    if (ui.notifications && orig) ui.notifications.info = orig;
+    if (ui.notifications && _silentDepth > 0) {
+      _silentDepth--;
+      if (_silentDepth === 0 && _origNotifyInfo) {
+        ui.notifications.info = _origNotifyInfo;
+        _origNotifyInfo = null;
+      }
+    }
   }
 }
 
@@ -285,12 +297,14 @@ export class ItemStore extends CategoryStore {
       if (!existing) {
         this._data.items[key] = rec;
       } else {
-        // Merge: imported wins on scalar fields, notes concatenated
+        // Merge: imported wins on scalar fields, notes deduped by timestamp
+        const origNotes = existing.notes ?? [];
         Object.assign(existing, rec);
-        if (Array.isArray(rec.notes) && Array.isArray(existing.notes)) {
-          const existingTs = new Set(existing.notes.map(n => n.t));
+        if (Array.isArray(rec.notes)) {
+          const nTs = new Set(origNotes.map(n => n.t));
+          existing.notes = [...origNotes];
           for (const n of rec.notes) {
-            if (!existingTs.has(n.t)) existing.notes.push(n);
+            if (!nTs.has(n.t)) existing.notes.push(n);
           }
         }
       }
@@ -361,11 +375,13 @@ export class TileStore extends CategoryStore {
       if (!existing) {
         this._data.locations[key] = rec;
       } else {
+        const origNotes = existing.notes ?? [];
         Object.assign(existing, rec);
         if (Array.isArray(rec.notes)) {
-          const existingTs = new Set((existing.notes ?? []).map(n => n.t));
+          const nTs = new Set(origNotes.map(n => n.t));
+          existing.notes = [...origNotes];
           for (const n of rec.notes) {
-            if (!existingTs.has(n.t)) (existing.notes ??= []).push(n);
+            if (!nTs.has(n.t)) existing.notes.push(n);
           }
         }
       }

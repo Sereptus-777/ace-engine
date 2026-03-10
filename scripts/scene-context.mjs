@@ -27,7 +27,8 @@ export class SceneContext {
     parts.push(this._gatherNarrativeTime());
     parts.push(this._gatherCombat());
     parts.push(this._gatherTokens());
-    parts.push(this._gatherParty());
+    // Note: _gatherTokens() already includes full PC details for scene tokens,
+    // so a separate _gatherParty() call is not needed (it would duplicate data).
     parts.push(this._gatherChatLog());
 
     // Integrate trap data from ACE: Trapmaster if available

@@ -49,7 +49,7 @@ export class SuggestionEngine {
   get lastSuggestions() { return this._lastSuggestions; }
 
   start() {
-    if (this._running) return;
+    if (this._interval) return;  // already running — don't double-up
     this._running = true;
     const intervalSec = game.settings.get(MODULE_ID, "suggestionInterval") || 120;
     this._interval = setInterval(() => this.generateSuggestions(), intervalSec * 1000);
