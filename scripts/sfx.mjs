@@ -52,12 +52,14 @@ function _playThunder() {
     _currentSfxAudio = null;
   }
 
-  _currentSfxAudio = new Audio("modules/ace-engine/assets/Thunder.wav");
-  _currentSfxAudio.volume = 1.0;
-  _currentSfxAudio.play().catch((err) => {
+  const audio = new Audio("modules/ace-engine/assets/Thunder.wav");
+  _currentSfxAudio = audio;
+  audio.volume = 1.0;
+  audio.play().catch((err) => {
     console.warn("ACE SFX | Thunder playback error:", err);
   });
-  _currentSfxAudio.onended = () => { _currentSfxAudio = null; };
+  // Only null the ref if it still points to THIS audio (prevents race with new SFX)
+  audio.onended = () => { if (_currentSfxAudio === audio) _currentSfxAudio = null; };
 }
 
 /* ── Earthquake ──────────────────────────────────────────── */
@@ -198,10 +200,11 @@ function _playRumbleSynth() {
   } catch (err) {
     console.warn("ACE SFX | Web Audio rumble failed, falling back to WAV:", err);
     // Fallback to the WAV file if Web Audio is unavailable
-    _currentSfxAudio = new Audio("modules/ace-engine/assets/Earthquake.wav");
-    _currentSfxAudio.volume = 0.6;
-    _currentSfxAudio.play().catch(() => {});
-    _currentSfxAudio.onended = () => { _currentSfxAudio = null; };
+    const fallback = new Audio("modules/ace-engine/assets/Earthquake.wav");
+    _currentSfxAudio = fallback;
+    fallback.volume = 0.6;
+    fallback.play().catch(() => {});
+    fallback.onended = () => { if (_currentSfxAudio === fallback) _currentSfxAudio = null; };
   }
 }
 

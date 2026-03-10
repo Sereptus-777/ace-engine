@@ -27,7 +27,12 @@ export class NpcMemoryReader {
     if (envoy?.getConversationHistory) {
       try {
         const history = envoy.getConversationHistory();
-        if (history) return history;
+        if (history) {
+          // Enforce maxTokens limit (≈4 chars per token)
+          const charLimit = maxTokens * 4;
+          if (history.length > charLimit) return history.slice(0, charLimit);
+          return history;
+        }
       } catch { /* fall through to journal reader */ }
     }
 
@@ -64,16 +69,37 @@ export class NpcMemoryReader {
   }
 
   getSceneNpcMemories() {
-    if (!this.isAvailable() && !this._hasMemoryJournals()) return "";
-
     const sceneTokenNames = new Set(
       (canvas?.scene?.tokens ?? []).map((t) => t.name.toLowerCase())
     );
     if (!sceneTokenNames.size) return "";
 
-    const memories = this._gatherMemories().filter((m) =>
-      sceneTokenNames.has(m.npcName.toLowerCase())
-    );
+    const memories = [];
+
+    // ── Try ace-envoy API for each scene NPC ──────────────────────────
+    const envoy = game.modules.get("ace-envoy")?.active
+      ? game.modules.get("ace-envoy").api : null;
+    const coveredNames = new Set();
+    if (envoy?.getNpcProfile) {
+      for (const name of sceneTokenNames) {
+        try {
+          const profile = envoy.getNpcProfile(name);
+          if (profile) {
+            memories.push({ npcName: name, content: profile });
+            coveredNames.add(name);
+          }
+        } catch { /* skip */ }
+      }
+    }
+
+    // ── Fall back to journal-based memories for any not found via envoy ─
+    if (this._hasMemoryJournals()) {
+      const journalMems = this._gatherMemories().filter((m) =>
+        sceneTokenNames.has(m.npcName.toLowerCase()) && !coveredNames.has(m.npcName.toLowerCase())
+      );
+      memories.push(...journalMems);
+    }
+
     if (!memories.length) return "";
 
     const lines = ["### NPC Memories (Scene NPCs)"];
