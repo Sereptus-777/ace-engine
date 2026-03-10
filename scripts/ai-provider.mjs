@@ -356,8 +356,9 @@ When suggesting these features, be natural — weave them into your advice. For 
   async _chatAnthropic(messages) {
     const system = messages.find((m) => m.role === "system")?.content ?? "";
     const chatMessages = messages.filter((m) => m.role !== "system");
+    const baseUrl = this.config.apiUrl || "https://api.anthropic.com";
 
-    const resp = await this._safeFetch("https://api.anthropic.com/v1/messages", {
+    const resp = await this._safeFetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -380,8 +381,9 @@ When suggesting these features, be natural — weave them into your advice. For 
   async _streamAnthropic(messages, onChunk) {
     const system = messages.find((m) => m.role === "system")?.content ?? "";
     const chatMessages = messages.filter((m) => m.role !== "system");
+    const baseUrl = this.config.apiUrl || "https://api.anthropic.com";
 
-    const resp = await this._safeFetch("https://api.anthropic.com/v1/messages", {
+    const resp = await this._safeFetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
