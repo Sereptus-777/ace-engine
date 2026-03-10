@@ -1136,29 +1136,35 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
     }
   }
 
+  /** HTML-escape a string to prevent XSS in journal pages. */
+  _esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
   /** Build rich HTML for an NPC from its store record. */
   _buildNpcHtml(npcName) {
     const rec = this.npcs.getRecord(npcName);
-    if (!rec) return `<div><p>No data recorded for ${npcName}.</p></div>`;
+    if (!rec) return `<div><p>No data recorded for ${this._esc(npcName)}.</p></div>`;
 
+    const e = (s) => this._esc(s);
     const lines = [];
-    lines.push(`<h2>${rec.displayName}</h2>`);
+    lines.push(`<h2>${e(rec.displayName)}</h2>`);
 
     // Status line
     const status = rec.killed
-      ? `<strong style="color:#c0392b;">Killed</strong>${rec.killedBy ? ` by ${rec.killedBy}` : ""}`
+      ? `<strong style="color:#c0392b;">Killed</strong>${rec.killedBy ? ` by ${e(rec.killedBy)}` : ""}`
       : `<strong style="color:#27ae60;">Alive</strong>`;
     lines.push(`<p><b>Status:</b> ${status}</p>`);
 
     // Basic info
     if (rec.race || rec.class) {
-      lines.push(`<p><b>Race/Class:</b> ${[rec.race, rec.class].filter(Boolean).join(" / ") || "Unknown"}</p>`);
+      lines.push(`<p><b>Race/Class:</b> ${e([rec.race, rec.class].filter(Boolean).join(" / ") || "Unknown")}</p>`);
     }
     lines.push(`<p><b>Encounters:</b> ${rec.met ?? 0} &nbsp; | &nbsp; <b>First seen:</b> ${rec.firstSeen ? new Date(rec.firstSeen * 1000).toLocaleDateString() : "?"} &nbsp; | &nbsp; <b>Last seen:</b> ${rec.lastSeen ? new Date(rec.lastSeen * 1000).toLocaleDateString() : "?"}</p>`);
 
     // Scenes
     if (rec.scenes?.length) {
-      lines.push(`<h3>Scenes</h3><ul>${rec.scenes.map(s => `<li>${s}</li>`).join("")}</ul>`);
+      lines.push(`<h3>Scenes</h3><ul>${rec.scenes.map(s => `<li>${e(s)}</li>`).join("")}</ul>`);
     }
 
     // Notes
@@ -1166,7 +1172,7 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       lines.push(`<h3>Notes</h3><ul>`);
       for (const n of rec.notes) {
         const date = n.t ? new Date(n.t * 1000).toLocaleDateString() : "";
-        lines.push(`<li><em>${date}</em> — ${n.txt}</li>`);
+        lines.push(`<li><em>${date}</em> — ${e(n.txt)}</li>`);
       }
       lines.push(`</ul>`);
     }
@@ -1176,7 +1182,7 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
     if (rels.length) {
       lines.push(`<h3>Relationships</h3><ul>`);
       for (const [name, info] of rels) {
-        lines.push(`<li><b>${name}</b>: ${typeof info === "string" ? info : JSON.stringify(info)}</li>`);
+        lines.push(`<li><b>${e(name)}</b>: ${e(typeof info === "string" ? info : JSON.stringify(info))}</li>`);
       }
       lines.push(`</ul>`);
     }
