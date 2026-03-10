@@ -325,6 +325,30 @@ function _injectAceControl() {
   console.log(`${MODULE_ID} | Toolbar button injected`);
 }
 
+// ── Standalone browser TTS for players (no panel, no ElevenLabs) ──────
+// Used by the socket handler when a player receives a subtle-narration-tts
+// broadcast. Players don't have an AcePanel instance or ElevenLabs key.
+function _speakBrowserTTS(text) {
+  if (!text || !window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const clean = text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/^#+\s+/gm, "")
+    .trim();
+  if (!clean) return;
+  const utter = new SpeechSynthesisUtterance(clean);
+  utter.rate = 1.0;
+  utter.pitch = 1.0;
+  // Try to find a decent English voice
+  const voices = window.speechSynthesis.getVoices();
+  const preferred = voices.find(v => /David|Daniel|Google US English/i.test(v.name) && v.lang.startsWith("en"));
+  if (preferred) utter.voice = preferred;
+  window.speechSynthesis.speak(utter);
+}
+
 // ── Ready: initialize for ALL users (socket listener first) ────
 Hooks.once("ready", async () => {
   // ── Clean up stray CONFIG.debug.hooks left on by other modules (e.g. chat-images)
@@ -337,7 +361,12 @@ Hooks.once("ready", async () => {
     if (data?.type === "subtle-narration-tts" && data.text) {
       // Player receives narration TTS broadcast — speak it aloud
       if (data.targetUserId && data.targetUserId !== game.user.id) return;
-      panel?._speakTTS?.(data.text);
+      // GM has full TTS via panel; players use standalone browser speech
+      if (panel?._speakText) {
+        panel._speakText(data.text);
+      } else {
+        _speakBrowserTTS(data.text);
+      }
     }
   });
 

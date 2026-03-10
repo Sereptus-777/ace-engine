@@ -47,7 +47,7 @@ export class SceneContext {
       if (scene.description) parts.push(`Description: ${this._stripHtml(scene.description).slice(0, 200)}`);
     }
 
-    const tokenDocs = canvas?.scene?.tokens ?? [];
+    const tokenDocs = (canvas?.scene?.tokens ?? []).filter(td => !td.hidden || td.actor?.hasPlayerOwner);
     if (tokenDocs.length) {
       const summary = tokenDocs.map((td) => {
         const actor = td.actor;
@@ -260,7 +260,7 @@ export class SceneContext {
     const lines = [`### Combat — Round ${combat.round}`];
 
     if (combat.combatant) {
-      lines.push(`**Current turn:** ${combat.combatant.name} (Initiative: ${combat.combatant.initiative})`);
+      lines.push(`**Current turn:** ${combat.combatant.name} (Initiative: ${combat.combatant.initiative ?? "?"})`);
     }
 
     const order = combat.turns.map((c, i) => {
@@ -279,7 +279,8 @@ export class SceneContext {
 
     const lines = ["### Tokens on Scene"];
     const pcTokens = tokenDocs.filter(td => td.actor?.hasPlayerOwner);
-    const npcTokens = tokenDocs.filter(td => !td.actor?.hasPlayerOwner);
+    // Filter out GM-hidden tokens so the AI doesn't reveal secret enemies or ambushes
+    const npcTokens = tokenDocs.filter(td => !td.actor?.hasPlayerOwner && !td.hidden);
 
     if (pcTokens.length) {
       lines.push("**Player Characters:**");
@@ -512,7 +513,11 @@ export class SceneContext {
       const w = sys.status.wounds;
       return { current: w.value ?? 0, max: w.max ?? 0, temp: 0 };
     }
-    if (sys.hp) return { current: sys.hp.value ?? sys.hp ?? 0, max: sys.hp.max ?? 0, temp: 0 };
+    // sys.hp can be a plain number (some systems) or an object { value, max }
+    if (sys.hp != null) {
+      if (typeof sys.hp === "number") return { current: sys.hp, max: sys.hp, temp: 0 };
+      return { current: sys.hp.value ?? 0, max: sys.hp.max ?? 0, temp: 0 };
+    }
     if (sys.health) return { current: sys.health.value ?? 0, max: sys.health.max ?? 0, temp: 0 };
     return null;
   }
@@ -709,7 +714,7 @@ export class SceneContext {
       if (prof >= 1) {
         const label = abilityNames[key] ?? key.toUpperCase();
         const mod = data?.save?.mod ?? data?.mod ?? 0;
-        proficient.push(`${label} (+${mod})`);
+        proficient.push(`${label} (${mod >= 0 ? "+" : ""}${mod})`);
       }
     }
     return proficient.length ? proficient.join(", ") : "";

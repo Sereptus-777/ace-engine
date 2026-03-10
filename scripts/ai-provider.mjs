@@ -232,7 +232,7 @@ When suggesting these features, be natural — weave them into your advice. For 
     const resp = await this._safeFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.config.modelName, messages, stream: false }),
+      body: JSON.stringify({ model: this.config.modelName, messages, stream: false, options: { num_predict: this._maxTokens() } }),
     }, "Ollama");
     await this._checkResponse(resp, "Ollama");
     const data = await resp.json();
@@ -244,7 +244,7 @@ When suggesting these features, be natural — weave them into your advice. For 
     const resp = await this._safeFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.config.modelName, messages, stream: true }),
+      body: JSON.stringify({ model: this.config.modelName, messages, stream: true, options: { num_predict: this._maxTokens() } }),
     }, "Ollama");
     await this._checkResponse(resp, "Ollama");
 
@@ -353,9 +353,29 @@ When suggesting these features, be natural — weave them into your advice. For 
 
   // ── Anthropic ─────────────────────────────────────────────
 
+  /**
+   * Merge consecutive messages with the same role into one message.
+   * Anthropic's Messages API requires strictly alternating user/assistant roles.
+   * Our chat history can contain back-to-back assistant messages from system notes,
+   * tactics output, and crit/fumble injections — causing 400 errors.
+   */
+  _mergeConsecutiveRoles(messages) {
+    if (!messages.length) return messages;
+    const merged = [];
+    for (const msg of messages) {
+      const prev = merged.length ? merged[merged.length - 1] : null;
+      if (prev && prev.role === msg.role && typeof prev.content === "string" && typeof msg.content === "string") {
+        prev.content += "\n\n" + msg.content;
+      } else {
+        merged.push({ ...msg });
+      }
+    }
+    return merged;
+  }
+
   async _chatAnthropic(messages) {
     const system = messages.find((m) => m.role === "system")?.content ?? "";
-    const chatMessages = messages.filter((m) => m.role !== "system");
+    const chatMessages = this._mergeConsecutiveRoles(messages.filter((m) => m.role !== "system"));
     const baseUrl = this.config.apiUrl || "https://api.anthropic.com";
 
     const resp = await this._safeFetch(`${baseUrl}/v1/messages`, {
@@ -380,7 +400,7 @@ When suggesting these features, be natural — weave them into your advice. For 
 
   async _streamAnthropic(messages, onChunk) {
     const system = messages.find((m) => m.role === "system")?.content ?? "";
-    const chatMessages = messages.filter((m) => m.role !== "system");
+    const chatMessages = this._mergeConsecutiveRoles(messages.filter((m) => m.role !== "system"));
     const baseUrl = this.config.apiUrl || "https://api.anthropic.com";
 
     const resp = await this._safeFetch(`${baseUrl}/v1/messages`, {
@@ -470,13 +490,17 @@ When suggesting these features, be natural — weave them into your advice. For 
    */
   async _safeFetch(url, options, providerName) {
     try {
+      // Add a timeout to prevent hung connections (90s for AI streams that can be slow)
+      if (!options.signal) options.signal = AbortSignal.timeout(90_000);
       return await fetch(url, options);
     } catch (fetchErr) {
       const origin = window.location.origin;
       if (/localhost|127\.0\.0\.1/.test(url) && origin && !url.startsWith(origin)) {
         throw new Error(
           `Can't reach ${providerName} at ${url}.\n` +
-          `This is likely a CORS issue. Fix: set environment variable OLLAMA_ORIGINS=${origin} (or OLLAMA_ORIGINS=*) and restart ${providerName}.`
+          `This is likely a CORS issue.` + (providerName === "Ollama"
+            ? ` Fix: set environment variable OLLAMA_ORIGINS=${origin} (or OLLAMA_ORIGINS=*) and restart Ollama.`
+            : ` Check that ${providerName} allows requests from ${origin}.`)
         );
       }
       if (fetchErr.message?.includes("Failed to fetch") || fetchErr instanceof TypeError) {

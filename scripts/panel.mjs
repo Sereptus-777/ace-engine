@@ -3833,6 +3833,7 @@ Appropriate loot, XP, and story rewards.
           model_id: modelId,
           voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.35, use_speaker_boost: true },
         }),
+        signal: AbortSignal.timeout(30_000),
       });
 
       if (!resp.ok) {
