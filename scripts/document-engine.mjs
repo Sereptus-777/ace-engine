@@ -15,14 +15,27 @@ const _FP = () =>
   foundry.applications?.apps?.FilePicker?.implementation ??
   globalThis.FilePicker;
 
-/** Upload a file silently — suppresses Foundry notification toast. */
+/** Upload a file silently — suppresses Foundry notification toast.
+ *  Uses a refcount instead of save/restore so concurrent calls are safe. */
+let _silentDepth = 0;
+let _origNotifyInfo = null;
+
 async function _silentUpload(source, dir, file) {
-  const orig = ui.notifications?.info;
   try {
-    if (ui.notifications) ui.notifications.info = () => {};
+    if (ui.notifications) {
+      if (_silentDepth === 0) _origNotifyInfo = ui.notifications.info;
+      _silentDepth++;
+      ui.notifications.info = () => {};
+    }
     return await _FP().upload(source, dir, file, { notify: false });
   } finally {
-    if (ui.notifications && orig) ui.notifications.info = orig;
+    if (ui.notifications && _silentDepth > 0) {
+      _silentDepth--;
+      if (_silentDepth === 0 && _origNotifyInfo) {
+        ui.notifications.info = _origNotifyInfo;
+        _origNotifyInfo = null;
+      }
+    }
   }
 }
 
@@ -326,13 +339,19 @@ export async function loadImageAsBase64(path) {
   if (!resp.ok) throw new Error(`Failed to load image: ${path} (${resp.status})`);
   const blob = await resp.blob();
   const mimeType = blob.type || "image/png";
-  const arrayBuffer = await blob.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  const base64 = btoa(binary);
+
+  // Use FileReader for efficient base64 encoding (avoids O(n²) string concat)
+  const base64 = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // result is "data:<mime>;base64,<data>" — strip the prefix
+      const dataUrl = reader.result;
+      resolve(dataUrl.slice(dataUrl.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(new Error(`Failed to read image: ${path}`));
+    reader.readAsDataURL(blob);
+  });
+
   return { base64, mimeType };
 }
 

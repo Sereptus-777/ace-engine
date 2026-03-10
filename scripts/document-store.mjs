@@ -37,7 +37,7 @@ export function extractKeywords(text, maxKeywords = 8) {
   const words = text.toLowerCase()
     .replace(/[^a-z0-9\s''-]/g, " ")
     .split(/\s+/)
-    .filter(w => w.length > 3 && !STOP_WORDS.has(w));
+    .filter(w => w.length > 2 && !STOP_WORDS.has(w));
 
   const freq = {};
   for (const w of words) freq[w] = (freq[w] || 0) + 1;

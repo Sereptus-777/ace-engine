@@ -1024,7 +1024,7 @@ Hooks.on("canvasReady", () => {
     if (fameEngine) {
       // Check if scene was visited before (use SceneStore)
       const sceneRec = aceMemory.scenes?.getRecord(newScene);
-      const visitCount = sceneRec?.visits ?? 0;
+      const visitCount = sceneRec?.visitCount ?? 0;
       if (visitCount <= 1) {  // first visit (just logged above)
         aceMemory.logDeed({
           text:      `Arrived in ${newScene}`,
@@ -1227,7 +1227,10 @@ Hooks.on("updateActor", (actor, changes) => {
     const levelPath = changes?.system?.details?.level;
     const newLevel  = levelPath != null ? Number(levelPath) : undefined;
     if (newLevel && newLevel > 0) {
-      const oldLevel = actor.system?.details?.level;
+      // actor.system.details.level is already updated by the time this hook fires,
+      // so compare against the PC store's last-recorded level instead.
+      const pcRec    = aceMemory.pcs?.getRecord(actor.id);
+      const oldLevel = pcRec?.level ?? null;
       // Only trigger if the level actually increased (not just any update)
       if (oldLevel == null || newLevel > Number(oldLevel)) {
         // Extract class name (dnd5e items of type "class")
@@ -1724,7 +1727,7 @@ async function _aceRollDamage(btn) {
   const formula = btn.dataset.formula;
   const dmgType = btn.dataset.damageType || "untyped";
   let roll;
-  try { roll = await new Roll(formula).evaluate({async: true}); }
+  try { roll = await new Roll(formula).evaluate(); }
   catch { ui.notifications?.error(`ACE: invalid formula "${formula}"`); return; }
 
   const typeLabel = dmgType !== "untyped" ? ` ${_escapeHtml(dmgType)}` : "";
@@ -1751,7 +1754,7 @@ async function _aceRollDamage(btn) {
 async function _aceRollHeal(btn) {
   const formula   = btn.dataset.formula;
   let roll;
-  try { roll = await new Roll(formula).evaluate({async: true}); }
+  try { roll = await new Roll(formula).evaluate(); }
   catch { ui.notifications?.error(`ACE: invalid formula "${formula}"`); return; }
 
   const body =
@@ -1808,7 +1811,7 @@ async function _aceRollSave(btn) {
       } else {
         // Generic: manual d20 roll
         const mod  = actor.system?.abilities?.[ability]?.mod ?? 0;
-        const roll = await new Roll("1d20 + @mod", { mod }).evaluate({async: true});
+        const roll = await new Roll("1d20 + @mod", { mod }).evaluate();
         const pass = roll.total >= dc;
         const safeActorName = _escapeHtml(actor.name);
         const passTag = pass

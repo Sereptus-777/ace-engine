@@ -723,7 +723,7 @@ export class SceneContext {
     const lines = [];
 
     // dnd5e format
-    const dr = this._traitToList(traits.dr ?? traits.di?.value);
+    const dr = this._traitToList(traits.dr ?? traits.dr?.value);
     const di = this._traitToList(traits.di ?? traits.di?.value);
     const dv = this._traitToList(traits.dv ?? traits.dv?.value);
     const ci = this._traitToList(traits.ci ?? traits.ci?.value);

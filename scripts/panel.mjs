@@ -1059,12 +1059,11 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       .replace(/<[^>]+>/g, "").trim();
 
     if (existingBio.length > 30) {
-      const overwrite = await foundry.applications.api.DialogV2.confirm({
-        window: { title: "Existing Biography" },
-        content: `<p><strong>${actor.name}</strong> already has a biography (${existingBio.length} characters).</p><p>Overwrite it with an AI-generated one?</p>`,
-        yes: { label: "Overwrite", icon: "fas fa-feather-alt" },
-        no:  { label: "Cancel", icon: "fas fa-times" },
-      });
+      const overwrite = await _aceConfirmDialog(
+        "Existing Biography",
+        `<p><strong>${actor.name}</strong> already has a biography (${existingBio.length} characters).</p><p>Overwrite it with an AI-generated one?</p>`,
+        { yesLabel: "Overwrite", yesIcon: "fas fa-feather-alt" },
+      );
       if (!overwrite) return;
     }
 
@@ -1166,12 +1165,11 @@ Do NOT include the creature's stat block — just narrative flavor.`;
     // Check for existing description
     const existingDesc = (item.system?.description?.value || "").replace(/<[^>]+>/g, "").trim();
     if (existingDesc.length > 30) {
-      const overwrite = await foundry.applications.api.DialogV2.confirm({
-        window: { title: "Existing Description" },
-        content: `<p><strong>${item.name}</strong> already has a description (${existingDesc.length} characters).</p><p>Overwrite it with an AI-generated one?</p>`,
-        yes: { label: "Overwrite", icon: "fas fa-feather-alt" },
-        no:  { label: "Cancel", icon: "fas fa-times" },
-      });
+      const overwrite = await _aceConfirmDialog(
+        "Existing Description",
+        `<p><strong>${item.name}</strong> already has a description (${existingDesc.length} characters).</p><p>Overwrite it with an AI-generated one?</p>`,
+        { yesLabel: "Overwrite", yesIcon: "fas fa-feather-alt" },
+      );
       if (!overwrite) return;
     }
 
@@ -1269,12 +1267,11 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       return;
     }
 
-    const proceed = await foundry.applications.api.DialogV2.confirm({
-      window: { title: "Generate All Item Bios" },
-      content: `<p>Generate AI bios for <strong>${items.length}</strong> items on <strong>${actor.name}</strong> that don't have descriptions?</p><p>This may take a moment.</p>`,
-      yes: { label: `Generate ${items.length} Bios`, icon: "fas fa-magic" },
-      no:  { label: "Cancel", icon: "fas fa-times" },
-    });
+    const proceed = await _aceConfirmDialog(
+      "Generate All Item Bios",
+      `<p>Generate AI bios for <strong>${items.length}</strong> items on <strong>${actor.name}</strong> that don't have descriptions?</p><p>This may take a moment.</p>`,
+      { yesLabel: `Generate ${items.length} Bios`, yesIcon: "fas fa-magic" },
+    );
     if (!proceed) return;
 
     // Disable the Bio All button
@@ -2151,6 +2148,18 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       Hooks.off("ace-engine.timeSync", this._timeSyncHookId);
       this._timeSyncHookId = undefined;
     }
+    // Clean up document-level drag listeners (prevent leak on reopen)
+    if (this._panelDragCleanup) {
+      this._panelDragCleanup();
+      this._panelDragCleanup = null;
+      this._panelDragBound = false;
+    }
+    // Clean up sidebar collapse hook
+    if (this._sidebarHookId !== undefined) {
+      Hooks.off("collapseSidebar", this._sidebarHookId);
+      this._sidebarHookId = undefined;
+      this._sidebarListenerBound = false;
+    }
     this._stopVoice();
     this._stopNarrationVoice();
     this._cancelTTS();
@@ -2357,7 +2366,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     if (this._sidebarListenerBound) return;
     this._sidebarListenerBound = true;
 
-    Hooks.on("collapseSidebar", (_sidebar, collapsed) => {
+    this._sidebarHookId = Hooks.on("collapseSidebar", (_sidebar, collapsed) => {
       // Don't reposition during splash or when minimized
       if (this._showingSplash || this._savedPosition) return;
       const newLeft = this._getTargetLeft();
@@ -2442,6 +2451,12 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     this.element.addEventListener("mousedown", onMouseDown);
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
+
+    // Store cleanup function so _onClose() can remove document-level listeners
+    this._panelDragCleanup = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
   }
 
   // ── Minimize Badge Actions ─────────────────────────────────
@@ -3294,11 +3309,12 @@ Write a short read-aloud passage (2-4 sentences) the GM speaks to players RIGHT 
       });
     } catch (err) {
       textarea.value = "(Could not generate — type your own narration)";
+    } finally {
+      // Always reset — prevents the "To Players" button from being stuck disabled
+      this._isNarrationStreaming = false;
+      textarea.disabled          = false;
+      textarea.placeholder       = origPlaceholder;
     }
-
-    this._isNarrationStreaming = false;
-    textarea.disabled          = false;
-    textarea.placeholder       = origPlaceholder;
     textarea.focus();
   }
 
@@ -3432,7 +3448,7 @@ Appropriate loot, XP, and story rewards.
     const container = this.element.querySelector("#ace-encounter");
     if (!container) return;
 
-    const roll      = await new Roll("1d20").evaluate({ async: true });
+    const roll      = await new Roll("1d20").evaluate();
     const result    = roll.total;
     const terrain   = this._detectTerrain();
     const sceneName = canvas?.scene?.name ?? "";

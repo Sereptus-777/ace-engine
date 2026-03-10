@@ -605,7 +605,8 @@ export class AceSettings {
         }
 
         case "anthropic": {
-          const resp = await fetch("https://api.anthropic.com/v1/messages", {
+          const anthropicUrl = apiUrl || "https://api.anthropic.com";
+          const resp = await fetch(`${anthropicUrl}/v1/messages`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

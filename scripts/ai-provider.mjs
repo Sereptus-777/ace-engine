@@ -248,21 +248,34 @@ When suggesting these features, be natural — weave them into your advice. For 
     }, "Ollama");
     await this._checkResponse(resp, "Ollama");
 
+    if (!resp.body) throw new Error("Ollama returned an empty response body.");
     let fullText = "";
+    let buffer = "";  // accumulate partial lines across chunk boundaries
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      for (const line of chunk.split("\n").filter(Boolean)) {
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";  // last element is either "" or an incomplete line
+      for (const line of lines) {
+        if (!line.trim()) continue;
         try {
           const json = JSON.parse(line);
           const token = json.message?.content ?? "";
           if (token) { fullText += token; onChunk(token); }
-        } catch { /* partial JSON */ }
+        } catch { /* malformed JSON line — skip */ }
       }
+    }
+    // Process any remaining buffered content
+    if (buffer.trim()) {
+      try {
+        const json = JSON.parse(buffer);
+        const token = json.message?.content ?? "";
+        if (token) { fullText += token; onChunk(token); }
+      } catch { /* incomplete final line */ }
     }
     return fullText;
   }
@@ -306,22 +319,34 @@ When suggesting these features, be natural — weave them into your advice. For 
     }, providerName);
     await this._checkResponse(resp, providerName);
 
+    if (!resp.body) throw new Error(`${providerName} returned an empty response body.`);
     let fullText = "";
+    let buffer = "";  // accumulate partial SSE lines across chunk boundaries
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      for (const line of chunk.split("\n")) {
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";  // keep incomplete trailing line
+      for (const line of lines) {
         if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
         try {
           const json = JSON.parse(line.slice(6));
           const token = json.choices?.[0]?.delta?.content ?? "";
           if (token) { fullText += token; onChunk(token); }
-        } catch { /* skip */ }
+        } catch { /* malformed SSE line */ }
       }
+    }
+    // Flush remaining buffer
+    if (buffer.startsWith("data: ") && buffer !== "data: [DONE]") {
+      try {
+        const json = JSON.parse(buffer.slice(6));
+        const token = json.choices?.[0]?.delta?.content ?? "";
+        if (token) { fullText += token; onChunk(token); }
+      } catch { /* incomplete final line */ }
     }
     return fullText;
   }
@@ -374,15 +399,19 @@ When suggesting these features, be natural — weave them into your advice. For 
     }, "Anthropic");
     await this._checkResponse(resp, "Anthropic");
 
+    if (!resp.body) throw new Error("Anthropic returned an empty response body.");
     let fullText = "";
+    let buffer = "";  // accumulate partial SSE lines across chunk boundaries
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      for (const line of chunk.split("\n")) {
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";  // keep incomplete trailing line
+      for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
         try {
           const json = JSON.parse(line.slice(6));
@@ -390,8 +419,18 @@ When suggesting these features, be natural — weave them into your advice. For 
             const token = json.delta?.text ?? "";
             if (token) { fullText += token; onChunk(token); }
           }
-        } catch { /* skip */ }
+        } catch { /* malformed SSE line */ }
       }
+    }
+    // Flush remaining buffer
+    if (buffer.startsWith("data: ")) {
+      try {
+        const json = JSON.parse(buffer.slice(6));
+        if (json.type === "content_block_delta") {
+          const token = json.delta?.text ?? "";
+          if (token) { fullText += token; onChunk(token); }
+        }
+      } catch { /* incomplete final line */ }
     }
     return fullText;
   }
@@ -460,16 +499,4 @@ When suggesting these features, be natural — weave them into your advice. For 
     throw new Error(this._friendlyHttpError(resp.status, rawBody, providerName));
   }
 
-  /** @deprecated Use _safeFetch instead */
-  _corsError(url, fetchErr) {
-    const origin = window.location.origin;
-    if (origin && !url.startsWith(origin) && /localhost|127\.0\.0\.1/.test(url)) {
-      return new Error(
-        `Cannot reach Ollama at ${url} from ${origin}.\n` +
-        `This is a CORS issue — your browser blocks cross-origin requests to localhost.\n` +
-        `Fix: Set environment variable OLLAMA_ORIGINS=${origin} (or OLLAMA_ORIGINS=*) and restart Ollama.`
-      );
-    }
-    return new Error(`Failed to connect to ${url}: ${fetchErr.message}`);
-  }
 }

@@ -134,7 +134,7 @@ export class SubtleRollManager {
           mod: actor.system?.skills?.[skill]?.total
             ?? actor.system?.skills?.[skill]?.mod
             ?? 0,
-        }).evaluate({ async: true });
+        }).evaluate();
 
         // ── Dice So Nice: blind 3D animation — players see dice but faces show "?" ──
         if (game.dice3d) {
@@ -503,7 +503,7 @@ export class SubtleRollManager {
       let trapCtx = "No known traps.";
       const tm    = game.modules.get("ace-trapmaster");
       if (tm?.active && tm.api?.getTraps) {
-        const traps = tm.api.getTraps(canvas.scene?.id);
+        const traps = tm.api.getTraps(canvas?.scene?.id);
         if (traps?.length) {
           trapCtx = traps.map(t => `${t.name}: ${t.description ?? "hidden trap"}`).join("\n");
         }

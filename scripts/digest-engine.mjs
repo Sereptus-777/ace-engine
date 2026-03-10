@@ -14,14 +14,27 @@ const _FP = () =>
   foundry.applications?.apps?.FilePicker?.implementation ??
   globalThis.FilePicker;
 
-/** Upload a file silently — suppresses Foundry notification toast. */
+/** Upload a file silently — suppresses Foundry notification toast.
+ *  Uses a refcount instead of save/restore so concurrent calls are safe. */
+let _silentDepth = 0;
+let _origNotifyInfo = null;
+
 async function _silentUpload(source, dir, file) {
-  const orig = ui.notifications?.info;
   try {
-    if (ui.notifications) ui.notifications.info = () => {};
+    if (ui.notifications) {
+      if (_silentDepth === 0) _origNotifyInfo = ui.notifications.info;
+      _silentDepth++;
+      ui.notifications.info = () => {};
+    }
     return await _FP().upload(source, dir, file, { notify: false });
   } finally {
-    if (ui.notifications && orig) ui.notifications.info = orig;
+    if (ui.notifications && _silentDepth > 0) {
+      _silentDepth--;
+      if (_silentDepth === 0 && _origNotifyInfo) {
+        ui.notifications.info = _origNotifyInfo;
+        _origNotifyInfo = null;
+      }
+    }
   }
 }
 
@@ -72,7 +85,8 @@ export class DigestEngine {
     this._indexLoaded = false;
     this._index = { version: 1, digests: {} };
     this._cache = new Map(); // digestId → full digest JSON
-    // ── Digest pause/resume state ──
+    // ── Digest run state ──
+    this._running = false;    // true while generateDigest() is in progress
     this._paused = false;
     this._cancelled = false;
     this._pauseResolve = null;  // resolve function to unblock when resumed
@@ -212,6 +226,23 @@ export class DigestEngine {
    * @returns {Promise<Object>} The digest object
    */
   async generateDigest(doc, aiProvider, onProgress = () => {}) {
+    if (this._running) {
+      throw new Error("A digest is already in progress. Wait for it to finish, or cancel it first.");
+    }
+    this._running = true;
+
+    try {
+      return await this._runDigest(doc, aiProvider, onProgress);
+    } finally {
+      this._running = false;
+      this._paused = false;
+      this._cancelled = false;
+      this._pauseResolve = null;
+    }
+  }
+
+  /** @private Internal digest runner — always called via generateDigest() which manages the lock. */
+  async _runDigest(doc, aiProvider, onProgress) {
     const chunks = doc.chunks ?? [];
     if (!chunks.length) throw new Error("No text chunks to digest");
 
@@ -487,7 +518,10 @@ export class DigestEngine {
 
     for (const digestId of activeDigestIds) {
       const digestData = this._cache.get(digestId);
-      if (!digestData?.digest) continue;
+      if (!digestData?.digest) {
+        console.warn(`${MODULE_ID} | Digest "${digestId}" is active but not in cache — skipping. Try reloading the world.`);
+        continue;
+      }
 
       const d = digestData.digest;
       const source = digestData.displayName ?? "Unknown";
