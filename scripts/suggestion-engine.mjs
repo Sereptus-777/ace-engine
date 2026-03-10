@@ -32,6 +32,7 @@ export class SuggestionEngine {
     this._lastSuggestions = [];
     this._listeners = new Set();
     this._running = false;
+    this._lastFingerprint = "";
   }
 
   on(callback) {
@@ -52,7 +53,7 @@ export class SuggestionEngine {
     if (this._interval) return;  // already running — don't double-up
     this._running = true;
     const intervalSec = game.settings.get(MODULE_ID, "suggestionInterval") || 120;
-    this._interval = setInterval(() => this.generateSuggestions(), intervalSec * 1000);
+    this._interval = setInterval(() => this.generateSuggestions("", { auto: true }), intervalSec * 1000);
   }
 
   stop() {
@@ -60,10 +61,30 @@ export class SuggestionEngine {
     if (this._interval) { clearInterval(this._interval); this._interval = null; }
   }
 
-  async generateSuggestions(gmInput = "") {
+  async generateSuggestions(gmInput = "", { auto = false } = {}) {
     try {
+      // ── Auto-cycle guards: skip AI calls that would waste tokens ──
+      if (auto) {
+        // Guard 1: No non-GM players connected → GM is developing, not playing
+        const activePlayers = game.users?.filter(u => u.active && !u.isGM) ?? [];
+        if (!activePlayers.length) {
+          console.debug(`${MODULE_ID} | Suggestions skipped — no players connected`);
+          return [];
+        }
+      }
+
       const sceneCtx = this.scene.gatherCompact();
       if (!sceneCtx) return [];
+
+      // Guard 2: Scene context unchanged since last auto-cycle → nothing new to suggest
+      if (auto) {
+        const fingerprint = sceneCtx.slice(0, 500);
+        if (fingerprint === this._lastFingerprint) {
+          console.debug(`${MODULE_ID} | Suggestions skipped — scene unchanged`);
+          return [];
+        }
+        this._lastFingerprint = fingerprint;
+      }
 
       const gmDirective = gmInput.trim()
         ? `\n\nGM DIRECTION: The Game Master wants: "${gmInput}". Shape 2 of the 3 suggestions around this direction while keeping the 3rd as a fresh independent idea.`
