@@ -204,7 +204,7 @@ function _parseNarrativeTimeCues(text) {
 // ── Local credentials (loaded from config.local.json at startup) ──
 // These take priority over Settings entries so the GM never needs
 // to re-enter keys in the UI.  See config.local.json for instructions.
-export let localCredentials = {};
+export const localCredentials = {};
 
 // ── Global state ───────────────────────────────────────────────
 let panel          = null;
@@ -370,15 +370,22 @@ Hooks.once("ready", async () => {
     }
   });
 
+  // ── Register password masking for API key fields in Settings ──
+  AceSettings.maskSecretFields();
+
+  // ── GM-only initialization ────────────────────────────────────
+  if (!game.user.isGM) return;
+
+  console.log(`${MODULE_ID} | ACE ready — GM mode active`);
+
   // ── Load baked-in credentials from config.local.json (optional) ─
+  // GM-only: players don't need ElevenLabs keys or other credentials.
   // If the file exists and contains your ElevenLabs key/voice, those
   // values will be used instead of whatever is in Module Settings.
-  // The file is never shared — it lives only on your local machine.
   try {
     const resp = await fetch(`modules/${MODULE_ID}/config.local.json`, { cache: "no-store" });
     if (resp.ok) {
       const cfg = await resp.json();
-      // Ignore the readme comment key; only accept known credential keys
       const { elevenLabsApiKey, elevenLabsVoiceId, elevenLabsModel } = cfg;
       if (elevenLabsApiKey  && !elevenLabsApiKey.includes("YOUR_"))  localCredentials.elevenLabsApiKey  = elevenLabsApiKey.trim();
       if (elevenLabsVoiceId && !elevenLabsVoiceId.includes("YOUR_")) localCredentials.elevenLabsVoiceId = elevenLabsVoiceId.trim();
@@ -388,14 +395,6 @@ Hooks.once("ready", async () => {
       }
     }
   } catch (_) { /* No config.local.json — perfectly fine, use Settings */ }
-
-  // ── Register password masking for API key fields in Settings ──
-  AceSettings.maskSecretFields();
-
-  // ── GM-only initialization ────────────────────────────────────
-  if (!game.user.isGM) return;
-
-  console.log(`${MODULE_ID} | ACE ready — GM mode active`);
 
   // ── Envoy sync status ──────────────────────────────────────
   if (game.modules.get("ace-envoy")?.active) {
@@ -620,7 +619,6 @@ Hooks.once("ready", async () => {
       ui.notifications?.info(`ACE: Cleared conversation history from ${cleared} NPC(s).`);
     },
   };
-  game.modules.get(MODULE_ID).api = api;
 
   // Expose public API for sister modules (ACE: Envoy, ACE: Trapmaster)
   const mod = game.modules.get(MODULE_ID);
@@ -630,7 +628,6 @@ Hooks.once("ready", async () => {
       getMemory: (category) => aceMemory?.getStore(category)?.getAll() ?? [],
       askAI:     (prompt) => aiProvider?.chat(prompt, "", "", []),
       narrate:   (text) => panel?.narrateText?.(text),
-      openPanel: () => panel?.render(true),
 
       // ── Reputation API (used by ACE: Envoy) ──────────────────────
       /**
@@ -856,7 +853,7 @@ Hooks.once("ready", async () => {
 
   // ── Periodic auto-backup (every 30 minutes while Foundry is running) ──
   if (aceMemory) {
-    setInterval(() => {
+    aceMemory._autoBackupInterval = setInterval(() => {
       if (game.user.isGM) {
         aceMemory.autoBackup().catch(err =>
           console.warn(`${MODULE_ID} | Periodic auto-backup failed:`, err)
@@ -1043,11 +1040,14 @@ Hooks.on("canvasReady", () => {
   // ── Log scene transition to memory ──────────────────────────
   const newScene = canvas?.scene?.name ?? null;
   if (aceMemory && newScene && newScene !== _lastSceneName) {
-    const fromScene = _lastSceneName;
-    aceMemory.logSceneChange(fromScene, newScene);
+    const isInitialLoad = !_lastSceneName;
+    if (!isInitialLoad) {
+      // Only log actual scene transitions (not the first load on startup)
+      aceMemory.logSceneChange(_lastSceneName, newScene);
+      // Increment reputation scene counter on each genuine scene transition
+      if (reputationEngine) reputationEngine.incrementSceneCounter();
+    }
     _lastSceneName = newScene;
-    // Increment reputation scene counter on each genuine scene transition
-    if (reputationEngine) reputationEngine.incrementSceneCounter();
 
     // ── Deed: first visit to a new scene (travel tracking) ────
     if (fameEngine) {
@@ -1500,20 +1500,19 @@ Hooks.on("ace.dispositionChange", ({ npcName, fromLabel, toLabel, scene }) => {
   }
 });
 
-// ── Subtle Roll detection — intercept blind rolls tagged by the player ──
+// ── Chat message handler: Subtle Roll detection + Crit/Fumble auto-detection ──
+// Single handler prevents subtle rolls from also being processed as crits/fumbles.
 Hooks.on("createChatMessage", async (message) => {
   if (!game.user.isGM) return;
+
+  // ── Subtle Roll detection — intercept blind rolls tagged by the player ──
   if (message.flags?.["ace-engine"]?.isSubtleRoll && subtleRolls) {
     subtleRolls.handleBlindRollResult(message);
     return;  // don't fall through to crit/fumble
   }
-});
 
-// ── Crit / Fumble auto-detection ──────────────────────────────
-// Fires when any chat message is created; only acts on d20 attack rolls
-// that produce a natural 1 or 20 while combat is active.
-Hooks.on("createChatMessage", async (message) => {
-  if (!game.user.isGM)       return;   // only the GM triggers this
+  // ── Crit / Fumble auto-detection ──────────────────────────────
+  // Only acts on d20 attack rolls with a natural 1 or 20 during active combat.
   if (!panel?.rendered)      return;   // panel must be open
   if (!game.combat?.active)  return;   // only during active combat
   if (message.flags?.["ace-engine"]) return; // skip our own ACE messages
@@ -2025,7 +2024,7 @@ async function _handleSubtleRollClick(btn) {
       // Fallback for non-dnd5e: manual d20 + ability modifier
       const mod = actor.system?.skills?.[skill]?.total ?? 0;
       const roll = new Roll(`1d20 + ${mod}`);
-      await roll.evaluate({ async: true });
+      await roll.evaluate();
       await roll.toMessage({
         speaker: ChatMessage.getSpeaker({ actor }),
         rollMode: CONST.DICE_ROLL_MODES.BLINDROLL,
