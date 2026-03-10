@@ -55,12 +55,13 @@ async function _aceConfirmDialog(title, content, {
 // ── Close-intercept dialog: "Exit & Save", "Exit Without Saving", or "Minimize" ──
 // Returns "save" | "exit" | "minimize".  Throws (reject) on X → caller cancels close.
 async function _aceCloseDialog(eventCount, eventLines = []) {
+  const _esc = s => (s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   // Build scrollable event list
   const listHtml = eventLines.length
     ? `<div style="max-height:220px;overflow-y:auto;margin:8px 0 4px;padding:6px 8px;` +
       `background:rgba(0,0,0,0.25);border:1px solid rgba(212,175,55,0.2);border-radius:4px;` +
       `font-size:12px;line-height:1.6;color:#ccc;">` +
-      eventLines.map(l => `<div style="border-bottom:1px solid rgba(255,255,255,0.05);padding:2px 0;">${l}</div>`).join("") +
+      eventLines.map(l => `<div style="border-bottom:1px solid rgba(255,255,255,0.05);padding:2px 0;">${_esc(l)}</div>`).join("") +
       `</div>`
     : "";
 
@@ -789,12 +790,13 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     const hasDesc = desc.length > 20;
     const rarity = item.system?.rarity || "common";
 
+    const safeName = this._escapeHtml(item.name);
     return `
-      <div class="ace-inventory-item ${hasDesc ? "ace-item-has-bio" : ""}" title="${item.name} (${rarity})">
+      <div class="ace-inventory-item ${hasDesc ? "ace-item-has-bio" : ""}" title="${safeName} (${rarity})">
         <img class="ace-inventory-item-img" src="${item.img}" alt="" loading="lazy"
              onerror="this.src='icons/svg/item-bag.svg'" />
         <div class="ace-inventory-item-info">
-          <span class="ace-inventory-item-name">${item.name}</span>
+          <span class="ace-inventory-item-name">${safeName}</span>
           <span class="ace-inventory-item-meta">${item.type} · <span class="ace-rarity-${rarity}">${rarity}</span></span>
         </div>
         <button class="ace-el-bio-btn"
@@ -1408,18 +1410,20 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
           .join(", ");
         const img   = actor.prototypeToken?.texture?.src || actor.img || "icons/svg/mystery-man.svg";
 
+        const safeName = this._escapeHtml(actor.name);
+        const safeConds = this._escapeHtml(conds);
         return `
           <div class="ace-tcc-stat-row">
-            <img class="ace-tcc-stat-img" src="${img}" alt="${actor.name}"
+            <img class="ace-tcc-stat-img" src="${img}" alt="${safeName}"
                  onerror="this.src='icons/svg/mystery-man.svg'" />
-            <span class="ace-tcc-stat-name" title="${actor.name}">${actor.name}</span>
+            <span class="ace-tcc-stat-name" title="${safeName}">${safeName}</span>
             <span class="ace-tcc-stat-hp" title="HP: ${hpVal}/${hpMax}">
               <span class="ace-tcc-hp-fill" style="width:${pct}%"></span>
               <span class="ace-tcc-hp-text">${hpVal}/${hpMax}</span>
             </span>
             <span class="ace-tcc-stat-ac" title="Armor Class">AC ${ac}</span>
             <span class="ace-tcc-stat-spd" title="Speed">${spd}ft</span>
-            ${conds ? `<span class="ace-tcc-stat-cond" title="${conds}">${conds}</span>` : ""}
+            ${safeConds ? `<span class="ace-tcc-stat-cond" title="${safeConds}">${safeConds}</span>` : ""}
           </div>`;
       }).join("");
     }
@@ -1556,12 +1560,14 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       const name      = c.name ?? "Unknown";
       const init      = c.initiative ?? "?";
       const truncated = name.length > 8 ? name.slice(0, 7) + "\u2026" : name;
+      const safeName  = this._escapeHtml(name);
+      const safeTrunc = this._escapeHtml(truncated);
       return `
         <div class="ace-tcc-init-chip ${isCurrent ? "ace-tcc-init-current" : ""} ${isNpc ? "ace-tcc-init-npc" : ""}${defeated}"
              data-action="tccInitJump" data-turn-index="${index}"
-             title="${name} \u2014 Init ${init}${c.isDefeated ? " [DEFEATED]" : ""}">
+             title="${safeName} \u2014 Init ${init}${c.isDefeated ? " [DEFEATED]" : ""}">
           <span class="ace-tcc-init-num">${init}</span>
-          <span class="ace-tcc-init-name">${truncated}</span>
+          <span class="ace-tcc-init-name">${safeTrunc}</span>
           <button class="ace-tcc-init-move" data-action="tccInitMoveUp"
                   data-combatant-id="${c.id}" title="Move up">
             <i class="fas fa-chevron-up"></i>
@@ -1612,17 +1618,19 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
         const spd   = actor.system?.attributes?.movement?.walk ?? "\u2014";
         const conds = (actor.effects ?? []).filter(e => !e.disabled).map(e => e.name || e.label || "").filter(Boolean).join(", ");
         const img   = actor.prototypeToken?.texture?.src || actor.img || "icons/svg/mystery-man.svg";
+        const safeName = this._escapeHtml(actor.name);
+        const safeConds = this._escapeHtml(conds);
         return `
           <div class="ace-tcc-stat-row">
-            <img class="ace-tcc-stat-img" src="${img}" alt="${actor.name}" onerror="this.src='icons/svg/mystery-man.svg'" />
-            <span class="ace-tcc-stat-name" title="${actor.name}">${actor.name}</span>
+            <img class="ace-tcc-stat-img" src="${img}" alt="${safeName}" onerror="this.src='icons/svg/mystery-man.svg'" />
+            <span class="ace-tcc-stat-name" title="${safeName}">${safeName}</span>
             <span class="ace-tcc-stat-hp" title="HP: ${hpVal}/${hpMax}">
               <span class="ace-tcc-hp-fill" style="width:${pct}%"></span>
               <span class="ace-tcc-hp-text">${hpVal}/${hpMax}</span>
             </span>
             <span class="ace-tcc-stat-ac" title="Armor Class">AC ${ac}</span>
             <span class="ace-tcc-stat-spd" title="Speed">${spd}ft</span>
-            ${conds ? `<span class="ace-tcc-stat-cond" title="${conds}">${conds}</span>` : ""}
+            ${safeConds ? `<span class="ace-tcc-stat-cond" title="${safeConds}">${safeConds}</span>` : ""}
           </div>`;
       }).join("");
     }
