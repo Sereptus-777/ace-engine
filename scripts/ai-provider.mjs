@@ -87,6 +87,51 @@ export class AiProvider {
     }
   }
 
+  // ── Capabilities Section (self-awareness) ───────────────
+
+  _buildCapabilitiesSection() {
+    const hasEnvoy = game.modules.get("ace-envoy")?.active;
+    const hasTrapmaster = game.modules.get("ace-trapmaster")?.active;
+
+    let section = `\n\n## YOUR CAPABILITIES
+You are ACE — the GM's AI Campaign Engine running inside Foundry VTT. When relevant, proactively suggest the GM use these features:
+
+- **Select Tab → Tactical Command Center**: The GM can select tokens (players, NPCs, creatures) and:
+  - Roll group skill checks, saves, or attacks with a configurable DC — these are **Subtle Rolls** the players cannot see, perfect for passive Perception, Insight, hidden dangers
+  - View quick stats (HP, AC, Speed, Conditions) for selected tokens
+  - Apply/remove conditions or damage/heal in bulk
+  - Generate an AI biography for any NPC or creature token
+  - Browse a token's inventory and generate AI bios for individual items or all items at once
+
+- **Narration Tab**: Compose read-aloud text the GM can broadcast to all players with text-to-speech. Suggest narration for dramatic moments, scene transitions, NPC speeches, or environmental descriptions.
+
+- **Ideas Tab**: Story suggestions auto-generate every ~2 minutes, or the GM can request them on demand. Suggest hooks, encounter twists, NPC motivations, and dramatic complications.
+
+- **Encounter Tab**: Analyze the tactical situation during combat, suggest NPC tactics, evaluate encounter difficulty, and recommend adjustments.
+
+- **Document Library**: The GM's uploaded sourcebooks and PDFs are available as reference. Use them to answer lore and rules questions.`;
+
+    if (hasEnvoy) {
+      section += `
+
+- **ACE: Envoy** (installed): Players can have direct two-way conversations with NPCs. Suggest the GM initiate NPC contact when roleplay opportunities arise — Envoy opens a private chat window between a player and the NPC with full AI-driven responses.`;
+    }
+
+    if (hasTrapmaster) {
+      section += `
+
+- **ACE: Trapmaster** (installed): The GM can place and manage traps. When players approach suspicious areas, suggest checking for traps or remind the GM about placed traps in the scene.`;
+    }
+
+    section += `
+
+When suggesting these features, be natural — weave them into your advice. For example: "A subtle Perception check on the party might reveal the ambush — try selecting the players in the Select tab" rather than listing features mechanically.
+
+**CRITICAL**: ONLY reference characters and NPCs whose tokens are listed in the CURRENT SCENE STATE below. NEVER invent, fabricate, or assume character names. If no tokens are listed, do not suggest rolls or actions for specific characters.`;
+
+    return section;
+  }
+
   // ── Message Builder ──────────────────────────────────────
 
   _buildMessages(userMessage, sceneContext, npcMemory, history) {
@@ -95,6 +140,7 @@ export class AiProvider {
 
     let fullSystem = systemPrompt;
     fullSystem += `\n\n## GAME SYSTEM\nThe current game system is: **${gameSystem}**. Answer rules questions for this system.`;
+    fullSystem += this._buildCapabilitiesSection();
     if (sceneContext) fullSystem += `\n\n## CURRENT SCENE STATE\n${sceneContext}`;
 
     // Split NPC memory from document library context (separated by "## REFERENCE LIBRARY")
@@ -104,11 +150,21 @@ export class AiProvider {
     if (npcPart.trim()) fullSystem += `\n\n## NPC MEMORY & HISTORY\n${npcPart}`;
     if (libPart.trim()) fullSystem += libPart;
 
-    return [
+    const messages = [
       { role: "system", content: fullSystem },
       ...history,
       { role: "user", content: userMessage },
     ];
+
+    // Log prompt size for performance debugging
+    const totalChars = messages.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : 0), 0);
+    const estTokens  = Math.round(totalChars / 3.5);  // rough char-to-token estimate
+    console.log(`${MODULE_ID} | Prompt: ~${totalChars.toLocaleString()} chars (~${estTokens.toLocaleString()} tokens) `
+      + `| system: ${fullSystem.length.toLocaleString()} `
+      + `| history: ${history.length} msgs `
+      + `| library: ${libPart.length.toLocaleString()} chars`);
+
+    return messages;
   }
 
   /**
@@ -173,34 +229,24 @@ export class AiProvider {
 
   async _chatOllama(messages) {
     const url = `${this.config.apiUrl}/api/chat`;
-    let resp;
-    try {
-      resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: this.config.modelName, messages, stream: false }),
-      });
-    } catch (fetchErr) {
-      throw this._corsError(url, fetchErr);
-    }
-    if (!resp.ok) throw new Error(`Ollama error ${resp.status}: ${await resp.text()}`);
+    const resp = await this._safeFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: this.config.modelName, messages, stream: false }),
+    }, "Ollama");
+    await this._checkResponse(resp, "Ollama");
     const data = await resp.json();
     return data.message?.content ?? "";
   }
 
   async _streamOllama(messages, onChunk) {
     const url = `${this.config.apiUrl}/api/chat`;
-    let resp;
-    try {
-      resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: this.config.modelName, messages, stream: true }),
-      });
-    } catch (fetchErr) {
-      throw this._corsError(url, fetchErr);
-    }
-    if (!resp.ok) throw new Error(`Ollama error ${resp.status}: ${await resp.text()}`);
+    const resp = await this._safeFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: this.config.modelName, messages, stream: true }),
+    }, "Ollama");
+    await this._checkResponse(resp, "Ollama");
 
     let fullText = "";
     const reader = resp.body.getReader();
@@ -224,35 +270,41 @@ export class AiProvider {
   // ── OpenAI-compatible ─────────────────────────────────────
 
   async _chatOpenAICompat(messages, url) {
+    const providerName = this.config.provider === "openai" ? "OpenAI"
+      : this.config.provider === "openrouter" ? "OpenRouter"
+      : this.config.provider === "lmstudio" ? "LM Studio" : "AI Server";
     const headers = { "Content-Type": "application/json" };
     if (this.config.apiKey) headers["Authorization"] = `Bearer ${this.config.apiKey}`;
 
-    const resp = await fetch(url, {
+    const resp = await this._safeFetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({
         model: this.config.modelName, messages,
         stream: false, max_tokens: this._maxTokens(),
       }),
-    });
-    if (!resp.ok) throw new Error(`API error ${resp.status}: ${await resp.text()}`);
+    }, providerName);
+    await this._checkResponse(resp, providerName);
     const data = await resp.json();
     return data.choices?.[0]?.message?.content ?? "";
   }
 
   async _streamOpenAICompat(messages, url, onChunk) {
+    const providerName = this.config.provider === "openai" ? "OpenAI"
+      : this.config.provider === "openrouter" ? "OpenRouter"
+      : this.config.provider === "lmstudio" ? "LM Studio" : "AI Server";
     const headers = { "Content-Type": "application/json" };
     if (this.config.apiKey) headers["Authorization"] = `Bearer ${this.config.apiKey}`;
 
-    const resp = await fetch(url, {
+    const resp = await this._safeFetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({
         model: this.config.modelName, messages,
         stream: true, max_tokens: this._maxTokens(),
       }),
-    });
-    if (!resp.ok) throw new Error(`API error ${resp.status}: ${await resp.text()}`);
+    }, providerName);
+    await this._checkResponse(resp, providerName);
 
     let fullText = "";
     const reader = resp.body.getReader();
@@ -280,7 +332,7 @@ export class AiProvider {
     const system = messages.find((m) => m.role === "system")?.content ?? "";
     const chatMessages = messages.filter((m) => m.role !== "system");
 
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    const resp = await this._safeFetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -294,8 +346,8 @@ export class AiProvider {
         system,
         messages: chatMessages,
       }),
-    });
-    if (!resp.ok) throw new Error(`Anthropic error ${resp.status}: ${await resp.text()}`);
+    }, "Anthropic");
+    await this._checkResponse(resp, "Anthropic");
     const data = await resp.json();
     return data.content?.map((c) => c.text).join("") ?? "";
   }
@@ -304,7 +356,7 @@ export class AiProvider {
     const system = messages.find((m) => m.role === "system")?.content ?? "";
     const chatMessages = messages.filter((m) => m.role !== "system");
 
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    const resp = await this._safeFetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -319,8 +371,8 @@ export class AiProvider {
         messages: chatMessages,
         stream: true,
       }),
-    });
-    if (!resp.ok) throw new Error(`Anthropic error ${resp.status}: ${await resp.text()}`);
+    }, "Anthropic");
+    await this._checkResponse(resp, "Anthropic");
 
     let fullText = "";
     const reader = resp.body.getReader();
@@ -346,6 +398,69 @@ export class AiProvider {
 
   // ── Helpers ───────────────────────────────────────────────
 
+  /**
+   * Parse an HTTP error response into a human-readable message.
+   * @private
+   */
+  _friendlyHttpError(status, rawBody, provider) {
+    const body = (rawBody || "").slice(0, 300); // truncate huge JSON blobs
+    switch (status) {
+      case 401:
+        return `Invalid API key — check your ${provider} key in ACE Engine settings.`;
+      case 403:
+        return `Access denied by ${provider}. Your API key may lack permissions or your account may be restricted.`;
+      case 404:
+        return `Model not found — "${this.config.modelName}" doesn't exist on ${provider}. Check the model name in settings.`;
+      case 429:
+        return `Rate limited by ${provider} — too many requests. Wait a moment and try again, or use a local model like Ollama.`;
+      case 500:
+      case 502:
+      case 503:
+        return `${provider} server error (${status}). The service may be overloaded — try again in a moment.`;
+      default:
+        return `${provider} error ${status}: ${body}`;
+    }
+  }
+
+  /**
+   * Wrap a fetch call with CORS detection and friendly error messages.
+   * Works for all providers, not just Ollama.
+   * @private
+   */
+  async _safeFetch(url, options, providerName) {
+    try {
+      return await fetch(url, options);
+    } catch (fetchErr) {
+      const origin = window.location.origin;
+      if (/localhost|127\.0\.0\.1/.test(url) && origin && !url.startsWith(origin)) {
+        throw new Error(
+          `Can't reach ${providerName} at ${url}.\n` +
+          `This is likely a CORS issue. Fix: set environment variable OLLAMA_ORIGINS=${origin} (or OLLAMA_ORIGINS=*) and restart ${providerName}.`
+        );
+      }
+      if (fetchErr.message?.includes("Failed to fetch") || fetchErr instanceof TypeError) {
+        throw new Error(
+          `Can't connect to ${providerName} at ${url}. Check that:\n` +
+          `• The server is running\n` +
+          `• The URL is correct in ACE Engine settings\n` +
+          `• Your network/firewall allows the connection`
+        );
+      }
+      throw new Error(`${providerName} connection failed: ${fetchErr.message}`);
+    }
+  }
+
+  /**
+   * Check a response and throw a friendly error if not OK.
+   * @private
+   */
+  async _checkResponse(resp, providerName) {
+    if (resp.ok) return;
+    const rawBody = await resp.text().catch(() => "");
+    throw new Error(this._friendlyHttpError(resp.status, rawBody, providerName));
+  }
+
+  /** @deprecated Use _safeFetch instead */
   _corsError(url, fetchErr) {
     const origin = window.location.origin;
     if (origin && !url.startsWith(origin) && /localhost|127\.0\.0\.1/.test(url)) {

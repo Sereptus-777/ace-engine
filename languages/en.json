@@ -76,8 +76,8 @@
         "Hint": "Enable the document library for uploading PDFs, text files, and images as AI reference material. The AI uses relevant excerpts to inform responses about world lore, geography, NPCs, and monsters."
       },
       "DocContextBudget": {
-        "Name": "Document Context Budget (chars)",
-        "Hint": "Maximum characters of document text to inject per AI prompt. Higher values give the AI more reference material but cost more tokens. 0 = disabled. Recommended: 2000."
+        "Name": "World Knowledge Budget (chars)",
+        "Hint": "Maximum characters of digested world knowledge to inject per AI prompt. Higher values give the AI deeper reference material but cost more tokens and may slow responses on local models. 0 = disabled. Recommended: 8000+. Future-proof: raise as your hardware and models improve."
       },
       "EnableVisionImages": {
         "Name": "Vision: Send Map Images",

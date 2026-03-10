@@ -20,6 +20,8 @@ When given scene context, USE IT. Reference specific characters by name, note th
 
 When a REFERENCE LIBRARY section is present in your context, that content has ALREADY been extracted from the GM's uploaded documents (PDFs, text files, etc.). You have it right now — do NOT say "let me retrieve the file" or "give me a moment to access the PDF." Just answer using the reference material provided. When STRUCTURED REFERENCE DATA is present, it contains AI-extracted entities (NPCs, locations, items, encounters, factions, lore) from the GM's sourcebooks — use it directly. For published content (official D&D modules, Pathfinder adventures, etc.), ALSO use your own training knowledge to fill in gaps the reference data does not cover. If neither reference data nor your training covers the question, say so honestly.
 
+When multiple source documents contain conflicting information (different editions, timeline changes, retcons), prefer the most recently uploaded document. GM session notes and campaign-specific content ALWAYS take priority over published sourcebooks. If you notice a conflict, briefly mention it so the GM can decide.
+
 Format responses with light markdown for readability. Use bold for key terms, names, and rules. Keep responses focused — a few paragraphs max unless the GM asks for detail.`;
 
 export class AceSettings {
@@ -68,12 +70,8 @@ export class AceSettings {
       default: "gpt-4o-mini",
     });
 
-    s("useEnvoyKeys", {
-      name: "ACE.Settings.UseEnvoyKeys.Name",
-      hint: "ACE.Settings.UseEnvoyKeys.Hint",
-      type: Boolean,
-      default: true,
-    });
+    // "useEnvoyKeys" removed — sync direction is now Envoy → reads from Engine
+    // (see ace-envoy "useAceEngineSettings" toggle instead)
 
     // ── Game System ─────────────────────────────────────────
     s("gameSystem", {
@@ -196,8 +194,8 @@ export class AceSettings {
       name: "ACE.Settings.DocContextBudget.Name",
       hint: "ACE.Settings.DocContextBudget.Hint",
       type: Number,
-      default: 2000,
-      range: { min: 0, max: 8000, step: 500 },
+      default: 4000,
+      range: { min: 0, max: 50000, step: 500 },
     });
 
     s("enableVisionImages", {
@@ -374,24 +372,26 @@ export class AceSettings {
   /** Popular models per provider (shown in dropdown) */
   static PROVIDER_MODELS = {
     openai: [
-      { value: "gpt-4o-mini",    label: "GPT-4o Mini (free tier)" },
-      { value: "gpt-4o",         label: "GPT-4o (best)" },
-      { value: "gpt-4-turbo",    label: "GPT-4 Turbo" },
-      { value: "gpt-3.5-turbo",  label: "GPT-3.5 Turbo (cheapest)" },
-      { value: "o3-mini",        label: "o3-mini (reasoning)" },
+      { value: "gpt-4o-mini",    label: "GPT-4o Mini — Fast · Free tier available" },
+      { value: "gpt-4o",         label: "GPT-4o — Best Quality · ~$5/M tokens" },
+      { value: "gpt-4-turbo",    label: "GPT-4 Turbo — High Quality · ~$10/M tokens" },
+      { value: "gpt-3.5-turbo",  label: "GPT-3.5 Turbo — Budget · ~$0.50/M tokens" },
+      { value: "o3-mini",        label: "o3-mini — Reasoning · ~$1/M tokens" },
     ],
     anthropic: [
-      { value: "claude-sonnet-4-20250514",  label: "Claude Sonnet 4 (recommended)" },
-      { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 (fast, cheap)" },
-      { value: "claude-opus-4-20250514",    label: "Claude Opus 4 (most capable)" },
+      { value: "claude-sonnet-4-20250514",  label: "Claude Sonnet 4 — Recommended · ~$3/M tokens" },
+      { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 — Fast & Cheap · ~$0.80/M tokens" },
+      { value: "claude-opus-4-20250514",    label: "Claude Opus 4 — Most Capable · ~$15/M tokens" },
     ],
     ollama: [
-      { value: "llama3.2",             label: "Llama 3.2 (default)" },
-      { value: "mistral",              label: "Mistral" },
-      { value: "qwen2.5-coder:32b",   label: "Qwen 2.5 Coder 32B" },
-      { value: "deepseek-r1",          label: "DeepSeek R1" },
-      { value: "gemma2",               label: "Gemma 2" },
-      { value: "phi3",                 label: "Phi-3" },
+      { value: "llama3.2",             label: "Llama 3.2 — Fast · ~4GB VRAM" },
+      { value: "mistral",              label: "Mistral — Fast · ~5GB VRAM" },
+      { value: "qwen2.5-coder:7b",    label: "Qwen 2.5 Coder 7B — Fast · ~6GB VRAM" },
+      { value: "qwen2.5-coder:14b",   label: "Qwen 2.5 Coder 14B — Balanced · ~10GB VRAM" },
+      { value: "qwen2.5-coder:32b",   label: "Qwen 2.5 Coder 32B — Best Quality · ~20GB VRAM" },
+      { value: "deepseek-r1",          label: "DeepSeek R1 — Reasoning · varies" },
+      { value: "gemma2",               label: "Gemma 2 — Fast · ~6GB VRAM" },
+      { value: "phi3",                 label: "Phi-3 — Fast · ~4GB VRAM" },
     ],
     lmstudio: [
       { value: "default",  label: "Default (auto-detect loaded model)" },
@@ -435,12 +435,9 @@ export class AceSettings {
       const savedValue = modelInput.value;
       modelInput.replaceWith(modelSelect);
 
-      /** Populate model dropdown for the given provider */
-      const populateModels = (provider, currentValue) => {
+      /** Add options to the model select element */
+      const _fillSelect = (models, currentValue) => {
         modelSelect.innerHTML = "";
-        const models = AceSettings.PROVIDER_MODELS[provider] ?? [];
-
-        // Add known models as options
         let hasCurrentValue = false;
         for (const m of models) {
           const opt = document.createElement("option");
@@ -452,7 +449,6 @@ export class AceSettings {
           }
           modelSelect.appendChild(opt);
         }
-
         // If current saved value isn't in the list, add it at the top so it's not lost
         if (currentValue && !hasCurrentValue) {
           const custom = document.createElement("option");
@@ -461,6 +457,42 @@ export class AceSettings {
           custom.selected = true;
           modelSelect.prepend(custom);
         }
+      };
+
+      /** Populate model dropdown — queries Ollama/LM Studio live, static list for others */
+      const populateModels = async (provider, currentValue) => {
+        // Start with static list immediately (no flash of empty dropdown)
+        const staticModels = AceSettings.PROVIDER_MODELS[provider] ?? [];
+        _fillSelect(staticModels, currentValue);
+
+        // For local providers, query the actual API for installed models
+        if (provider === "ollama" || provider === "lmstudio") {
+          const localUrl = urlInput.value || AceSettings.PROVIDER_DEFAULTS[provider]?.apiUrl || "http://localhost:11434";
+          try {
+            const endpoint = provider === "ollama" ? `${localUrl}/api/tags` : `${localUrl}/v1/models`;
+            const resp = await fetch(endpoint, { signal: AbortSignal.timeout(3000) });
+            if (resp.ok) {
+              const data = await resp.json();
+              const installed = (provider === "ollama")
+                ? (data.models ?? []).map(m => ({ value: m.name, label: `${m.name} (${_formatSize(m.size)})` }))
+                : (data.data ?? []).map(m => ({ value: m.id, label: m.id }));
+
+              if (installed.length) {
+                // Sort alphabetically, put current value first
+                installed.sort((a, b) => a.value.localeCompare(b.value));
+                _fillSelect(installed, currentValue);
+                console.log(`${MODULE_ID} | Detected ${installed.length} installed ${provider} models`);
+              }
+            }
+          } catch (_) { /* API unreachable — static list is fine */ }
+        }
+      };
+
+      /** Format byte size to human-readable (e.g., 19234567890 → "17.9 GB") */
+      const _formatSize = (bytes) => {
+        if (!bytes) return "?";
+        const gb = bytes / (1024 ** 3);
+        return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / (1024 ** 2)).toFixed(0)} MB`;
       };
 
       // Initial population
@@ -1288,30 +1320,8 @@ export class AceSettings {
     return choices[setting] ?? setting;
   }
 
-  /** Get effective provider config, optionally sharing ACE: Envoy keys */
+  /** Get ACE Engine's AI provider config. Engine is always the source of truth. */
   static getProviderConfig() {
-    const useShared =
-      game.settings.get(MODULE_ID, "useEnvoyKeys") &&
-      game.modules.get("ace-envoy")?.active;
-
-    if (useShared) {
-      try {
-        const envoyProvider = game.settings.get("ace-envoy", "aiProvider") ?? "ollama";
-        const envoyApiKey = game.settings.get("ace-envoy", "openAiKey") ?? "";
-        let apiUrl, modelName;
-        if (envoyProvider === "ollama") {
-          apiUrl    = game.settings.get("ace-envoy", "ollamaUrl")   ?? "http://localhost:11434";
-          modelName = game.settings.get("ace-envoy", "ollamaModel") ?? "llama3.2";
-        } else {
-          apiUrl    = "https://api.openai.com";
-          modelName = game.settings.get("ace-envoy", "openAiModel") ?? "gpt-4o";
-        }
-        return { provider: envoyProvider, apiKey: envoyApiKey, apiUrl, modelName };
-      } catch (e) {
-        console.warn(`${MODULE_ID} | Could not read ACE: Envoy settings, using own config`, e);
-      }
-    }
-
     const provider  = game.settings.get(MODULE_ID, "aiProvider");
     const defaults  = AceSettings.PROVIDER_DEFAULTS[provider] ?? {};
     return {

@@ -1118,7 +1118,7 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       }
 
       await this._upsertJournalPage(journal, "Memory", htmlContent);
-      console.log(`${MODULE_ID} | Journal: wrote NPC "${npcName}"`);
+      console.debug(`${MODULE_ID} | Journal: wrote NPC "${npcName}"`);
     } catch (err) {
       console.error(`${MODULE_ID} | writeNpcJournal failed:`, err);
     }
@@ -1195,7 +1195,7 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       }
 
       await this._upsertJournalPage(journal, "Memory", htmlContent);
-      console.log(`${MODULE_ID} | Journal: wrote PC "${displayName}"`);
+      console.debug(`${MODULE_ID} | Journal: wrote PC "${displayName}"`);
     } catch (err) {
       console.error(`${MODULE_ID} | writePcJournal failed:`, err);
     }
@@ -1258,7 +1258,7 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       const journal = await this._getOrCreateJournal(folder, noteName);
       const htmlContent = `<div>${content.replace(/\n/g, "<br>")}</div>`;
       await this._upsertJournalPage(journal, "Content", htmlContent);
-      console.log(`${MODULE_ID} | Journal: wrote World Note "${noteName}"`);
+      console.debug(`${MODULE_ID} | Journal: wrote World Note "${noteName}"`);
     } catch (err) {
       console.error(`${MODULE_ID} | writeWorldNoteJournal failed:`, err);
     }

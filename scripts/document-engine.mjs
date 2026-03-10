@@ -8,6 +8,23 @@
 import { extractKeywords } from "./document-store.mjs";
 
 const MODULE_ID = "ace-engine";
+const GLOBAL_CACHE_DIR = "ace-engine-library/documents";
+
+// v13-safe FilePicker access
+const _FP = () =>
+  foundry.applications?.apps?.FilePicker?.implementation ??
+  globalThis.FilePicker;
+
+/** Upload a file silently — suppresses Foundry notification toast. */
+async function _silentUpload(source, dir, file) {
+  const orig = ui.notifications?.info;
+  try {
+    if (ui.notifications) ui.notifications.info = () => {};
+    return await _FP().upload(source, dir, file, { notify: false });
+  } finally {
+    if (ui.notifications && orig) ui.notifications.info = orig;
+  }
+}
 
 // ── PDF.js CDN Loading ───────────────────────────────────────
 
@@ -31,6 +48,50 @@ async function _ensurePdfJs() {
     console.error(`${MODULE_ID} | Failed to load PDF.js:`, err);
     throw new Error("PDF.js library could not be loaded. Check your internet connection. Text and image uploads still work without it.");
   }
+}
+
+
+// ── Copyright / Publication Year Detection ──────────────────
+
+/**
+ * Scan text chunks (or raw page text) for a copyright / publication year.
+ * Looks for patterns like ©2016, Copyright 2001, Published 2005, etc.
+ * Prioritises the first few pages (title page, copyright page).
+ *
+ * @param {Array<{text: string}>} chunks - Array of objects with a `text` field
+ * @param {number} maxToScan - How many chunks/pages to scan (default: first 15)
+ * @returns {number|null} - 4-digit year, or null if not found
+ */
+export function detectPublishedYear(chunks, maxToScan = 15) {
+  if (!Array.isArray(chunks) || chunks.length === 0) return null;
+
+  // Patterns ordered by confidence (most specific → broadest)
+  const patterns = [
+    /©\s*(\d{4})/,                              // ©2016, © 2001
+    /copyright\s+(?:\(c\)\s*)?(\d{4})/i,        // Copyright 2016, Copyright (c) 2005
+    /\(c\)\s*(\d{4})/i,                          // (c) 2001
+    /first\s+print(?:ed|ing)\s+(\d{4})/i,       // First printed 2005
+    /first\s+publish(?:ed|ing)\s+(\d{4})/i,     // First published 2001
+    /published\s+(\d{4})/i,                      // Published 2016
+    /printing[,.]?\s+(\d{4})/i,                  // Printing, 2016
+  ];
+
+  const sample = chunks.slice(0, maxToScan);
+
+  for (const pattern of patterns) {
+    for (const chunk of sample) {
+      const text = chunk.text ?? chunk;
+      if (!text) continue;
+      const m = pattern.exec(text);
+      if (m) {
+        const year = parseInt(m[1], 10);
+        if (year >= 1970 && year <= new Date().getFullYear() + 1) {
+          return year;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 
@@ -322,7 +383,7 @@ export class DocumentEngine {
    * @param {number} maxChars - Character budget (default from settings)
    * @returns {string} Formatted context block, or ""
    */
-  buildDocumentContext(sceneContext = "", userMessage = "", currentScene = "", maxChars = 2000) {
+  buildDocumentContext(sceneContext = "", userMessage = "", currentScene = "", maxChars = 8000) {
     const store = this._mm?.documents;
     if (!store) return "";
 
@@ -330,27 +391,33 @@ export class DocumentEngine {
     const queryKeywords = this._extractQueryKeywords(userMessage, sceneContext, currentScene);
     if (!queryKeywords.length) return "";
 
+    const contentBudget = maxChars - 300; // reserve 300 chars for headers/framing
+
     let digestCtx = "";
     let digestCharsUsed = 0;
+    let chunkCtx = "";
 
-    // 2. Try digest-based context first (structured, high quality)
+    // 2. Check if digests are available
     const activeDigestIds = store.getActiveDigests();
-    if (activeDigestIds.length && this._digestEngine) {
-      const digestBudget = Math.floor((maxChars - 300) * 0.7); // 70% for digests
-      const result = this._digestEngine.buildDigestContext(activeDigestIds, queryKeywords, digestBudget);
+    const hasDigests = activeDigestIds.length > 0 && this._digestEngine;
+
+    if (hasDigests) {
+      // ── 100% digest when digests exist ──────────────────────
+      // Structured knowledge is denser, better organized, and more
+      // useful than raw chunks. Use the full budget for digests.
+      const result = this._digestEngine.buildDigestContext(activeDigestIds, queryKeywords, contentBudget);
       digestCtx = result.text;
       digestCharsUsed = result.charsUsed;
     }
 
-    // 3. Fill remaining budget with raw chunk matches (fallback/supplement)
-    let chunkCtx = "";
-    const enabledDocs = store.getEnabled();
-    if (enabledDocs.length) {
-      const chunkBudget = maxChars - digestCharsUsed - 300;
-      if (chunkBudget > 200) {
+    if (!hasDigests) {
+      // ── 100% raw chunks when no digests exist ───────────────
+      // Fallback for documents that haven't been digested yet.
+      const enabledDocs = store.getEnabled();
+      if (enabledDocs.length) {
         const scored = store.searchChunks(queryKeywords, 25);
         if (scored.length) {
-          const selected = this._selectWithinBudget(scored, chunkBudget);
+          const selected = this._selectWithinBudget(scored, contentBudget);
           if (selected.length) {
             chunkCtx = this._formatChunks(selected);
           }
@@ -360,7 +427,7 @@ export class DocumentEngine {
 
     if (!digestCtx && !chunkCtx) return "";
 
-    // 4. Assemble final context block
+    // 3. Assemble final context block
     let ctx = "\n\n## REFERENCE LIBRARY\n\n";
     ctx += "The following information comes from the GM's reference documents. ";
     ctx += "Use this as background knowledge — do not quote it directly to players.\n\n";
@@ -409,27 +476,31 @@ export class DocumentEngine {
   _extractQueryKeywords(userMessage, sceneContext, currentScene) {
     const keywords = [];
 
-    // From user message: extract non-stop-word tokens
+    // From user message: extract non-stop-word tokens (primary relevance signal)
     if (userMessage) {
-      keywords.push(...extractKeywords(userMessage, 12));
+      keywords.push(...extractKeywords(userMessage, 8));
     }
 
-    // From scene name
+    // From scene name (strong relevance — user is literally in this scene)
     if (currentScene) {
       const sceneWords = currentScene.toLowerCase()
         .split(/[\s_-]+/)
         .filter(w => w.length > 2);
-      keywords.push(...sceneWords);
+      keywords.push(...sceneWords.slice(0, 4));
     }
 
-    // From scene context: extract proper nouns (capitalized words 3+ chars)
-    if (sceneContext) {
+    // From scene context: extract proper nouns BUT limit heavily.
+    // Too many scene keywords cause the digest to match half the book.
+    // Only add a few scene names, and only if we don't already have
+    // enough keywords from the user message itself.
+    if (sceneContext && keywords.length < 6) {
       const names = sceneContext.match(/\b[A-Z][a-z]{2,}\b/g) ?? [];
-      keywords.push(...names.map(n => n.toLowerCase()).slice(0, 15));
+      const unique = [...new Set(names.map(n => n.toLowerCase()))];
+      keywords.push(...unique.slice(0, 5));
     }
 
-    // Deduplicate
-    return [...new Set(keywords)];
+    // Deduplicate and hard-cap total keywords
+    return [...new Set(keywords)].slice(0, 12);
   }
 
   /**
@@ -492,5 +563,120 @@ export class DocumentEngine {
       totalChunks: 0,
       totalImages: 0,
     };
+  }
+
+  // ── Document Cache (Global, Cross-World) ────────────────────
+
+  /**
+   * Save a document record to the global cache folder.
+   * Stored at ace-engine-library/documents/{sanitized-filename}.json
+   * This persists across worlds and survives "Remove from Library".
+   * @param {Object} docRecord - Full document record from the store
+   */
+  async saveDocumentCache(docRecord) {
+    if (!docRecord?.fileName) return;
+
+    try {
+      // Ensure directories exist
+      try { await _FP().createDirectory("data", "ace-engine-library"); } catch { /* exists */ }
+      try { await _FP().createDirectory("data", GLOBAL_CACHE_DIR); } catch { /* exists */ }
+
+      const cacheEntry = {
+        version:   1,
+        cachedAt:  new Date().toISOString(),
+        fileName:  docRecord.fileName,
+        displayName: docRecord.displayName,
+        type:      docRecord.type,
+        fileSize:  docRecord.fileSize,
+        pageCount: docRecord.pageCount ?? 0,
+        tags:      docRecord.tags ?? [],
+        chunks:    docRecord.chunks ?? [],
+        images:    docRecord.images ?? [],
+      };
+
+      const safeName = this._safeCacheFileName(docRecord.fileName);
+      const blob = new Blob([JSON.stringify(cacheEntry, null, 2)], { type: "application/json" });
+      const file = new File([blob], safeName, { type: "application/json" });
+      await _silentUpload("data", GLOBAL_CACHE_DIR, file);
+
+      console.log(`${MODULE_ID} | Cached document: ${docRecord.displayName} → ${GLOBAL_CACHE_DIR}/${safeName}`);
+    } catch (err) {
+      console.warn(`${MODULE_ID} | Failed to cache document ${docRecord.displayName}:`, err);
+    }
+  }
+
+  /**
+   * Check if a cached extraction exists for a given filename.
+   * @param {string} fileName - Original upload filename (e.g., "Curse-of-Strahd.pdf")
+   * @returns {Promise<Object|null>} Cached document data, or null if not found
+   */
+  async loadDocumentCache(fileName) {
+    if (!fileName) return null;
+
+    try {
+      const safeName = this._safeCacheFileName(fileName);
+      const url = `${GLOBAL_CACHE_DIR}/${safeName}`;
+      const resp = await fetch(url, { cache: "no-store" });
+      if (!resp.ok) return null;
+
+      const data = await resp.json();
+      if (data?.version && data?.chunks) {
+        console.log(`${MODULE_ID} | Found cached extraction for "${fileName}" (${data.chunks.length} chunks, cached ${data.cachedAt})`);
+        return data;
+      }
+      return null;
+    } catch {
+      return null; // no cache file — that's fine
+    }
+  }
+
+  /**
+   * Scan the global cache folder and return all cached document entries.
+   * @returns {Promise<Array<{fileName: string, displayName: string, type: string, cachedAt: string, chunks: number, safeName: string}>>}
+   */
+  async scanDocumentCache() {
+    try {
+      const result = await _FP().browse("data", GLOBAL_CACHE_DIR);
+      const files = result?.files ?? [];
+      const entries = [];
+
+      for (const filePath of files) {
+        if (!filePath.endsWith(".json")) continue;
+        try {
+          const resp = await fetch(filePath, { cache: "no-store" });
+          if (!resp.ok) continue;
+          const data = await resp.json();
+          if (data?.version && data?.fileName) {
+            entries.push({
+              fileName:    data.fileName,
+              displayName: data.displayName ?? data.fileName,
+              type:        data.type ?? "unknown",
+              cachedAt:    data.cachedAt ?? "unknown",
+              pageCount:   data.pageCount ?? 0,
+              chunkCount:  data.chunks?.length ?? 0,
+              filePath,
+            });
+          }
+        } catch { /* skip corrupted cache files */ }
+      }
+
+      console.log(`${MODULE_ID} | Document cache scan: found ${entries.length} cached document(s)`);
+      return entries;
+    } catch {
+      return []; // folder doesn't exist yet — no cache
+    }
+  }
+
+  /**
+   * Convert a filename into a safe JSON cache filename.
+   * "Curse of Strahd.pdf" → "curse-of-strahd-pdf.json"
+   * @private
+   */
+  _safeCacheFileName(fileName) {
+    return fileName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      + ".json";
   }
 }

@@ -116,6 +116,150 @@ export class SubtleRollManager {
   }
 
   // ────────────────────────────────────────────────────────────
+  // BATCH — GM rolls all selected tokens, one consolidated card
+  // ────────────────────────────────────────────────────────────
+
+  async batchRoll({ actors, skill, dc, flavor }) {
+    const skillLabel = SKILL_LABELS[skill] ?? skill;
+    const results    = [];
+
+    for (const { actor, token } of actors) {
+      // Use TOKEN name (e.g. "Grimfang") not actor base name ("Otyugh")
+      const displayName = token?.document?.name ?? token?.name ?? actor.prototypeToken?.name ?? actor.name;
+      const displayImg  = token?.document?.texture?.src ?? actor.prototypeToken?.texture?.src ?? actor.img;
+
+      try {
+        // Roll silently — no chat message
+        const roll = await new Roll("1d20 + @mod", {
+          mod: actor.system?.skills?.[skill]?.total
+            ?? actor.system?.skills?.[skill]?.mod
+            ?? 0,
+        }).evaluate({ async: true });
+
+        // ── Dice So Nice: blind 3D animation — players see dice but faces show "?" ──
+        if (game.dice3d) {
+          try {
+            // showForRoll(roll, user, synchronize, whisperTo, blind, chatMessageId)
+            // synchronize=true → all clients see it, blind=true → result hidden (? faces)
+            await game.dice3d.showForRoll(roll, game.user, true, null, true, null);
+          } catch (e) {
+            console.warn(`${MODULE_ID} | Dice So Nice blind roll failed:`, e);
+          }
+        }
+
+        const total   = roll.total;
+        const natural = roll.dice?.[0]?.total ?? roll.terms?.[0]?.results?.[0]?.result ?? total;
+
+        results.push({
+          actorName: displayName,
+          actorImg:  displayImg,
+          total,
+          natural,
+          modifier: total - natural,
+          passed:   total >= dc,
+          isNat1:   natural === 1,
+          isNat20:  natural === 20,
+        });
+      } catch (err) {
+        console.error(`${MODULE_ID} | Subtle batch roll error for ${displayName}:`, err);
+        results.push({
+          actorName: displayName,
+          actorImg:  displayImg,
+          total: 0, natural: 0, modifier: 0,
+          passed: false, isNat1: false, isNat20: false,
+          error: true,
+        });
+      }
+    }
+
+    // Build & post one consolidated GM-only card
+    const cardHtml = this._buildConsolidatedCard(skillLabel, dc, flavor, results);
+    await ChatMessage.create({
+      content: cardHtml,
+      speaker: { alias: "ACE" },
+      whisper: [game.user.id],
+      flags:   { "ace-engine": { isSubtleBatchResult: true } },
+    });
+
+    // Log to memory
+    const summary = results.map(r =>
+      `${r.actorName}: ${r.total} ${r.passed ? "PASS" : "FAIL"}`
+    ).join(", ");
+    this.aceMem?.logNote?.(`Subtle Batch Roll (${skillLabel} DC ${dc}): ${summary}`);
+
+    // ── AI narration for Nat 20 / Nat 1 crits ──────────────────
+    const crits = results.filter(r => r.isNat20 || r.isNat1);
+    if (crits.length && this.ai) {
+      this._generateCritNarrations(skillLabel, dc, flavor, crits);  // fire-and-forget
+    }
+
+    return results;
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // AI narration for critical results (Nat 20 / Nat 1)
+  // Posts a GM-only card with narration the GM can copy to Narration tab
+  // ────────────────────────────────────────────────────────────
+
+  async _generateCritNarrations(skillLabel, dc, flavor, crits) {
+    const sceneCtx = this.scene?.gatherCompact?.() ?? "";
+
+    for (const crit of crits) {
+      const type = crit.isNat20 ? "NATURAL 20 — Critical Success" : "NATURAL 1 — Critical Failure";
+      const prompt =
+        `You are a vivid D&D narrator. A blind ${skillLabel} check (DC ${dc}) just produced a critical result.\n\n` +
+        `Character: ${crit.actorName}\n` +
+        `Result: ${type} (rolled ${crit.natural}, total ${crit.total})\n` +
+        `GM context: ${flavor || "No additional context."}\n\n` +
+        `Scene: ${sceneCtx || "No scene data."}\n\n` +
+        (crit.isNat20
+          ? `Write a vivid 2-3 sentence narration describing what this character perceives or discovers — exceptional insight, ` +
+            `a crucial detail others would miss. Second person, present tense. Make it dramatic and rewarding.`
+          : `Write a vivid 2-3 sentence narration of confident MISINFORMATION — the character is certain but completely wrong. ` +
+            `The falsehood should be plausible. Do NOT hint that it's wrong. Second person, present tense.`
+        );
+
+      try {
+        const narration = await this.ai.chat(prompt, "", "", []);
+
+        const color = crit.isNat20 ? "#c9a84c" : "#c43b3b";
+        const icon  = crit.isNat20 ? "fa-star"  : "fa-skull";
+        const label = crit.isNat20 ? "CRITICAL SUCCESS" : "CRITICAL FAILURE";
+
+        const cardHtml =
+          `<div class="ace-subtle-crit-narration" style="background:#1c150e;border-left:4px solid ${color};` +
+          `border-radius:4px;padding:10px 12px;font-family:'Rajdhani','Segoe UI',sans-serif;line-height:1.5;">` +
+          // Header
+          `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">` +
+          `<img src="${crit.actorImg}" style="width:28px;height:28px;border-radius:50%;border:1px solid ${color};object-fit:cover;" />` +
+          `<span style="color:${color};font-weight:bold;font-size:0.95em;">` +
+          `<i class="fas ${icon}" style="margin-right:4px;"></i>` +
+          `${_escapeHtml(crit.actorName)} — ${label}</span></div>` +
+          // Skill + roll
+          `<div style="color:#9a9890;font-size:0.82em;margin-bottom:8px;">` +
+          `${_escapeHtml(skillLabel)} — d20: ${crit.natural} + ${crit.modifier} = ${crit.total} vs DC ${dc}</div>` +
+          // AI narration
+          `<div style="font-style:italic;color:#eddfc5;font-size:0.95em;padding:8px;` +
+          `background:${color}15;border:1px solid ${color}33;border-radius:3px;">` +
+          `"${_escapeHtml(narration.trim())}"</div>` +
+          // Hint for GM
+          `<div style="font-size:0.75em;color:#555;margin-top:6px;text-align:center;">` +
+          `Copy this narration to the <strong>Narration tab</strong> to read aloud to the player.</div>` +
+          `</div>`;
+
+        await ChatMessage.create({
+          content: cardHtml,
+          speaker: { alias: "ACE" },
+          whisper: [game.user.id],
+          flags:   { "ace-engine": { isSubtleCritNarration: true } },
+        });
+      } catch (err) {
+        console.error(`${MODULE_ID} | Crit narration failed for ${crit.actorName}:`, err);
+      }
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────
   // STEP 1 — GM sends a blind roll request to a player
   // ────────────────────────────────────────────────────────────
 
@@ -611,6 +755,74 @@ export class SubtleRollManager {
       `"${_escapeHtml(narrationText)}"</div>` +
       `</div>`
     );
+  }
+
+  /** Card 4: Consolidated Batch — GM-only, one card for all actors */
+  _buildConsolidatedCard(skillLabel, dc, flavor, results) {
+    const passCount = results.filter(r => r.passed).length;
+    const failCount = results.length - passCount;
+
+    let html =
+      `<div class="ace-subtle-batch" style="background:#1c150e;border-left:4px solid #8a5bbf;` +
+      `border-radius:4px;padding:10px 12px;font-family:'Rajdhani','Segoe UI',sans-serif;line-height:1.5;">` +
+      // Header
+      `<div style="color:#c4a8f0;font-weight:bold;font-size:1.05em;margin-bottom:6px;letter-spacing:0.5px;">` +
+      `<i class="fas fa-eye-slash" style="margin-right:4px;"></i> Subtle Roll — ${_escapeHtml(skillLabel)}</div>` +
+      // DC banner
+      `<div style="display:flex;justify-content:space-between;align-items:center;` +
+      `background:#18102a;border:1px solid #8a5bbf44;border-radius:3px;padding:5px 10px;margin-bottom:8px;">` +
+      `<span style="color:#9a9890;font-size:0.85em;">DC <strong style="color:#c4a8f0;font-size:1.1em;">${dc}</strong></span>` +
+      `<span style="font-size:0.85em;">` +
+      `<span style="color:#5db88a;">✓ ${passCount}</span>` +
+      `<span style="color:#555;margin:0 4px;">|</span>` +
+      `<span style="color:#e06060;">✗ ${failCount}</span>` +
+      `</span></div>`;
+
+    // Flavor text
+    if (flavor) {
+      html += `<div style="font-style:italic;color:#9a9890;font-size:0.85em;margin-bottom:8px;">` +
+        `"${_escapeHtml(flavor)}"</div>`;
+    }
+
+    // Actor rows
+    for (const r of results) {
+      const color = r.error  ? "#555"
+                  : r.isNat1  ? "#c43b3b"
+                  : r.isNat20 ? "#c9a84c"
+                  : r.passed  ? "#5db88a"
+                  :             "#e06060";
+      const icon  = r.error  ? "⚠"
+                  : r.isNat1  ? "💀"
+                  : r.isNat20 ? "⭐"
+                  : r.passed  ? "✓"
+                  :             "✗";
+      const label = r.error  ? "ERROR"
+                  : r.isNat1  ? "NAT 1"
+                  : r.isNat20 ? "NAT 20"
+                  : r.passed  ? "PASS"
+                  :             "FAIL";
+
+      html +=
+        `<div style="display:flex;align-items:center;gap:8px;padding:4px 6px;margin-bottom:3px;` +
+        `background:${color}11;border-left:3px solid ${color};border-radius:2px;">` +
+        // Token portrait
+        `<img src="${r.actorImg}" style="width:28px;height:28px;border-radius:50%;` +
+        `border:1px solid ${color};object-fit:cover;flex-shrink:0;" />` +
+        // Name
+        `<span style="flex:1;color:#e8e6e0;font-weight:600;font-size:0.92em;` +
+        `white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_escapeHtml(r.actorName)}</span>` +
+        // Roll breakdown
+        `<span style="color:#9a9890;font-size:0.82em;flex-shrink:0;">` +
+        `d20: ${r.natural}${r.modifier >= 0 ? " + " : " − "}${Math.abs(r.modifier)} = ` +
+        `<strong style="color:${color};font-size:1.1em;">${r.total}</strong></span>` +
+        // Pass/fail badge
+        `<span style="font-size:0.8em;font-weight:bold;color:${color};` +
+        `min-width:44px;text-align:center;">${icon} ${label}</span>` +
+        `</div>`;
+    }
+
+    html += `</div>`;
+    return html;
   }
 
   // ────────────────────────────────────────────────────────────

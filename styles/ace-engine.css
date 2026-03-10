@@ -48,7 +48,10 @@
   box-shadow:
     /* outer glow */
     0 0 30px rgba(0, 0, 0, 0.9),
-    0 4px 40px rgba(0, 0, 0, 0.8) !important;
+    0 4px 40px rgba(0, 0, 0, 0.8),
+    /* gold ambient glow — visible on any map */
+    0 0 15px rgba(212, 175, 55, 0.15),
+    0 0 45px rgba(212, 175, 55, 0.08) !important;
   outline: none !important;
 }
 
@@ -1211,6 +1214,20 @@
 .ace-roll-signs .ace-roll-die { color: var(--ace-warning); }
 .ace-roll-signs strong { color: var(--ace-warning); }
 
+.ace-roll-danger {
+  background: rgba(255, 23, 68, 0.06);
+  border-color: var(--ace-danger);
+}
+.ace-roll-danger .ace-roll-die { color: var(--ace-danger); }
+.ace-roll-danger strong { color: var(--ace-danger); }
+
+.ace-roll-deadly {
+  background: rgba(138, 91, 191, 0.08);
+  border-color: var(--ace-accent-secondary);
+}
+.ace-roll-deadly .ace-roll-die { color: var(--ace-accent-secondary); }
+.ace-roll-deadly strong { color: var(--ace-accent-secondary); }
+
 /* Read-aloud text gets a visual callout box */
 .ace-encounter-analysis blockquote {
   background: rgba(201, 168, 76, 0.06);
@@ -1219,6 +1236,286 @@
   padding: 8px 12px;
   border-radius: 0 var(--ace-radius-sm) var(--ace-radius-sm) 0;
   font-style: italic;
+  color: var(--ace-text-secondary);
+}
+
+/* ── Interactive Encounter System ────────────────────────── */
+
+.ace-enc-interactive {
+  padding: 4px 0;
+}
+
+/* Title & Hook */
+.ace-enc-header {
+  padding: 6px 10px;
+  margin-bottom: 4px;
+}
+.ace-enc-title {
+  color: var(--ace-accent);
+  font-family: var(--ace-font-heading);
+  font-size: 16px;
+  margin: 0 0 2px 0;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.ace-enc-title i { margin-right: 6px; }
+.ace-enc-hook {
+  color: var(--ace-text-secondary);
+  font-size: 13px;
+  margin: 0;
+}
+
+/* Collapsible Sections */
+.ace-enc-section {
+  border-top: 1px solid rgba(212, 175, 55, 0.15);
+  margin: 0;
+}
+.ace-enc-section summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  color: var(--ace-accent);
+  font-family: var(--ace-font-heading);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ace-enc-section summary:hover {
+  background: rgba(212, 175, 55, 0.06);
+}
+.ace-enc-section summary i {
+  font-size: 11px;
+  width: 14px;
+  text-align: center;
+}
+.ace-enc-section-body {
+  padding: 4px 10px 8px;
+  color: var(--ace-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ── Creature Cards ──────────────────────────────────────── */
+
+.ace-enc-creatures-section {
+  border-top: 1px solid rgba(212, 175, 55, 0.15);
+  padding: 6px 0;
+}
+.ace-enc-section-label {
+  padding: 4px 10px 4px;
+  color: var(--ace-accent);
+  font-family: var(--ace-font-heading);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ace-enc-section-label i { font-size: 11px; }
+
+.ace-enc-creature-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.08);
+  transition: opacity 0.3s, background 0.15s;
+  cursor: grab;
+}
+.ace-enc-creature-row:hover {
+  background: rgba(212, 175, 55, 0.06);
+}
+.ace-enc-creature-row:active {
+  cursor: grabbing;
+}
+.ace-enc-creature-row.ace-enc-placed {
+  opacity: 0.35;
+  cursor: default;
+}
+.ace-enc-creature-row.ace-enc-placed .ace-enc-creature-name {
+  text-decoration: line-through;
+}
+.ace-enc-creature-row.ace-enc-dragging {
+  opacity: 0.5;
+  background: rgba(212, 175, 55, 0.1);
+}
+
+/* Not found in compendiums */
+.ace-enc-creature-row.ace-enc-not-found {
+  cursor: default;
+  border-left: 3px solid #e67e22;
+}
+.ace-enc-creature-warn {
+  display: block;
+  color: #e67e22;
+  font-size: 10px;
+  font-style: italic;
+}
+
+/* Token image */
+.ace-enc-creature-img-wrap {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+}
+.ace-enc-creature-img {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  object-fit: cover;
+}
+
+/* Name & stats */
+.ace-enc-creature-info {
+  flex: 1;
+  min-width: 0;
+}
+.ace-enc-creature-name {
+  display: block;
+  color: #fff;
+  font-family: var(--ace-font-heading);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ace-enc-creature-stats {
+  display: block;
+  color: var(--ace-text-muted);
+  font-size: 10px;
+}
+
+/* Quantity badge */
+.ace-enc-quantity-badge {
+  flex-shrink: 0;
+  background: rgba(212, 175, 55, 0.15);
+  color: var(--ace-accent);
+  font-family: var(--ace-font-heading);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  min-width: 28px;
+  text-align: center;
+}
+.ace-enc-qty-done {
+  background: rgba(76, 175, 80, 0.15);
+  color: #4caf50;
+}
+
+/* Drag handle */
+.ace-enc-drag-handle {
+  flex-shrink: 0;
+  color: var(--ace-text-muted);
+  font-size: 12px;
+  opacity: 0.4;
+  cursor: grab;
+}
+.ace-enc-creature-row:hover .ace-enc-drag-handle {
+  opacity: 0.8;
+  color: var(--ace-accent);
+}
+
+/* ── Read-Aloud Section ──────────────────────────────────── */
+
+.ace-enc-read-aloud-section {
+  border-top: 1px solid rgba(212, 175, 55, 0.15);
+  padding: 6px 10px 8px;
+}
+.ace-enc-blockquote {
+  background: rgba(201, 168, 76, 0.06);
+  border-left: 3px solid var(--ace-accent);
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: 0 var(--ace-radius-sm) var(--ace-radius-sm) 0;
+  color: var(--ace-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ace-enc-read-aloud-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ace-enc-copy-btn,
+.ace-enc-narrate-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: var(--ace-radius-sm);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  background: rgba(212, 175, 55, 0.08);
+  color: var(--ace-accent);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: var(--ace-font-heading);
+}
+.ace-enc-copy-btn:hover,
+.ace-enc-narrate-btn:hover {
+  background: rgba(212, 175, 55, 0.18);
+  border-color: var(--ace-accent);
+  box-shadow: 0 0 6px rgba(212, 175, 55, 0.25);
+}
+.ace-enc-narrate-btn {
+  background: rgba(212, 175, 55, 0.12);
+  font-weight: 600;
+}
+.ace-enc-narrate-btn:hover {
+  background: rgba(212, 175, 55, 0.25);
+}
+
+/* ── Scaling Buttons ─────────────────────────────────────── */
+
+.ace-enc-scaling {
+  border-top: 1px solid rgba(212, 175, 55, 0.15);
+  padding: 8px 10px;
+}
+.ace-enc-scale-bar {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+.ace-enc-scale-up,
+.ace-enc-scale-down {
+  padding: 4px 14px;
+  font-size: 11px;
+  border-radius: var(--ace-radius-sm);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  background: rgba(212, 175, 55, 0.08);
+  color: var(--ace-accent);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: var(--ace-font-heading);
+}
+.ace-enc-scale-up:hover {
+  background: rgba(220, 50, 50, 0.15);
+  border-color: #dc3232;
+  color: #ff6666;
+}
+.ace-enc-scale-down:hover {
+  background: rgba(76, 175, 80, 0.15);
+  border-color: #4caf50;
+  color: #66bb6a;
+}
+.ace-enc-scaling-text {
+  font-size: 11px;
+  color: var(--ace-text-muted);
+  line-height: 1.4;
+}
+.ace-enc-scale-hint {
+  margin-top: 2px;
+}
+.ace-enc-scale-hint strong {
   color: var(--ace-text-secondary);
 }
 
@@ -1392,10 +1689,18 @@ li.ace-toolbar-btn:hover {
   box-shadow: 0 0 10px rgba(138, 91, 191, 0.4);
 }
 
-/* ── Universal Stop Audio Button ─────────────────────────── */
+/* ── TTS Controls — context-aware pause/resume/stop ─────── */
 /* Lives in the tab bar — always visible on every tab */
-.ace-btn-stop-audio {
+.ace-tts-controls {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+/* Idle state — small muted icon (same as old stop button) */
+.ace-btn-tts-main {
   padding: 4px 9px;
   background: transparent;
   border: 1px solid transparent;
@@ -1404,18 +1709,108 @@ li.ace-toolbar-btn:hover {
   font-family: inherit;
   font-size: 15px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.25s ease;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
+  justify-content: center;
 }
-
-.ace-btn-stop-audio:hover {
+.ace-btn-tts-main:hover {
   color: var(--ace-danger);
   border-color: var(--ace-danger);
   background: rgba(196, 59, 59, 0.12);
   box-shadow: 0 0 8px rgba(196, 59, 59, 0.25);
+}
+
+/* Playing state — BIG RED PULSING PAUSE (same size as mic) */
+.ace-btn-tts-main.ace-tts-playing {
+  background: rgba(220, 40, 40, 0.15) !important;
+  border: 2px solid rgba(220, 60, 60, 0.6) !important;
+  color: #ff3344 !important;
+  padding: 8px 14px !important;
+  font-size: 18px !important;
+  min-width: 42px;
+  min-height: 42px;
+  border-radius: 50% !important;
+  box-shadow: 0 0 12px rgba(255, 50, 60, 0.4);
+  animation: ace-tts-pulse 1.2s ease-in-out infinite;
+}
+.ace-btn-tts-main.ace-tts-playing:hover {
+  background: rgba(220, 50, 50, 0.25) !important;
+  box-shadow: 0 0 20px rgba(255, 50, 60, 0.6) !important;
+  transform: scale(1.05);
+}
+
+@keyframes ace-tts-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 12px rgba(255, 50, 60, 0.4),
+      0 0 24px rgba(255, 50, 60, 0.2);
+  }
+  50% {
+    box-shadow:
+      0 0 20px rgba(255, 50, 60, 0.6),
+      0 0 40px rgba(255, 50, 60, 0.3);
+  }
+}
+
+/* Paused state — BIG GREEN RESUME */
+.ace-btn-tts-main.ace-tts-paused {
+  background: rgba(93, 184, 138, 0.15) !important;
+  border: 2px solid rgba(93, 184, 138, 0.6) !important;
+  color: #5db88a !important;
+  padding: 8px 14px !important;
+  font-size: 18px !important;
+  min-width: 42px;
+  min-height: 42px;
+  border-radius: 50% !important;
+  box-shadow: 0 0 10px rgba(93, 184, 138, 0.3);
+}
+.ace-btn-tts-main.ace-tts-paused:hover {
+  background: rgba(93, 184, 138, 0.25) !important;
+  box-shadow: 0 0 18px rgba(93, 184, 138, 0.5) !important;
+  transform: scale(1.05);
+}
+
+/* Stop button — small red circle, appears next to resume when paused */
+.ace-btn-tts-stop {
+  background: rgba(220, 40, 40, 0.1);
+  border: 1px solid rgba(220, 60, 60, 0.4);
+  color: #e04050;
+  padding: 6px 10px;
+  font-size: 14px;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ace-btn-tts-stop:hover {
+  background: rgba(220, 50, 50, 0.2);
+  border-color: #ff3344;
+  box-shadow: 0 0 10px rgba(255, 50, 60, 0.3);
+}
+
+/* ── Digest Pause/Resume Button ─────────────────────────── */
+.ace-digest-running {
+  background: rgba(255, 171, 0, 0.12) !important;
+  border-color: var(--ace-warning) !important;
+  color: var(--ace-warning) !important;
+}
+.ace-digest-running:hover {
+  background: rgba(255, 171, 0, 0.22) !important;
+  box-shadow: 0 0 8px rgba(255, 171, 0, 0.3);
+}
+.ace-digest-paused {
+  background: rgba(93, 184, 138, 0.12) !important;
+  border-color: #5db88a !important;
+  color: #5db88a !important;
+}
+.ace-digest-paused:hover {
+  background: rgba(93, 184, 138, 0.22) !important;
+  box-shadow: 0 0 8px rgba(93, 184, 138, 0.3);
 }
 
 /* ── Tech Headings — Orbitron for that high-end tech feel ── */
@@ -2283,17 +2678,19 @@ li.ace-toolbar-btn:hover {
 .ace-library-stats {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: 8px;
+  padding: 6px 10px;
   font-family: var(--ace-font-body);
-  font-size: 11px;
-  color: var(--ace-text-muted);
-  border-bottom: 1px solid rgba(201, 168, 76, 0.12);
+  font-size: 12.5px;
+  color: var(--ace-text-secondary);
+  border-bottom: 1px solid rgba(201, 168, 76, 0.15);
   flex-shrink: 0;
+  letter-spacing: 0.01em;
 }
 
 .ace-library-stats-sep {
-  color: rgba(201, 168, 76, 0.25);
+  color: rgba(201, 168, 76, 0.35);
+  font-size: 14px;
 }
 
 /* ── Document list ─────────────────────────────────────── */
@@ -2339,18 +2736,18 @@ li.ace-toolbar-btn:hover {
 /* ── Document card ─────────────────────────────────────── */
 .ace-library-card {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
   gap: 8px;
-  padding: 7px 8px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(201, 168, 76, 0.08);
-  border-radius: 6px;
+  padding: 12px 14px;
+  background: rgba(20, 20, 24, 0.6);
+  border: 1px solid var(--ace-border);
+  border-radius: 4px;
   transition: border-color 0.2s, background 0.2s;
 }
 
 .ace-library-card:hover {
-  border-color: rgba(201, 168, 76, 0.25);
-  background: rgba(201, 168, 76, 0.04);
+  border-color: var(--ace-border-light);
+  background: rgba(30, 30, 36, 0.6);
 }
 
 .ace-library-card.ace-lib-disabled {
@@ -2365,23 +2762,56 @@ li.ace-toolbar-btn:hover {
   border-color: rgba(255, 80, 80, 0.35);
 }
 
-/* Card icon */
+.ace-library-card.ace-lib-no-text {
+  border-color: rgba(255, 180, 50, 0.35);
+  opacity: 0.75;
+}
+
+.ace-library-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* Card icon / thumbnail */
 .ace-library-card-icon {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 64px;
+  height: 80px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
+  border-radius: 4px;
   background: rgba(201, 168, 76, 0.08);
-  color: var(--ace-gold);
-  font-size: 14px;
+  color: #d4af37;
+  font-size: 26px;
+  overflow: hidden;
+}
+
+.ace-library-card-icon img,
+.ace-library-card-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.ace-library-card-icon-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ace-lib-error .ace-library-card-icon {
   background: rgba(255, 80, 80, 0.1);
   color: #ff5050;
+}
+
+.ace-lib-no-text .ace-library-card-icon {
+  background: rgba(255, 180, 50, 0.1);
+  color: #ffb432;
 }
 
 /* Card info area */
@@ -2390,14 +2820,14 @@ li.ace-toolbar-btn:hover {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
-.ace-library-card-name {
-  font-family: var(--ace-font-body);
-  font-size: 12.5px;
+.ace-library-card-title {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 16px;
   font-weight: 600;
-  color: var(--ace-text-primary);
+  color: #c9a84c;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2405,7 +2835,7 @@ li.ace-toolbar-btn:hover {
   transition: color 0.15s;
 }
 
-.ace-library-card-name:hover {
+.ace-library-card-title:hover {
   color: var(--ace-gold);
 }
 
@@ -2413,7 +2843,28 @@ li.ace-toolbar-btn:hover {
   font-family: var(--ace-font-body);
   font-size: 11.5px;
   color: var(--ace-text-muted);
-  letter-spacing: 0.03em;
+  opacity: 0.6;
+}
+
+/* Publication year badge — clickable pill in the meta line */
+.ace-lib-year-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: rgba(212, 175, 55, 0.12);
+  color: #c9a84c;
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  vertical-align: middle;
+}
+.ace-lib-year-badge:hover {
+  background: rgba(212, 175, 55, 0.25);
+  color: var(--ace-gold);
+  border-color: rgba(212, 175, 55, 0.4);
 }
 
 .ace-library-card-status {
@@ -2429,6 +2880,12 @@ li.ace-toolbar-btn:hover {
 .ace-lib-error .ace-library-card-status {
   color: #ff5050;
   text-shadow: 0 0 6px rgba(255, 80, 80, 0.3);
+}
+
+.ace-lib-no-text .ace-library-card-status {
+  color: #ffb432;
+  font-size: 12.5px;
+  text-shadow: 0 0 6px rgba(255, 180, 50, 0.25);
 }
 
 /* Tags */
@@ -2451,12 +2908,13 @@ li.ace-toolbar-btn:hover {
   letter-spacing: 0.02em;
 }
 
-/* Card action buttons */
+/* Card action buttons — horizontal row below card content */
 .ace-library-card-actions {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  gap: 6px;
   flex-shrink: 0;
+  padding-top: 6px;
+  border-top: 1px solid rgba(42, 42, 46, 0.5);
 }
 
 .ace-lib-action {
@@ -2464,15 +2922,17 @@ li.ace-toolbar-btn:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 5px;
-  color: var(--ace-text-muted);
+  gap: 5px;
+  flex: 1;
+  height: 34px;
+  border-radius: 4px;
+  color: var(--ace-text-secondary);
   cursor: pointer;
   transition: color 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s;
-  font-size: 13px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12.5px;
+  background: rgba(201, 168, 76, 0.06);
+  border: 1px solid rgba(201, 168, 76, 0.2);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
@@ -2506,6 +2966,19 @@ li.ace-toolbar-btn:hover {
   cursor: not-allowed;
   box-shadow: none;
   border-color: rgba(255, 255, 255, 0.05);
+}
+/* Digest already exists — checkmark state */
+.ace-lib-action-digested {
+  color: #50c878;
+  border-color: rgba(80, 200, 120, 0.25);
+  background: rgba(80, 200, 120, 0.06);
+  cursor: default;
+}
+.ace-lib-action-digested:hover {
+  color: #66d990;
+  background: rgba(80, 200, 120, 0.12);
+  border-color: rgba(80, 200, 120, 0.35);
+  box-shadow: 0 0 6px rgba(80, 200, 120, 0.2);
 }
 
 /* ── AI Digest Section ──────────────────────────────────── */
@@ -2543,10 +3016,11 @@ li.ace-toolbar-btn:hover {
 }
 
 .ace-digest-hint {
-  font-size: 10px;
-  color: var(--ace-text-muted);
+  font-size: 11.5px;
+  color: var(--ace-text-secondary);
   margin-bottom: 8px;
-  line-height: 1.3;
+  line-height: 1.4;
+  font-family: var(--ace-font-body);
 }
 
 .ace-digest-list {
@@ -2601,8 +3075,16 @@ li.ace-toolbar-btn:hover {
 
 .ace-digest-card-actions {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   flex-shrink: 0;
+}
+
+.ace-digest-card-actions .ace-lib-action {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 14px;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -3068,6 +3550,168 @@ li.ace-toolbar-btn:hover {
 .ace-el-card.ace-el-linked .ace-el-name {
   color: var(--ace-accent, #d4af37);
 }
+
+/* ── Bio Button on Element Cards ────────────────────────── */
+
+.ace-el-btn-group {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 2;
+}
+
+.ace-el-btn-group .ace-el-link-btn {
+  position: static;
+}
+
+.ace-el-bio-btn {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--ace-text-muted, #888);
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s, background 0.2s, box-shadow 0.2s;
+  padding: 0;
+}
+
+.ace-el-card:hover .ace-el-bio-btn,
+.ace-inventory-item:hover .ace-el-bio-btn {
+  opacity: 1;
+}
+
+.ace-el-bio-btn:hover {
+  background: rgba(0, 0, 0, 0.8);
+  color: var(--ace-accent-secondary, #8a5bbf);
+  box-shadow: 0 0 4px rgba(138, 91, 191, 0.4);
+}
+
+/* ── Inventory Panel ──────────────────────────────────── */
+
+.ace-inventory-section {
+  border-top: 1px solid var(--ace-border, #2a2a2e);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.ace-inventory-section .ace-el-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ace-inventory-bio-all {
+  margin-left: auto;
+  font-size: 11px !important;
+  padding: 2px 8px !important;
+  background: rgba(138, 91, 191, 0.15) !important;
+  border: 1px solid rgba(138, 91, 191, 0.3) !important;
+  color: var(--ace-accent-secondary, #8a5bbf) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ace-inventory-bio-all:hover {
+  background: rgba(138, 91, 191, 0.3) !important;
+  box-shadow: 0 0 6px rgba(138, 91, 191, 0.3);
+}
+
+.ace-inventory-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.ace-inventory-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: var(--ace-radius-sm, 2px);
+  background: var(--ace-bg-secondary, #111114);
+  border: 1px solid transparent;
+  transition: border-color 0.2s, background 0.2s;
+  position: relative;
+}
+
+.ace-inventory-item:hover {
+  border-color: var(--ace-border-light, #3a3a40);
+  background: var(--ace-bg-tertiary, #1a1a1e);
+}
+
+.ace-inventory-item-img {
+  width: 24px;
+  height: 24px;
+  border-radius: 2px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--ace-border, #2a2a2e);
+}
+
+.ace-inventory-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.ace-inventory-item-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ace-text-primary, #e8e6e0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ace-inventory-item-meta {
+  font-size: 10px;
+  color: var(--ace-text-muted, #555550);
+  text-transform: capitalize;
+}
+
+/* Has-bio indicator — checkmark icon + subtle glow */
+.ace-item-has-bio {
+  border-color: rgba(0, 230, 118, 0.2);
+}
+
+.ace-item-has-bio .ace-el-bio-btn {
+  opacity: 0.6;
+  color: var(--ace-success, #00e676);
+}
+
+.ace-inventory-item .ace-el-bio-btn {
+  flex-shrink: 0;
+  position: static;
+  opacity: 0;
+}
+
+.ace-item-has-bio .ace-el-bio-btn,
+.ace-inventory-item:hover .ace-el-bio-btn {
+  opacity: 1;
+}
+
+/* ── Rarity Color Badges ─────────────────────────────── */
+.ace-rarity-common     { color: #888; }
+.ace-rarity-uncommon   { color: #00e676; }
+.ace-rarity-rare       { color: #448aff; }
+.ace-rarity-veryRare,
+.ace-rarity-very-rare  { color: #bb86fc; }
+.ace-rarity-legendary  { color: #ffab00; }
+.ace-rarity-artifact   { color: #ff1744; }
 
 /* ═══════════════════════════════════════════════════════════
    MINIMIZED BADGE MODE
@@ -4327,37 +4971,64 @@ li.ace-toolbar-btn:hover {
   box-sizing: border-box;
 }
 
-/* ── Earthquake SFX ────────────────────────────────────── */
+/* ── Earthquake SFX — Progressive shake ───────────────── */
+
+/* Phase 1: subtle tremor build-up (0–20%) */
+/* Phase 2: violent peak (20–75%) */
+/* Phase 3: settling aftershocks (75–100%) */
 @keyframes ace-earthquake-shake {
-  0%, 100% { transform: translate(0, 0); }
-  10%  { transform: translate(-6px, 3px); }
-  20%  { transform: translate(5px, -4px); }
-  30%  { transform: translate(-7px, 2px); }
-  40%  { transform: translate(4px, -3px); }
-  50%  { transform: translate(-3px, 5px); }
-  60%  { transform: translate(6px, -2px); }
-  70%  { transform: translate(-4px, 4px); }
-  80%  { transform: translate(3px, -1px); }
-  90%  { transform: translate(-2px, 1px); }
+  0%   { transform: translate(0, 0); }
+  /* — slow build — */
+  3%   { transform: translate(-1px, 0); }
+  6%   { transform: translate(1px, -1px); }
+  9%   { transform: translate(-1px, 1px); }
+  12%  { transform: translate(2px, -1px); }
+  15%  { transform: translate(-2px, 1px); }
+  18%  { transform: translate(3px, -2px); }
+  /* — peak violence — */
+  22%  { transform: translate(-7px, 4px); }
+  26%  { transform: translate(8px, -5px); }
+  30%  { transform: translate(-9px, 3px); }
+  34%  { transform: translate(6px, -6px); }
+  38%  { transform: translate(-8px, 5px); }
+  42%  { transform: translate(9px, -3px); }
+  46%  { transform: translate(-7px, 6px); }
+  50%  { transform: translate(8px, -4px); }
+  54%  { transform: translate(-6px, 5px); }
+  58%  { transform: translate(7px, -5px); }
+  62%  { transform: translate(-8px, 3px); }
+  66%  { transform: translate(6px, -4px); }
+  70%  { transform: translate(-5px, 4px); }
+  /* — settling — */
+  76%  { transform: translate(3px, -2px); }
+  82%  { transform: translate(-2px, 1px); }
+  88%  { transform: translate(1px, -1px); }
+  94%  { transform: translate(-1px, 0); }
+  100% { transform: translate(0, 0); }
 }
 
 .ace-earthquake-shake {
-  animation: ace-earthquake-shake 0.4s ease-in-out 6; /* 6 repeats ≈ 2.4s */
+  animation: ace-earthquake-shake 3.5s ease-in-out 1;  /* single progressive cycle */
 }
 
+/* Debris particles — rocks/dust with horizontal drift */
 .ace-debris-particle {
   position: fixed;
-  border-radius: 50%;
   z-index: 99998;
   pointer-events: none;
   opacity: 0;
-  animation: ace-debris-fall 2.8s ease-in forwards;
+  --debris-drift-x: 0px;
+  animation: ace-debris-fall ease-in forwards;
 }
 
 @keyframes ace-debris-fall {
-  0%   { transform: translateY(-20px) rotate(0deg); opacity: 0.85; }
-  15%  { opacity: 0.9; }
-  100% { transform: translateY(105vh) rotate(180deg); opacity: 0; }
+  0%   { transform: translate(0, -20px) rotate(0deg); opacity: 0; }
+  8%   { opacity: 0.7; }
+  20%  { opacity: 0.85; }
+  100% {
+    transform: translate(var(--debris-drift-x), 85vh) rotate(220deg);
+    opacity: 0;
+  }
 }
 
 /* ── Dead / defeated token styling (Select tab) ────────── */
@@ -4431,115 +5102,6 @@ li.ace-toolbar-btn:hover {
   border-color: var(--ace-accent);
   box-shadow: 0 0 12px rgba(212, 175, 55, 0.3);
   color: #f0d060;
-}
-
-/* ── Library card overhaul — larger cards ──────────────── */
-.ace-library-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  background: rgba(20, 20, 24, 0.6);
-  border: 1px solid var(--ace-border);
-  border-radius: 4px;
-  transition: border-color 0.2s, background 0.2s;
-}
-.ace-library-card:hover {
-  border-color: var(--ace-border-light);
-  background: rgba(30, 30, 36, 0.6);
-}
-
-.ace-library-card-top {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.ace-library-card-icon {
-  flex-shrink: 0;
-  width: 64px;
-  height: 80px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  background: rgba(201, 168, 76, 0.08);
-  color: #d4af37;
-  font-size: 26px;
-  overflow: hidden;
-}
-.ace-library-card-icon img,
-.ace-library-card-thumb {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 4px;
-}
-
-.ace-library-card-icon-fallback {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.ace-library-card-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.ace-library-card-title {
-  font-family: 'Rajdhani', sans-serif;
-  font-size: 16px;
-  font-weight: 600;
-  color: #c9a84c;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  transition: color 0.15s;
-}
-.ace-library-card-title:hover {
-  color: var(--ace-gold);
-}
-
-.ace-library-card-meta {
-  font-size: 11.5px;
-  color: var(--ace-text-muted);
-  opacity: 0.6;
-}
-
-.ace-library-card-actions {
-  display: flex;
-  gap: 6px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(42, 42, 46, 0.5);
-}
-
-.ace-library-card-actions button {
-  flex: 1;
-  padding: 5px 8px;
-  background: rgba(201, 168, 76, 0.06);
-  border: 1px solid rgba(201, 168, 76, 0.2);
-  border-radius: 3px;
-  color: var(--ace-text-secondary);
-  font-family: 'Rajdhani', sans-serif;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
-.ace-library-card-actions button:hover {
-  background: rgba(201, 168, 76, 0.15);
-  border-color: var(--ace-accent);
-  color: var(--ace-accent);
 }
 
 /* ── Consolidated roll system (Select tab) ─────────────── */

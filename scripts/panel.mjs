@@ -33,14 +33,18 @@ const TCC_CONDITION_LIST = [
 // ── Dialog compatibility helper ────────────────────────────────
 // Uses DialogV2 (Foundry v12+) when available, falls back to legacy Dialog.
 // Returns Promise<boolean> — true = confirmed, false = cancelled.
-async function _aceConfirmDialog(title, content, { rejectClose = true } = {}) {
+async function _aceConfirmDialog(title, content, {
+  rejectClose = true,
+  yesLabel = "Confirm",  yesIcon = "fas fa-check",
+  noLabel  = "Cancel",   noIcon  = "fas fa-times",
+} = {}) {
   // DialogV2 (v12 ApplicationV2-style)
   if (foundry.applications?.api?.DialogV2?.confirm) {
     return foundry.applications.api.DialogV2.confirm({
       window:      { title },
       content,
-      yes:         { label: "Save Summary & Close", icon: "fas fa-book-open" },
-      no:          { label: "Close Without Saving", icon: "fas fa-times"     },
+      yes:         { label: yesLabel, icon: yesIcon },
+      no:          { label: noLabel,  icon: noIcon  },
       rejectClose,
     });
   }
@@ -48,12 +52,22 @@ async function _aceConfirmDialog(title, content, { rejectClose = true } = {}) {
   return Dialog.confirm({ title, content, defaultYes: false });
 }
 
-// ── Close-intercept dialog: "Exit & Save" or "Minimize" ────────
-// Returns "save" | "minimize".  Throws (reject) on X → caller cancels close.
-async function _aceCloseDialog(eventCount) {
+// ── Close-intercept dialog: "Exit & Save", "Exit Without Saving", or "Minimize" ──
+// Returns "save" | "exit" | "minimize".  Throws (reject) on X → caller cancels close.
+async function _aceCloseDialog(eventCount, eventLines = []) {
+  // Build scrollable event list
+  const listHtml = eventLines.length
+    ? `<div style="max-height:220px;overflow-y:auto;margin:8px 0 4px;padding:6px 8px;` +
+      `background:rgba(0,0,0,0.25);border:1px solid rgba(212,175,55,0.2);border-radius:4px;` +
+      `font-size:12px;line-height:1.6;color:#ccc;">` +
+      eventLines.map(l => `<div style="border-bottom:1px solid rgba(255,255,255,0.05);padding:2px 0;">${l}</div>`).join("") +
+      `</div>`
+    : "";
+
   const content =
-    `<p>There are <strong>${eventCount}</strong> unsaved events since your last session summary.</p>` +
-    `<p>What would you like to do?</p>`;
+    `<p><strong>${eventCount}</strong> events since your last session summary:</p>` +
+    listHtml +
+    `<p style="margin-top:8px;font-size:12px;color:#999;">Events stay in memory either way — saving creates an AI journal recap.</p>`;
 
   const DV2 = foundry.applications?.api?.DialogV2;
   if (DV2) {
@@ -62,8 +76,9 @@ async function _aceCloseDialog(eventCount) {
         window: { title: "Close ACE?" },
         content,
         buttons: [
-          { action: "save",     label: "Exit & Save Session", icon: "fas fa-book-open",       default: true, callback: () => resolve("save") },
-          { action: "minimize", label: "Minimize ACE",        icon: "fas fa-window-minimize",                callback: () => resolve("minimize") }
+          { action: "save",     label: "Exit & Save Session",    icon: "fas fa-book-open",       default: true, callback: () => resolve("save") },
+          { action: "exit",     label: "Exit Without Saving",    icon: "fas fa-door-open",                      callback: () => resolve("exit") },
+          { action: "minimize", label: "Minimize ACE",           icon: "fas fa-window-minimize",                callback: () => resolve("minimize") }
         ],
         close: () => reject()
       });
@@ -76,8 +91,9 @@ async function _aceCloseDialog(eventCount) {
       title: "Close ACE?",
       content,
       buttons: {
-        save:     { icon: '<i class="fas fa-book-open"></i>',       label: "Exit & Save Session", callback: () => resolve("save") },
-        minimize: { icon: '<i class="fas fa-window-minimize"></i>', label: "Minimize ACE",        callback: () => resolve("minimize") }
+        save:     { icon: '<i class="fas fa-book-open"></i>',       label: "Exit & Save Session",  callback: () => resolve("save") },
+        exit:     { icon: '<i class="fas fa-door-open"></i>',       label: "Exit Without Saving",  callback: () => resolve("exit") },
+        minimize: { icon: '<i class="fas fa-window-minimize"></i>', label: "Minimize ACE",         callback: () => resolve("minimize") }
       },
       default: "save",
       close: () => reject()
@@ -121,12 +137,21 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     // ── TTS ────────────────────────────────────────────────
     this._ttsUtterance       = null;
     this._ttsAudio           = null;
+    this._ttsPlaying         = false;
+    this._ttsPaused          = false;
     this._voicesReady        = false;
     this._browserTtsWarned   = false;
     // Kick-start browser voice loading (Chrome loads them async)
     this._ensureVoicesLoaded().catch(() => {});
+    // ── Crit/Fumble ─────────────────────────────────────────
+    this._lastCfHtml         = "";  // preserved across re-renders (popout/back)
+    this._lastCfClass        = "";  // "ace-cf-crit" or "ace-cf-fumble"
     // ── Encounter ──────────────────────────────────────────
     this._lastEncounterText  = "";
+    this._lastEncounterHtml  = "";  // preserved across re-renders (popout/back)
+    this._encounterData      = null; // parsed structured encounter (interactive mode)
+    this._compendiumIndexCache = new Map(); // packId → { index, time }
+    this._compendiumCacheTTL = 300_000; // 5 minutes
     // ── Splash screen ─────────────────────────────────────
     this._showingSplash      = true;  // cinematic title card on first open
     this._splashTimer        = null;  // auto-dismiss timeout handle
@@ -196,9 +221,15 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       rollEncounter:       AcePanel._onRollEncounter,
       copyEncounterResult: AcePanel._onCopyEncounterResult,
       sendSubtleRoll:      AcePanel._onSendSubtleRoll,
+      encounterScaleUp:    AcePanel._onEncounterScaleUp,
+      encounterScaleDown:  AcePanel._onEncounterScaleDown,
+      narrateEncounter:    AcePanel._onNarrateEncounter,
       // ── Shared (always visible) ────────────────────────
       switchTab:           AcePanel._onSwitchTab,
       stopAudio:           AcePanel._onStopAudio,
+      ttsToggle:           AcePanel._onTtsToggle,
+      ttsStop:             AcePanel._onTtsStop,
+      digestPause:         AcePanel._onDigestPause,
       endSession:          AcePanel._onEndSession,
       saveNote:            AcePanel._onSaveNote,
       // ── Splash screen ──────────────────────────────────
@@ -217,6 +248,9 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       toggleElement:       AcePanel._onToggleElement,
       clearSelection:      AcePanel._onClearSelection,
       toggleLink:          AcePanel._onToggleLink,
+      generateBio:         AcePanel._onGenerateBio,
+      generateItemBio:     AcePanel._onGenerateItemBio,
+      generateAllItemBios: AcePanel._onGenerateAllItemBios,
       // ── Tactical Command Center ────────────────────────
       tccToggleSection:    AcePanel._onTccToggleSection,
       tccGroupRoll:        AcePanel._onTccGroupRoll,
@@ -225,9 +259,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       tccInitJump:         AcePanel._onTccInitJump,
       tccInitMoveUp:       AcePanel._onTccInitMoveUp,
       tccInitMoveDown:     AcePanel._onTccInitMoveDown,
-      // ── Crit / Fumble ───────────────────────────────────
-      rollCrit:            AcePanel._onRollCrit,
-      rollFumble:          AcePanel._onRollFumble,
+      // ── Crit / Fumble (auto-detected, copy only) ────────
       copyCritFumble:      AcePanel._onCopyCritFumble,
       // ── Memory Management ──────────────────────────────
       memoryManagement:    AcePanel._onMemoryManagement,
@@ -240,6 +272,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       libUploadClick:      AcePanel._onLibUploadClick,
       libToggleDoc:        AcePanel._onLibToggleDoc,
       libEditName:         AcePanel._onLibEditName,
+      libEditYear:         AcePanel._onLibEditYear,
       libEditTags:         AcePanel._onLibEditTags,
       libDeleteDoc:        AcePanel._onLibDeleteDoc,
       libGenerateDigest:   AcePanel._onLibGenerateDigest,
@@ -346,11 +379,19 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
                 data-action="switchTab" data-tab="library">
           <i class="fas fa-book-open"></i> Library
         </button>
-        <!-- Universal stop button — always visible on every tab -->
-        <button class="ace-btn ace-btn-stop-audio" data-action="stopAudio"
-                title="Stop all audio — halts narration TTS and thunder sound">
-          <i class="fas fa-stop-circle"></i>
-        </button>
+        <!-- TTS Controls — context-aware pause/resume/stop, always visible -->
+        <div class="ace-tts-controls" id="ace-tts-controls">
+          ${this._ttsPlaying
+            ? `<button class="ace-btn ace-btn-tts-main ace-tts-playing" data-action="ttsToggle"
+                       title="Pause narration"><i class="fas fa-pause"></i></button>`
+            : this._ttsPaused
+              ? `<button class="ace-btn ace-btn-tts-main ace-tts-paused" data-action="ttsToggle"
+                         title="Resume narration"><i class="fas fa-play"></i></button>
+                 <button class="ace-btn ace-btn-tts-stop" data-action="ttsStop"
+                         title="Stop narration"><i class="fas fa-stop"></i></button>`
+              : `<button class="ace-btn ace-btn-tts-main" data-action="stopAudio"
+                         title="Stop all audio"><i class="fas fa-volume-mute"></i></button>`}
+        </div>
       </nav>
 
       <!-- ── Survival Tracker — always visible ────────────── -->
@@ -499,25 +540,14 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
             <i class="fas fa-copy"></i>
           </button>
         </div>
-        <!-- ── Crit / Fumble Tables ── -->
-        <div class="ace-cf-bar">
-          <span class="ace-cf-label">Roll:</span>
-          <button class="ace-btn ace-btn-crit" data-action="rollCrit"
-                  title="Draw a random Critical Hit result (nat 20)">
-            🎯 Crit
-          </button>
-          <button class="ace-btn ace-btn-fumble" data-action="rollFumble"
-                  title="Draw a random Fumble result (nat 1)">
-            💥 Fumble
-          </button>
-        </div>
-        <div class="ace-cf-result" id="ace-cf-result" style="display:none"></div>
+        <!-- Crit/fumble results appear here via auto-detection (no manual buttons) -->
+        <div class="ace-cf-result ${this._lastCfClass}" id="ace-cf-result"${this._lastCfHtml ? "" : ' style="display:none"'}>${this._lastCfHtml}</div>
 
         <div class="ace-encounter-result" id="ace-encounter">
-          <p class="ace-placeholder">
+          ${this._lastEncounterHtml || `<p class="ace-placeholder">
             <strong>Generate</strong> — builds a complete, ready-to-run encounter from scratch.<br><br>
             <strong>Random Roll</strong> — secretly rolls based on current terrain. Clear, Signs of Danger, or full encounter.
-          </p>
+          </p>`}
         </div>
 
         <!-- Prompt moved to bottom for consistency -->
@@ -709,8 +739,71 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
             : `<p class="ace-el-empty">No items placed in current scene</p>`}
         </section>
 
+        ${this._buildInventoryPanel()}
+
         ${this._buildTccBar()}
 
+      </div>
+    `;
+  }
+
+  // ── Inventory Panel — shows selected token's items for bio generation ──
+
+  _buildInventoryPanel() {
+    // Only show when exactly one NPC/creature token is selected
+    const selected = this._resolveSelectedActors();
+    if (selected.length !== 1) return "";
+
+    const { actor } = selected[0];
+    if (!actor || actor.hasPlayerOwner) return "";
+
+    // Get all non-natural items
+    const items = [...(actor.items ?? [])]
+      .filter(i => ["weapon", "equipment", "loot", "consumable", "tool", "armor"].includes(i.type))
+      .filter(i => !AcePanel._isNaturalWeapon(i))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (!items.length) return "";
+
+    return `
+      <section class="ace-el-section ace-inventory-section">
+        <h4 class="ace-el-section-header">
+          <i class="fas fa-box-open"></i> ${actor.name}'s Inventory
+          <span class="ace-el-count">${items.length}</span>
+          <button class="ace-btn ace-btn-sm ace-inventory-bio-all"
+                  data-action="generateAllItemBios"
+                  data-actor-id="${actor.id}"
+                  title="Generate bios for all items without descriptions">
+            <i class="fas fa-magic"></i> Bio All
+          </button>
+        </h4>
+        <div class="ace-inventory-grid">
+          ${items.map(item => this._buildItemCard(item, actor)).join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  _buildItemCard(item, actor) {
+    const desc = (item.system?.description?.value || "").replace(/<[^>]+>/g, "").trim();
+    const hasDesc = desc.length > 20;
+    const rarity = item.system?.rarity || "common";
+
+    return `
+      <div class="ace-inventory-item ${hasDesc ? "ace-item-has-bio" : ""}" title="${item.name} (${rarity})">
+        <img class="ace-inventory-item-img" src="${item.img}" alt="" loading="lazy"
+             onerror="this.src='icons/svg/item-bag.svg'" />
+        <div class="ace-inventory-item-info">
+          <span class="ace-inventory-item-name">${item.name}</span>
+          <span class="ace-inventory-item-meta">${item.type} · <span class="ace-rarity-${rarity}">${rarity}</span></span>
+        </div>
+        <button class="ace-el-bio-btn"
+                data-action="generateItemBio"
+                data-actor-id="${actor.id}"
+                data-item-id="${item.id}"
+                title="${hasDesc ? "Regenerate" : "Generate"} item bio">
+          <i class="fas ${hasDesc ? "fa-check-circle" : "fa-feather-alt"}"></i>
+        </button>
       </div>
     `;
   }
@@ -736,14 +829,24 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
           <div class="ace-el-check"><i class="fas fa-check"></i></div>
         </div>
         <span class="ace-el-name">${el.name}</span>
-        ${el.type === "npc" && el.actorId ? `
-          <button class="ace-el-link-btn ${isLinked ? "ace-el-link-active" : ""}"
-                  data-action="toggleLink"
-                  data-actor-id="${el.actorId}"
-                  title="${isLinked ? "Unlink — stop tracking this NPC" : "Link — ACE will remember this NPC across scenes"}">
-            <i class="fas ${isLinked ? "fa-link" : "fa-unlink"}"></i>
-          </button>
-        ` : ""}
+        <div class="ace-el-btn-group">
+          ${el.type === "npc" && el.actorId ? `
+            <button class="ace-el-link-btn ${isLinked ? "ace-el-link-active" : ""}"
+                    data-action="toggleLink"
+                    data-actor-id="${el.actorId}"
+                    title="${isLinked ? "Unlink — stop tracking this NPC" : "Link — ACE will remember this NPC across scenes"}">
+              <i class="fas ${isLinked ? "fa-link" : "fa-unlink"}"></i>
+            </button>
+          ` : ""}
+          ${(el.type === "npc" || el.type === "item") && el.actorId ? `
+            <button class="ace-el-bio-btn"
+                    data-action="generateBio"
+                    data-actor-id="${el.actorId}"
+                    title="Generate AI biography">
+              <i class="fas fa-feather-alt"></i>
+            </button>
+          ` : ""}
+        </div>
       </div>
     `;
   }
@@ -937,6 +1040,269 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this.refreshSelectPanel();
   }
 
+  // ── Bio Generation — Tokens & Items ──────────────────────
+
+  /**
+   * Generate an AI biography for an NPC or creature token.
+   */
+  static async _onGenerateBio(event, target) {
+    event.stopPropagation();
+    const actorId = target.closest("[data-actor-id]")?.dataset.actorId;
+    if (!actorId) return;
+
+    const actor = game.actors?.get(actorId);
+    if (!actor) return;
+
+    // Check for existing bio (ignore ACE story notes section)
+    const existingBio = (actor.system?.details?.biography?.value ?? "")
+      .replace(/<!-- ACE-STORY-NOTES -->[\s\S]*<!-- \/ACE-STORY-NOTES -->/, "")
+      .replace(/<[^>]+>/g, "").trim();
+
+    if (existingBio.length > 30) {
+      const overwrite = await foundry.applications.api.DialogV2.confirm({
+        window: { title: "Existing Biography" },
+        content: `<p><strong>${actor.name}</strong> already has a biography (${existingBio.length} characters).</p><p>Overwrite it with an AI-generated one?</p>`,
+        yes: { label: "Overwrite", icon: "fas fa-feather-alt" },
+        no:  { label: "Cancel", icon: "fas fa-times" },
+      });
+      if (!overwrite) return;
+    }
+
+    // Disable the button and show loading state
+    const btn = target.closest(".ace-el-bio-btn") ?? target;
+    const origIcon = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    btn.disabled = true;
+
+    try {
+      const bio = await AcePanel._generateCreatureBio(actor);
+      if (!bio) {
+        ui.notifications?.warn("ACE: Bio generation returned empty — check your AI provider.");
+        return;
+      }
+
+      // Preserve existing ACE story notes if present
+      const currentBio = actor.system?.details?.biography?.value ?? "";
+      const storyNotesMatch = currentBio.match(/(<!-- ACE-STORY-NOTES -->[\s\S]*<!-- \/ACE-STORY-NOTES -->)/);
+      const storyNotes = storyNotesMatch ? `\n${storyNotesMatch[1]}` : "";
+
+      await actor.update({ "system.details.biography.value": bio + storyNotes });
+      ui.notifications?.info(`ACE: Biography generated for ${actor.name}.`);
+    } catch (err) {
+      console.error("ACE | Bio generation failed:", err);
+      ui.notifications?.error(`ACE: Failed to generate bio for ${actor.name}.`);
+    } finally {
+      btn.innerHTML = origIcon;
+      btn.disabled = false;
+    }
+  }
+
+  /**
+   * Build AI prompt and call provider for creature/NPC bio.
+   * @param {Actor} actor
+   * @returns {Promise<string>} HTML biography text
+   */
+  static async _generateCreatureBio(actor) {
+    const panel = game.modules.get("ace-engine")?.api?.getPanel?.();
+    if (!panel?.ai) throw new Error("AI provider not available");
+
+    const name     = actor.name;
+    const type     = actor.type ?? "npc";
+    const cr       = actor.system?.details?.cr ?? "?";
+    const hp       = actor.system?.attributes?.hp?.max ?? "?";
+    const ac       = actor.system?.attributes?.ac?.value ?? "?";
+    const scene    = canvas?.scene?.name ?? "Unknown";
+    const race     = actor.system?.details?.race?.name ?? actor.system?.details?.race ?? "";
+    const actorType = actor.system?.details?.type?.value ?? "";
+
+    // Gather abilities
+    const abilities = actor.system?.abilities ?? {};
+    const abilStr = Object.entries(abilities)
+      .map(([k, v]) => `${k.toUpperCase()} ${v.value ?? "?"}`)
+      .join(", ");
+
+    // Gather notable features/traits
+    const features = [...(actor.items ?? [])]
+      .filter(i => i.type === "feat" || i.type === "feature")
+      .map(i => i.name)
+      .slice(0, 8)
+      .join(", ");
+
+    const prompt = `Generate a vivid, concise biography for this creature/NPC to be used in a tabletop RPG campaign.
+
+Name: ${name}
+Type: ${type}${actorType ? ` (${actorType})` : ""}${race ? ` | Race: ${race}` : ""}
+Challenge Rating: ${cr} | HP: ${hp} | AC: ${ac}
+Abilities: ${abilStr || "unknown"}
+${features ? `Notable Features: ${features}` : ""}
+Current Scene: ${scene}
+
+Write 2-4 paragraphs covering:
+- Physical appearance and distinguishing features
+- Personality or behavioral traits
+- A brief history or how they came to be in this place
+- Any notable quirks or secrets the GM might use in gameplay
+
+Match a dark fantasy / gothic horror tone. Format with HTML <p> tags only (no markdown).
+If this is a mundane creature (horse, dog, wolf, etc.), give it personality and suggest a name in bold at the start.
+Do NOT include the creature's stat block — just narrative flavor.`;
+
+    return panel.ai.chat(prompt, "", "", []);
+  }
+
+  /**
+   * Generate an AI bio for a single item in a token's inventory.
+   */
+  static async _onGenerateItemBio(event, target) {
+    event.stopPropagation();
+    const actorId = target.closest("[data-actor-id]")?.dataset.actorId;
+    const itemId  = target.closest("[data-item-id]")?.dataset.itemId;
+    if (!actorId || !itemId) return;
+
+    const actor = game.actors?.get(actorId);
+    const item  = actor?.items?.get(itemId);
+    if (!actor || !item) return;
+
+    // Check for existing description
+    const existingDesc = (item.system?.description?.value || "").replace(/<[^>]+>/g, "").trim();
+    if (existingDesc.length > 30) {
+      const overwrite = await foundry.applications.api.DialogV2.confirm({
+        window: { title: "Existing Description" },
+        content: `<p><strong>${item.name}</strong> already has a description (${existingDesc.length} characters).</p><p>Overwrite it with an AI-generated one?</p>`,
+        yes: { label: "Overwrite", icon: "fas fa-feather-alt" },
+        no:  { label: "Cancel", icon: "fas fa-times" },
+      });
+      if (!overwrite) return;
+    }
+
+    // Loading state
+    const btn = target.closest(".ace-el-bio-btn") ?? target;
+    const origIcon = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    btn.disabled = true;
+
+    try {
+      const bio = await AcePanel._generateItemBio(actor, item);
+      if (!bio) {
+        ui.notifications?.warn("ACE: Item bio generation returned empty.");
+        return;
+      }
+
+      await item.update({ "system.description.value": bio });
+      ui.notifications?.info(`ACE: Bio generated for ${item.name}.`);
+
+      // Update the button icon to show it now has a bio
+      btn.innerHTML = '<i class="fas fa-check-circle"></i>';
+      btn.closest(".ace-inventory-item")?.classList.add("ace-item-has-bio");
+    } catch (err) {
+      console.error("ACE | Item bio generation failed:", err);
+      ui.notifications?.error(`ACE: Failed to generate bio for ${item.name}.`);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  /**
+   * Build AI prompt for item bio generation.
+   * @param {Actor} actor - The owning actor
+   * @param {Item} item - The item to describe
+   * @returns {Promise<string>} HTML description
+   */
+  static async _generateItemBio(actor, item) {
+    const panel = game.modules.get("ace-engine")?.api?.getPanel?.();
+    if (!panel?.ai) throw new Error("AI provider not available");
+
+    const rarity = item.system?.rarity || "common";
+    const damage = item.system?.damage?.parts?.map(p => p.join(" ")).join(", ") || "";
+    const price  = item.system?.price?.value ? `${item.system.price.value} ${item.system.price.denomination || "gp"}` : "";
+    const weight = item.system?.weight?.value ?? item.system?.weight ?? "";
+    const props  = item.system?.properties
+      ? [...(item.system.properties instanceof Set ? item.system.properties : Object.keys(item.system.properties).filter(k => item.system.properties[k]))].join(", ")
+      : "";
+    const scene  = canvas?.scene?.name ?? "Unknown";
+
+    const prompt = `Generate a flavor description for this item in a tabletop RPG. Scale depth by rarity:
+- Common/mundane: 1-2 evocative sentences about its appearance and brief history
+- Uncommon: A short paragraph with origin and a notable feature
+- Rare: 2 paragraphs — who made it, its history, and what makes it special
+- Very Rare / Legendary: Full backstory — creation, previous owners, legends, quirks
+
+Item: ${item.name}
+Type: ${item.type} | Rarity: ${rarity}
+${damage ? `Damage: ${damage}` : ""}
+${props ? `Properties: ${props}` : ""}
+${price ? `Value: ${price}` : ""}
+${weight ? `Weight: ${weight} lbs` : ""}
+Owner: ${actor.name} (${actor.type})
+Scene: ${scene}
+
+Every item has a story. Even a rusted scimitar was once new — who carried it? How did it end up here?
+Format with HTML (<p> tags, use <em> for flavor text, <strong> for emphasis). No markdown.
+For Rare+ items, suggest a unique name in bold at the start — something evocative and memorable.
+Do NOT include game mechanics or stat blocks — just narrative flavor.`;
+
+    return panel.ai.chat(prompt, "", "", []);
+  }
+
+  /**
+   * Generate bios for ALL items on a selected actor that don't have descriptions yet.
+   */
+  static async _onGenerateAllItemBios(event, target) {
+    event.stopPropagation();
+    const actorId = target.closest("[data-actor-id]")?.dataset.actorId;
+    if (!actorId) return;
+
+    const actor = game.actors?.get(actorId);
+    if (!actor) return;
+
+    // Find items without substantial descriptions
+    const items = [...(actor.items ?? [])]
+      .filter(i => ["weapon", "equipment", "loot", "consumable", "tool", "armor"].includes(i.type))
+      .filter(i => !AcePanel._isNaturalWeapon(i))
+      .filter(i => {
+        const desc = (i.system?.description?.value || "").replace(/<[^>]+>/g, "").trim();
+        return desc.length <= 20;
+      });
+
+    if (!items.length) {
+      ui.notifications?.info(`ACE: All items on ${actor.name} already have descriptions.`);
+      return;
+    }
+
+    const proceed = await foundry.applications.api.DialogV2.confirm({
+      window: { title: "Generate All Item Bios" },
+      content: `<p>Generate AI bios for <strong>${items.length}</strong> items on <strong>${actor.name}</strong> that don't have descriptions?</p><p>This may take a moment.</p>`,
+      yes: { label: `Generate ${items.length} Bios`, icon: "fas fa-magic" },
+      no:  { label: "Cancel", icon: "fas fa-times" },
+    });
+    if (!proceed) return;
+
+    // Disable the Bio All button
+    const btn = target.closest(".ace-inventory-bio-all") ?? target;
+    const origContent = btn.innerHTML;
+    btn.disabled = true;
+
+    let generated = 0;
+    for (const item of items) {
+      btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${++generated}/${items.length}`;
+      try {
+        const bio = await AcePanel._generateItemBio(actor, item);
+        if (bio) {
+          await item.update({ "system.description.value": bio });
+        }
+      } catch (err) {
+        console.warn(`ACE | Failed to generate bio for ${item.name}:`, err);
+      }
+    }
+
+    btn.innerHTML = origContent;
+    btn.disabled = false;
+    ui.notifications?.info(`ACE: Generated bios for ${generated} items on ${actor.name}.`);
+
+    // Refresh inventory panel to show checkmarks
+    this.refreshSelectPanel();
+  }
+
   /** Get current selection for use by AI context / other panels */
   getSelection() {
     return {
@@ -948,11 +1314,14 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
 
   /** Refresh the Select panel when scene tokens/tiles change */
   refreshSelectPanel() {
-    if (!this.rendered || this._activeTab !== "elements") return;
+    if (!this.rendered) return;
+    this._selectPanelDirty = true;           // mark stale so tab-switch rebuilds it
+    if (this._activeTab !== "elements") return; // rebuild immediately only if visible
     const container = this.element.querySelector('[data-tab-content="elements"]');
     if (container) {
       container.innerHTML = this._buildSelectElementsPanel();
       this._wireSelectPanelEvents();
+      this._selectPanelDirty = false;
     }
   }
 
@@ -1013,7 +1382,6 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     return `
       <div class="ace-tcc-bar">
         <div class="ace-tcc-divider"></div>
-        ${this._buildTccQuickStats()}
         ${this._buildTccGroupRolls()}
         ${this._buildTccBulkActions()}
         ${inCombat ? this._buildTccInitiative() : ""}
@@ -1293,28 +1661,22 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     target.disabled = true;
     let rolled = 0;
 
-    // ── Subtle mode: use SubtleRolls system for blind checks ──
+    // ── Subtle mode: batch blind rolls → one consolidated GM card ──
     if (rollMode === "subtle") {
       if (!this.subtleRolls) {
         ui.notifications?.warn("ACE: Subtle Rolls not enabled. Check Module Settings.");
         target.disabled = false;
         return;
       }
-      for (const { actor, isPlayer } of actors) {
-        const ownerUser = isPlayer
-          ? game.users.find(u => !u.isGM && actor.testUserPermission(u, "OWNER"))
-          : null;
-        await this.subtleRolls.requestRoll({
-          targetUserId: ownerUser?.id ?? game.user.id,
-          actorId: actor.id,
-          skill: rollId,
-          dc,
-          flavor,
-        });
-        rolled++;
-      }
+      const results = await this.subtleRolls.batchRoll({
+        actors,
+        skill: rollId,
+        dc,
+        flavor,
+      });
       target.disabled = false;
-      ui.notifications?.info(`ACE: ${rolled} subtle roll${rolled !== 1 ? "s" : ""} sent.`);
+      const passCount = results.filter(r => r.passed).length;
+      ui.notifications?.info(`ACE: Subtle roll complete — ${passCount}/${results.length} passed (DC ${dc}).`);
       return;
     }
 
@@ -1729,6 +2091,11 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     if (this._activeTab === "elements") {
       this._wireSelectPanelEvents();
     }
+
+    // Re-wire encounter creature drag-drop after re-render (popout/back)
+    if (this._encounterData) {
+      this._wireEncounterDragDrop();
+    }
   }
 
   /**
@@ -1745,11 +2112,13 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       !this._isGeneratingSummary &&
       this.lkMemory.getEventsSinceLastSummary().length > 0
     ) {
-      const eventCount = this.lkMemory.getEventsSinceLastSummary().length;
+      const events     = this.lkMemory.getEventsSinceLastSummary();
+      const eventCount = events.length;
+      const eventLines = events.map(e => this.lkMemory.history.eventToText(e)).filter(Boolean);
 
       let choice;
       try {
-        choice = await _aceCloseDialog(eventCount);
+        choice = await _aceCloseDialog(eventCount, eventLines);
       } catch (_) {
         // User clicked X on dialog — changed their mind, don't close
         return;
@@ -1763,6 +2132,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         AcePanel._onMinimizeToBadge.call(this);
         return;
       }
+      // choice === "exit" → fall through to super.close() without saving
     }
 
     // Normal close (fire-and-forget guard prevents double-prompt)
@@ -1829,6 +2199,46 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   static _onStopAudio(event, target) {
     this._cancelTTS();   // stops ElevenLabs audio + browser TTS
     this.stopSfx();      // stops thunder audio + any browser speech synthesis
+  }
+
+  // ── TTS Pause / Resume / Stop ────────────────────────────
+
+  static _onTtsToggle(event, target) {
+    if (this._ttsPlaying) {
+      this._pauseTTS();
+    } else if (this._ttsPaused) {
+      this._resumeTTS();
+    }
+  }
+
+  static _onTtsStop(event, target) {
+    this._cancelTTS();
+    this.stopSfx();
+  }
+
+  // ── Digest Pause (library card button) ─────────────────────
+
+  static _onDigestPause(event, target) {
+    const docId = target.closest("[data-doc-id]")?.dataset.docId;
+    if (!docId || !this._digestEngine) return;
+    if (this._digestEngine._paused) {
+      this._digestEngine.resumeDigest();
+      this._updateLibraryCardStatus(docId, "🧠 Resuming digest…");
+    } else {
+      this._digestEngine.pauseDigest();
+      this._updateLibraryCardStatus(docId, "⏸ Digest paused — click to resume");
+    }
+    // Update button appearance
+    const btn = target.closest("button");
+    if (btn && this._digestEngine._paused) {
+      btn.innerHTML = `<i class="fas fa-play"></i>`;
+      btn.title = "Resume digest";
+      btn.classList.add("ace-digest-paused");
+    } else if (btn) {
+      btn.innerHTML = `<i class="fas fa-pause"></i>`;
+      btn.title = "Pause digest";
+      btn.classList.remove("ace-digest-paused");
+    }
   }
 
   // ── Session Memory Actions ──────────────────────────────────
@@ -1982,6 +2392,8 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       ".ace-narration-log",     // narration history
       ".ace-ideas-cards",       // idea cards
       ".ace-encounter-output",  // encounter analysis
+      ".ace-enc-interactive",   // interactive encounter (draggable creatures, buttons)
+      "[draggable='true']",     // any draggable element (creature cards etc.)
       ".ace-select-output",     // select panel output
       ".ace-response",          // any AI response block
       ".ace-cf-result",         // crit/fumble results
@@ -2182,16 +2594,6 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     } catch (_) { /* non-critical */ }
 
     ui.notifications.info("💤 Rest logged — tracker reset.");
-  }
-
-  // ── Crit / Fumble Actions ────────────────────────────────────
-
-  static _onRollCrit(event, target) {
-    this._showCritFumble("crit");
-  }
-
-  static _onRollFumble(event, target) {
-    this._showCritFumble("fumble");
   }
 
   // ── Chat tab Actions ───────────────────────────────────────
@@ -2726,65 +3128,11 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     if (this._narrationListening) this._stopNarrationVoice();
 
     const input = this.element.querySelector("#ace-narration-input");
-    let   text  = input?.value?.trim();
+    const text  = input?.value?.trim();
     if (!text || this._isNarrationStreaming) return;
 
     input.value = "";
-
-    // ── Voice gender detection ──
-    // Parse [voice:female] / [voice:male] tags from text (AI can prepend these)
-    const voiceGender = this._resolveVoiceGender(text);
-    // Strip the tag from displayed text
-    text = text.replace(/^\[voice:(male|female)\]\s*/i, "");
-
-    // Sanitise for inline HTML
-    const safe = text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-
-    // Styled narration block in the Foundry chat log
-    const content =
-      `<div style="border-left:3px solid #c9a84c;padding:6px 12px;margin:0;` +
-      `background:rgba(201,168,76,0.07);border-radius:0 4px 4px 0;">` +
-      `<span style="display:block;font-size:10px;color:#c9a84c;text-transform:uppercase;` +
-      `letter-spacing:1px;margin-bottom:4px;font-weight:bold;">📜 Narration</span>` +
-      `<span style="font-style:italic;line-height:1.5;">${safe}</span></div>`;
-
-    await ChatMessage.create({
-      content,
-      speaker: { alias: "ACE" },
-      flags:   { "ace-engine": { isNarration: true } },
-    });
-
-    // Track in narration history
-    this._narrationHistory.push({ content: text, timestamp: Date.now() });
-    this._refreshNarrationUI();
-    this._scrollNarrationToBottom();
-
-    // Log to persistent memory (compact — not full text)
-    this.lkMemory?.logNarration(text);
-
-    // ── Narrative time: parse time cues from narration text ──
-    try {
-      const enableTime = game.settings.get("ace-engine", "enableNarrativeTime");
-      if (enableTime && this.lkMemory) {
-        const cues = AcePanel._parseNarrativeTimeCues(text);
-        if (cues) {
-          if (cues.advanceDays) {
-            this.lkMemory.advanceDay(cues.advanceDays, cues.timeOfDay ?? "morning");
-            console.log(`ace-engine | Narrative time: advanced ${cues.advanceDays} day(s) → Day ${this.lkMemory.getDayCounter()} (${cues.timeOfDay ?? "morning"})`);
-          } else if (cues.timeOfDay) {
-            this.lkMemory.setTimeOfDay(cues.timeOfDay);
-            console.log(`ace-engine | Narrative time: set to ${cues.timeOfDay}`);
-          }
-          this._updateDayCounterUI();
-        }
-      }
-    } catch (_) { /* non-critical */ }
-
-    // Always speak narration aloud — ElevenLabs if key set, browser TTS otherwise
-    this._speakText(text, voiceGender);
+    await this._narrateText(text);
   }
 
   // ── Session End ────────────────────────────────────────────
@@ -3028,10 +3376,10 @@ Style examples:
 Brief GM-facing summary — what's happening and how it starts.
 
 ### Enemies
-List each enemy with:
-- Name & type (CR or difficulty rating)
-- Key stats: HP, AC, main attack
-- Any special abilities worth flagging
+List ONLY real creatures from the D&D 5e Monster Manual, SRD, or published supplements.
+Format each enemy as: **Quantity × Creature Name** (e.g., "2 × Shadow", "1 × Wraith", "1 × Young Red Dragon")
+Do NOT invent creatures or make up stat blocks — use exact official creature names so they can be looked up in compendiums.
+One line per creature type. Keep it short.
 
 ### Terrain & Positioning
 Describe the battlefield, cover, hazards, and where enemies begin.
@@ -3061,6 +3409,20 @@ Appropriate loot, XP, and story rewards.
         container.innerHTML = `<div class="ace-encounter-analysis">${this._addReadAloudCopy(this._renderMarkdown(result))}</div>`;
       });
       this._lastEncounterText = result;
+
+      // ── Post-process: parse → search compendiums → render interactive ──
+      container.innerHTML = `<p class="ace-thinking"><i class="fas fa-spinner fa-spin"></i> Searching compendiums for creatures...</p>`;
+      const parsed = this._parseEncounterMarkdown(result);
+      if (parsed.creatures.length) {
+        await this._resolveEncounterCreatures(parsed);
+        this._encounterData = parsed;
+        container.innerHTML = this._renderInteractiveEncounter(parsed);
+        this._wireEncounterDragDrop();
+      } else {
+        // Fallback: no creatures parsed — show original markdown
+        container.innerHTML = `<div class="ace-encounter-analysis">${this._addReadAloudCopy(this._renderMarkdown(result))}</div>`;
+      }
+      this._lastEncounterHtml = container.innerHTML;
     } catch (err) {
       container.innerHTML = `<p class="ace-error"><i class="fas fa-exclamation-triangle"></i> ${err.message}</p>`;
     }
@@ -3086,6 +3448,7 @@ Appropriate loot, XP, and story rewards.
           <strong>All Clear</strong>
           <p>${sceneName || "The " + terrain} is quiet. No encounter.</p>
         </div>`;
+      this._lastEncounterHtml = container.innerHTML;
     } else if (result <= 8) {
       container.innerHTML = `
         <div class="ace-roll-result ace-roll-signs">
@@ -3097,7 +3460,16 @@ Appropriate loot, XP, and story rewards.
         `One atmospheric omen${locTag} (a ${terrain} environment) — DO NOT create a full encounter. Write 2-3 sentences the GM reads aloud: a sound, smell, track, or shadow that fits this specific place. Vivid, second-person, present tense.`
       );
     } else {
-      const severity = result >= 19 ? "dangerous and serious" : "challenging but manageable";
+      const isDeadly  = result >= 19;
+      const severity  = isDeadly ? "dangerous and serious" : "challenging but manageable";
+      const cssClass  = isDeadly ? "ace-roll-deadly" : "ace-roll-danger";
+      const labelText = isDeadly ? "Deadly Encounter!" : "Dangerous Encounter";
+      container.innerHTML = `
+        <div class="ace-roll-result ${cssClass}">
+          <div class="ace-roll-die">🎲 ${result}</div>
+          <strong>${labelText}</strong>
+          <p>Generating...</p>
+        </div>`;
       await this._generateEncounter(
         `A ${severity} random encounter${locTag}. This is a ${terrain} environment — theme the encounter specifically to **${sceneName || terrain}** and do not substitute a different setting.`
       );
@@ -3332,6 +3704,13 @@ Appropriate loot, XP, and story rewards.
 
   _stopVoice() {
     this._isListening = false;
+    // Null out handlers BEFORE .stop() to prevent late async onresult from
+    // repopulating the input after _sendMessage() has already cleared it.
+    if (this._recognition) {
+      this._recognition.onresult = null;
+      this._recognition.onerror  = null;
+      this._recognition.onend    = null;
+    }
     try { this._recognition?.stop(); } catch (_) { /* already stopped */ }
     this._recognition = null;
 
@@ -3512,8 +3891,23 @@ Appropriate loot, XP, and story rewards.
       const blobUrl = URL.createObjectURL(blob);
       this._ttsAudio = new Audio(blobUrl);
       this._ttsAudio.playbackRate = 1.1;  // ~10% faster narration
-      this._ttsAudio.onended = () => { URL.revokeObjectURL(blobUrl); this._ttsAudio = null; };
-      this._ttsAudio.onerror = () => { URL.revokeObjectURL(blobUrl); this._ttsAudio = null; };
+      this._ttsAudio.onended = () => {
+        URL.revokeObjectURL(blobUrl);
+        this._ttsAudio = null;
+        this._ttsPlaying = false;
+        this._ttsPaused = false;
+        this._updateTtsUI();
+      };
+      this._ttsAudio.onerror = () => {
+        URL.revokeObjectURL(blobUrl);
+        this._ttsAudio = null;
+        this._ttsPlaying = false;
+        this._ttsPaused = false;
+        this._updateTtsUI();
+      };
+      this._ttsPlaying = true;
+      this._ttsPaused = false;
+      this._updateTtsUI();
       await this._ttsAudio.play();
     } catch (err) {
       console.error(`${MODULE_ID} | ElevenLabs TTS failed:`, err);
@@ -3658,7 +4052,12 @@ Appropriate loot, XP, and story rewards.
         console.warn(`${MODULE_ID} | Browser TTS: no preferred voice found — using system default. ${voices.length} voices available: ${voices.map(v => v.name).join(", ")}`);
       }
 
-      this._ttsUtterance.onend  = () => { this._ttsUtterance = null; };
+      this._ttsUtterance.onend  = () => {
+        this._ttsUtterance = null;
+        this._ttsPlaying = false;
+        this._ttsPaused = false;
+        this._updateTtsUI();
+      };
       this._ttsUtterance.onerror = (e) => {
         const err = e.error ?? e;
         if (err === "interrupted" || err === "canceled") {
@@ -3667,7 +4066,13 @@ Appropriate loot, XP, and story rewards.
           console.error(`${MODULE_ID} | Browser TTS utterance error:`, err);
         }
         this._ttsUtterance = null;
+        this._ttsPlaying = false;
+        this._ttsPaused = false;
+        this._updateTtsUI();
       };
+      this._ttsPlaying = true;
+      this._ttsPaused = false;
+      this._updateTtsUI();
       window.speechSynthesis.speak(this._ttsUtterance);
       console.log(`${MODULE_ID} | Browser TTS: speaking "${text.slice(0, 60)}…"`);
     } catch (err) {
@@ -3683,6 +4088,57 @@ Appropriate loot, XP, and story rewards.
     }
     if (window.speechSynthesis?.speaking) window.speechSynthesis.cancel();
     this._ttsUtterance = null;
+    this._ttsPlaying = false;
+    this._ttsPaused = false;
+    this._updateTtsUI();
+  }
+
+  _pauseTTS() {
+    if (this._ttsAudio && !this._ttsAudio.paused) {
+      this._ttsAudio.pause();
+    }
+    if (window.speechSynthesis?.speaking && !window.speechSynthesis.paused) {
+      window.speechSynthesis.pause();
+    }
+    this._ttsPlaying = false;
+    this._ttsPaused = true;
+    this._updateTtsUI();
+    console.log(`${MODULE_ID} | TTS paused`);
+  }
+
+  _resumeTTS() {
+    if (this._ttsAudio?.paused) {
+      this._ttsAudio.play();
+    }
+    if (window.speechSynthesis?.paused) {
+      window.speechSynthesis.resume();
+    }
+    this._ttsPlaying = true;
+    this._ttsPaused = false;
+    this._updateTtsUI();
+    console.log(`${MODULE_ID} | TTS resumed`);
+  }
+
+  /** Targeted DOM update for TTS control buttons — no full re-render needed. */
+  _updateTtsUI() {
+    const container = this.element?.querySelector("#ace-tts-controls");
+    if (!container) return;
+
+    if (this._ttsPlaying) {
+      container.innerHTML =
+        `<button class="ace-btn ace-btn-tts-main ace-tts-playing" data-action="ttsToggle"
+                 title="Pause narration"><i class="fas fa-pause"></i></button>`;
+    } else if (this._ttsPaused) {
+      container.innerHTML =
+        `<button class="ace-btn ace-btn-tts-main ace-tts-paused" data-action="ttsToggle"
+                 title="Resume narration"><i class="fas fa-play"></i></button>
+         <button class="ace-btn ace-btn-tts-stop" data-action="ttsStop"
+                 title="Stop narration"><i class="fas fa-stop"></i></button>`;
+    } else {
+      container.innerHTML =
+        `<button class="ace-btn ace-btn-tts-main" data-action="stopAudio"
+                 title="Stop all audio"><i class="fas fa-volume-mute"></i></button>`;
+    }
   }
 
   // ── Context stub ────────────────────────────────────────────
@@ -4139,6 +4595,14 @@ Appropriate loot, XP, and story rewards.
       .replace(/"/g, "&quot;");
   }
 
+  /** Check if an item is a natural/monster weapon by type flag OR name pattern. */
+  static _isNaturalWeapon(item) {
+    const wepType = item.system?.type?.value || item.system?.weaponType || "";
+    if (wepType === "natural") return true;
+    const name = (item.name || "").toLowerCase();
+    return /^(bite|claw|claws|tail|tail attack|wing|wing attack|gore|slam|tentacle|tentacles|talon|talons|horns?|hooves?|sting|stomp|constrict|crush|ram|beak|pincers?|rock|multiattack|frightful presence|breath weapon)\b/.test(name);
+  }
+
   /**
    * Post-process rendered encounter HTML to add a Copy button to every
    * <blockquote> element (the "Read-Aloud Text" boxed passages).
@@ -4360,11 +4824,12 @@ Appropriate loot, XP, and story rewards.
     this._scrollNarrationToBottom();
 
     // 6. Mirror the result in the panel Encounter tab (if the panel is open)
+    const cfCls = isCrit ? "ace-cf-crit" : "ace-cf-fumble";
     if (this.rendered) {
       const container = this.element?.querySelector("#ace-cf-result");
       if (container) {
         container.style.display = "";
-        container.className     = `ace-cf-result ${isCrit ? "ace-cf-crit" : "ace-cf-fumble"}`;
+        container.className     = `ace-cf-result ${cfCls}`;
         container.innerHTML     =
           `<div class="ace-cf-header">` +
           `<span class="ace-cf-type-label">${isCrit ? "🎯 Critical Hit" : "💥 Fumble"}` +
@@ -4372,8 +4837,20 @@ Appropriate loot, XP, and story rewards.
           `<div class="ace-msg-actions"><button class="ace-icon-btn" data-action="copyCritFumble" title="Copy">` +
           `<i class="fas fa-copy"></i></button></div></div>` +
           mechHTML;
+        this._lastCfHtml  = container.innerHTML;
+        this._lastCfClass = cfCls;
         container.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
       }
+    } else {
+      // Panel not open — still cache so it shows when panel opens
+      this._lastCfHtml  =
+        `<div class="ace-cf-header">` +
+        `<span class="ace-cf-type-label">${isCrit ? "🎯 Critical Hit" : "💥 Fumble"}` +
+        `<span class="ace-cf-roll-num">d${table.length}: ${idx + 1}</span></span>` +
+        `<div class="ace-msg-actions"><button class="ace-icon-btn" data-action="copyCritFumble" title="Copy">` +
+        `<i class="fas fa-copy"></i></button></div></div>` +
+        mechHTML;
+      this._lastCfClass = cfCls;
     }
   }
 
@@ -4509,6 +4986,553 @@ Appropriate loot, XP, and story rewards.
     return opts[Math.floor(Math.random() * opts.length)];
   }
 
+  // ── Interactive Encounter System ─────────────────────────────
+
+  /**
+   * Parse raw AI-generated encounter markdown into a structured object.
+   * @param {string} raw — the full markdown text from the AI
+   * @returns {object} parsed encounter data
+   */
+  _parseEncounterMarkdown(raw) {
+    const data = {
+      title: "", hook: "", setup: "", creatures: [],
+      terrain: "", tactics: "", readAloud: "", treasure: "",
+      scalingHarder: "", scalingEasier: "", rawMarkdown: raw,
+    };
+
+    // Split by ### headers (level 3) — keep the header text as keys
+    const sections = {};
+    let currentKey = "_preamble";
+    for (const line of raw.split("\n")) {
+      const h3 = line.match(/^###\s+(.+)/);
+      const h2 = line.match(/^##\s+(.+)/);
+      if (h2) {
+        // Title line: "## Whispers of the Guardians"
+        data.title = h2[1].trim();
+        currentKey = "_title";
+      } else if (h3) {
+        currentKey = h3[1].trim().toLowerCase();
+      }
+      if (!sections[currentKey]) sections[currentKey] = [];
+      sections[currentKey].push(line);
+    }
+
+    // Hook — the italic line right after the title
+    const titleLines = sections["_title"] ?? [];
+    for (const l of titleLines) {
+      const m = l.match(/^\*(.+)\*$/);
+      if (m) { data.hook = m[1].trim(); break; }
+    }
+
+    // Setup
+    data.setup = this._extractSectionText(sections, "setup");
+
+    // Enemies — extract "Quantity × Name" patterns
+    const enemyText = (sections["enemies"] ?? []).join("\n");
+    // Pattern 1: "2 × Shadow" or "2 x Shadow" or "2x Shadow"
+    const creatureRe1 = /\*?\*?(\d+)\s*[×xX]\s*(.+?)\*?\*?\s*$/gm;
+    // Pattern 2: "- **2 × Shadow**" markdown list format
+    const creatureRe2 = /[-*]\s+\*?\*?(\d+)\s*[×xX]\s*(.+?)\*?\*?\s*$/gm;
+    // Pattern 3: fallback "- Name (CR X)" with no quantity → quantity = 1
+    const creatureRe3 = /[-*]\s+\*?\*?(.+?)\*?\*?\s*(?:\(CR\s*[\d/]+\))?\s*$/gm;
+
+    let matched = false;
+    let m;
+    while ((m = creatureRe1.exec(enemyText)) !== null) {
+      const name = m[2].replace(/\*+/g, "").replace(/\(.*?\)/, "").trim();
+      if (name) { data.creatures.push(this._makeCreatureEntry(name, parseInt(m[1]))); matched = true; }
+    }
+    if (!matched) {
+      while ((m = creatureRe2.exec(enemyText)) !== null) {
+        const name = m[2].replace(/\*+/g, "").replace(/\(.*?\)/, "").trim();
+        if (name) { data.creatures.push(this._makeCreatureEntry(name, parseInt(m[1]))); matched = true; }
+      }
+    }
+    if (!matched) {
+      // Fallback: try to extract creature names from list items
+      const listRe = /[-*]\s+\*?\*?(\d+)?\s*(.+?)(?:\*?\*?)?\s*$/gm;
+      while ((m = listRe.exec(enemyText)) !== null) {
+        let name = m[2].replace(/\*+/g, "").replace(/\(.*?\)/, "").trim();
+        // Skip lines that look like stat descriptions not creature names
+        if (/^(HP|AC|Type|Main|Special|Key)/i.test(name)) continue;
+        if (name.length < 2 || name.length > 60) continue;
+        const qty = m[1] ? parseInt(m[1]) : 1;
+        data.creatures.push(this._makeCreatureEntry(name, qty));
+      }
+    }
+
+    // Terrain & Positioning
+    data.terrain = this._extractSectionText(sections, "terrain & positioning") ||
+                   this._extractSectionText(sections, "terrain");
+
+    // Tactics
+    data.tactics = this._extractSectionText(sections, "tactics");
+
+    // Read-Aloud Text — extract blockquote content
+    const raLines = sections["read-aloud text"] ?? sections["read-aloud"] ?? [];
+    const bqLines = [];
+    for (const l of raLines) {
+      const bq = l.match(/^>\s*(.*)/);
+      if (bq) bqLines.push(bq[1].replace(/^\*|\*$/g, "").trim());
+    }
+    data.readAloud = bqLines.join(" ").trim();
+
+    // Treasure & Rewards
+    data.treasure = this._extractSectionText(sections, "treasure & rewards") ||
+                    this._extractSectionText(sections, "treasure");
+
+    // Scaling
+    const scaleText = this._extractSectionText(sections, "scaling");
+    const harderMatch = scaleText.match(/\*?\*?Too easy\??\*?\*?\s*(.+?)(?=\*?\*?Too hard|$)/si);
+    const easierMatch = scaleText.match(/\*?\*?Too hard\??\*?\*?\s*(.+)/si);
+    data.scalingHarder = harderMatch ? harderMatch[1].trim() : "";
+    data.scalingEasier = easierMatch ? easierMatch[1].trim() : "";
+
+    return data;
+  }
+
+  _makeCreatureEntry(name, quantity) {
+    return { name, quantity, found: null, uuid: null, img: null, cr: null, hp: null, ac: null, placed: 0 };
+  }
+
+  _extractSectionText(sections, key) {
+    const lines = sections[key];
+    if (!lines) return "";
+    return lines
+      .filter(l => !l.match(/^###\s/))  // skip the header itself
+      .join("\n")
+      .trim();
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────────── */
+  /*  Compendium Search                                                          */
+  /* ──────────────────────────────────────────────────────────────────────────── */
+
+  /**
+   * Search all Actor-type compendium packs for a creature by name.
+   * Returns the first match with basic stats.
+   * @param {string} name
+   * @returns {Promise<object|null>}
+   */
+  async _searchCompendiumCreature(name) {
+    const lowerName = name.toLowerCase().trim();
+    let bestMatch = null;
+
+    for (const pack of game.packs) {
+      if (pack.documentName !== "Actor") continue;
+
+      // Get or cache the index
+      let index;
+      const cached = this._compendiumIndexCache.get(pack.collection);
+      if (cached && Date.now() - cached.time < this._compendiumCacheTTL) {
+        index = cached.index;
+      } else {
+        try {
+          index = await pack.getIndex({
+            fields: [
+              "system.details.cr", "system.attributes.hp.max",
+              "system.attributes.ac.flat", "system.attributes.ac.value",
+              "prototypeToken.texture.src",
+            ],
+          });
+          this._compendiumIndexCache.set(pack.collection, { index, time: Date.now() });
+        } catch { continue; }
+      }
+
+      // Exact match (case-insensitive)
+      for (const entry of index) {
+        if (entry.name.toLowerCase() === lowerName) {
+          return this._buildCreatureResult(pack, entry);
+        }
+      }
+
+      // Partial match — store first hit as fallback
+      if (!bestMatch) {
+        for (const entry of index) {
+          if (entry.name.toLowerCase().includes(lowerName) ||
+              lowerName.includes(entry.name.toLowerCase())) {
+            bestMatch = this._buildCreatureResult(pack, entry);
+          }
+        }
+      }
+    }
+
+    // Also check world actors
+    const worldActor = game.actors?.find(a => a.name.toLowerCase() === lowerName);
+    if (worldActor) {
+      return {
+        uuid:  worldActor.uuid,
+        name:  worldActor.name,
+        img:   worldActor.prototypeToken?.texture?.src || worldActor.img,
+        cr:    worldActor.system?.details?.cr ?? null,
+        hp:    worldActor.system?.attributes?.hp?.max ?? null,
+        ac:    worldActor.system?.attributes?.ac?.value ?? worldActor.system?.attributes?.ac?.flat ?? null,
+      };
+    }
+
+    return bestMatch;  // may be null
+  }
+
+  _buildCreatureResult(pack, entry) {
+    const sys = entry.system ?? {};
+    // Foundry v13 UUID format: Compendium.{collection}.Actor.{id}
+    // Index entries may have .uuid already; otherwise build it manually
+    const uuid = entry.uuid ?? `Compendium.${pack.collection}.Actor.${entry._id}`;
+    return {
+      uuid,
+      name:  entry.name,
+      img:   entry.prototypeToken?.texture?.src || entry.img || "icons/svg/mystery-man.svg",
+      cr:    sys.details?.cr ?? null,
+      hp:    sys.attributes?.hp?.max ?? null,
+      ac:    sys.attributes?.ac?.value ?? sys.attributes?.ac?.flat ?? null,
+    };
+  }
+
+  /**
+   * Resolve all creatures in the encounter data against compendiums.
+   * @param {object} encounterData
+   */
+  async _resolveEncounterCreatures(encounterData) {
+    for (const creature of encounterData.creatures) {
+      const result = await this._searchCompendiumCreature(creature.name);
+      if (result) {
+        creature.found = true;
+        creature.uuid  = result.uuid;
+        creature.img   = result.img;
+        creature.cr    = result.cr;
+        creature.hp    = result.hp;
+        creature.ac    = result.ac;
+        creature.name  = result.name;  // use canonical name from compendium
+      } else {
+        creature.found = false;
+      }
+    }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────────── */
+  /*  Interactive Encounter Renderer                                             */
+  /* ──────────────────────────────────────────────────────────────────────────── */
+
+  /**
+   * Render the parsed encounter data as interactive HTML.
+   * @param {object} data — the structured encounter object
+   * @returns {string} HTML
+   */
+  _renderInteractiveEncounter(data) {
+    const parts = [];
+
+    // ── Title & Hook ──
+    parts.push(`<div class="ace-enc-header">
+      <h3 class="ace-enc-title"><i class="fas fa-swords"></i> ${this._escapeHtml(data.title || "Encounter")}</h3>
+      ${data.hook ? `<p class="ace-enc-hook"><em>${this._escapeHtml(data.hook)}</em></p>` : ""}
+    </div>`);
+
+    // ── Setup (collapsible) ──
+    if (data.setup) {
+      parts.push(`<details class="ace-enc-section" open>
+        <summary><i class="fas fa-scroll"></i> Setup</summary>
+        <div class="ace-enc-section-body">${this._renderMarkdown(data.setup)}</div>
+      </details>`);
+    }
+
+    // ── Creatures ──
+    parts.push(this._renderEncounterCreatures(data));
+
+    // ── Terrain & Tactics (collapsible, combined) ──
+    const terrainTactics = [data.terrain, data.tactics].filter(Boolean).join("\n\n");
+    if (terrainTactics) {
+      parts.push(`<details class="ace-enc-section">
+        <summary><i class="fas fa-map"></i> Terrain & Tactics</summary>
+        <div class="ace-enc-section-body">${this._renderMarkdown(terrainTactics)}</div>
+      </details>`);
+    }
+
+    // ── Read-Aloud ──
+    if (data.readAloud) {
+      const safeText = this._escapeHtml(data.readAloud);
+      const clipText = data.readAloud.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+      parts.push(`<div class="ace-enc-read-aloud-section">
+        <div class="ace-enc-section-label"><i class="fas fa-book-open-reader"></i> Read-Aloud</div>
+        <blockquote class="ace-enc-blockquote"><em>${safeText}</em></blockquote>
+        <div class="ace-enc-read-aloud-actions">
+          <button class="ace-btn ace-enc-copy-btn"
+                  onclick="navigator.clipboard.writeText('${clipText}').then(()=>{this.innerHTML='<i class=\\'fas fa-check\\'></i> Copied';setTimeout(()=>{this.innerHTML='<i class=\\'fas fa-copy\\'></i> Copy'},1500)})">
+            <i class="fas fa-copy"></i> Copy
+          </button>
+          <button class="ace-btn ace-enc-narrate-btn" data-action="narrateEncounter">
+            <i class="fas fa-bullhorn"></i> Narrate
+          </button>
+        </div>
+      </div>`);
+    }
+
+    // ── Treasure (collapsible) ──
+    if (data.treasure) {
+      parts.push(`<details class="ace-enc-section">
+        <summary><i class="fas fa-gem"></i> Treasure & Rewards</summary>
+        <div class="ace-enc-section-body">${this._renderMarkdown(data.treasure)}</div>
+      </details>`);
+    }
+
+    // ── Scaling Buttons ──
+    if (data.scalingHarder || data.scalingEasier) {
+      parts.push(`<div class="ace-enc-scaling">
+        <div class="ace-enc-scale-bar">
+          <button class="ace-btn ace-enc-scale-up" data-action="encounterScaleUp" title="${this._escapeHtml(data.scalingHarder)}">
+            <i class="fas fa-arrow-up"></i> Make Harder
+          </button>
+          <button class="ace-btn ace-enc-scale-down" data-action="encounterScaleDown" title="${this._escapeHtml(data.scalingEasier)}">
+            <i class="fas fa-arrow-down"></i> Make Easier
+          </button>
+        </div>
+        <div class="ace-enc-scaling-text">
+          ${data.scalingHarder ? `<div class="ace-enc-scale-hint"><strong>Harder:</strong> ${this._escapeHtml(data.scalingHarder)}</div>` : ""}
+          ${data.scalingEasier ? `<div class="ace-enc-scale-hint"><strong>Easier:</strong> ${this._escapeHtml(data.scalingEasier)}</div>` : ""}
+        </div>
+      </div>`);
+    }
+
+    return `<div class="ace-enc-interactive">${parts.join("")}</div>`;
+  }
+
+  /**
+   * Render just the creature cards section. Called separately for re-rendering after scaling/placement.
+   * @param {object} data — encounter data
+   * @returns {string} HTML
+   */
+  _renderEncounterCreatures(data) {
+    if (!data.creatures?.length) {
+      return `<div class="ace-enc-creatures-section">
+        <div class="ace-enc-section-label"><i class="fas fa-dragon"></i> Creatures</div>
+        <p class="ace-muted">No creatures parsed from the encounter.</p>
+      </div>`;
+    }
+
+    const rows = data.creatures.map((c, i) => {
+      const remaining = c.quantity - c.placed;
+      const allPlaced = remaining <= 0;
+      const imgSrc    = c.img || "icons/svg/mystery-man.svg";
+      const crLabel   = c.cr !== null ? `CR ${c.cr}` : "";
+      const statsLine = [crLabel, c.hp ? `HP ${c.hp}` : "", c.ac ? `AC ${c.ac}` : ""].filter(Boolean).join(" · ");
+
+      if (!c.found) {
+        return `<div class="ace-enc-creature-row ace-enc-not-found" data-creature-idx="${i}">
+          <div class="ace-enc-creature-img-wrap">
+            <img class="ace-enc-creature-img" src="icons/svg/hazard.svg" alt="?">
+          </div>
+          <div class="ace-enc-creature-info">
+            <span class="ace-enc-creature-name">${this._escapeHtml(c.name)}</span>
+            <span class="ace-enc-creature-warn">⚠ Not found in compendiums</span>
+          </div>
+          <span class="ace-enc-quantity-badge">×${c.quantity}</span>
+        </div>`;
+      }
+
+      return `<div class="ace-enc-creature-row${allPlaced ? " ace-enc-placed" : ""}"
+                   data-creature-idx="${i}" data-uuid="${c.uuid || ""}"
+                   draggable="${!allPlaced && c.uuid ? "true" : "false"}">
+        <div class="ace-enc-creature-img-wrap">
+          <img class="ace-enc-creature-img" src="${imgSrc}" alt="${this._escapeHtml(c.name)}">
+        </div>
+        <div class="ace-enc-creature-info">
+          <span class="ace-enc-creature-name">${this._escapeHtml(c.name)}</span>
+          <span class="ace-enc-creature-stats">${statsLine}</span>
+        </div>
+        <span class="ace-enc-quantity-badge${allPlaced ? " ace-enc-qty-done" : ""}">
+          ${allPlaced ? "✅" : `×${remaining}`}
+        </span>
+        ${!allPlaced ? '<i class="fas fa-grip-vertical ace-enc-drag-handle"></i>' : ""}
+      </div>`;
+    }).join("");
+
+    return `<div class="ace-enc-creatures-section" id="ace-enc-creatures">
+      <div class="ace-enc-section-label"><i class="fas fa-dragon"></i> Creatures</div>
+      ${rows}
+    </div>`;
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────────── */
+  /*  Drag-and-Drop + Placement Tracking                                         */
+  /* ──────────────────────────────────────────────────────────────────────────── */
+
+  /**
+   * Wire drag events on creature cards after rendering.
+   * Must be called after the interactive encounter HTML is injected into the DOM.
+   */
+  _wireEncounterDragDrop() {
+    const rows = this.element?.querySelectorAll(".ace-enc-creature-row[draggable='true']");
+    if (!rows?.length) return;
+
+    for (const row of rows) {
+      row.addEventListener("dragstart", (ev) => {
+        const uuid = row.dataset.uuid;
+        if (!uuid) return;
+        const dragData = { type: "Actor", uuid };
+        ev.dataTransfer.setData("text/plain", JSON.stringify(dragData));
+        ev.dataTransfer.effectAllowed = "copy";
+        row.classList.add("ace-enc-dragging");
+      });
+      row.addEventListener("dragend", () => {
+        row.classList.remove("ace-enc-dragging");
+      });
+    }
+  }
+
+  /**
+   * Called by the createToken hook. Checks if the created token matches an encounter creature.
+   * @param {TokenDocument} tokenDoc
+   */
+  _onTokenCreatedForEncounter(tokenDoc) {
+    if (!this._encounterData?.creatures?.length) return;
+    if (!game.user.isGM) return;
+
+    const actorName = tokenDoc.name?.toLowerCase() || tokenDoc.actor?.name?.toLowerCase();
+    if (!actorName) return;
+
+    for (const creature of this._encounterData.creatures) {
+      if (!creature.found) continue;
+      if (creature.placed >= creature.quantity) continue;
+      if (creature.name.toLowerCase() === actorName) {
+        creature.placed++;
+        // Re-render just the creature section
+        const container = this.element?.querySelector("#ace-enc-creatures");
+        if (container) {
+          container.outerHTML = this._renderEncounterCreatures(this._encounterData);
+          this._wireEncounterDragDrop();
+        }
+        break;
+      }
+    }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────────── */
+  /*  Narrate Text (reusable)                                                    */
+  /* ──────────────────────────────────────────────────────────────────────────── */
+
+  /**
+   * Send text directly as a narration — posts to chat, logs, speaks via TTS.
+   * Extracted from _narrateSendMessage() for reuse by encounter narrate button.
+   * @param {string} text — the narration text
+   */
+  async _narrateText(text) {
+    if (!text) return;
+
+    const voiceGender = this._resolveVoiceGender(text);
+    text = text.replace(/^\[voice:(male|female)\]\s*/i, "");
+
+    const safe = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    const content =
+      `<div style="border-left:3px solid #c9a84c;padding:6px 12px;margin:0;` +
+      `background:rgba(201,168,76,0.07);border-radius:0 4px 4px 0;">` +
+      `<span style="display:block;font-size:10px;color:#c9a84c;text-transform:uppercase;` +
+      `letter-spacing:1px;margin-bottom:4px;font-weight:bold;">📜 Narration</span>` +
+      `<span style="font-style:italic;line-height:1.5;">${safe}</span></div>`;
+
+    await ChatMessage.create({
+      content,
+      speaker: { alias: "ACE" },
+      flags:   { "ace-engine": { isNarration: true } },
+    });
+
+    this._narrationHistory.push({ content: text, timestamp: Date.now() });
+    this._refreshNarrationUI();
+    this._scrollNarrationToBottom();
+    this.lkMemory?.logNarration(text);
+
+    // Narrative time cues
+    try {
+      const enableTime = game.settings.get("ace-engine", "enableNarrativeTime");
+      if (enableTime && this.lkMemory) {
+        const cues = AcePanel._parseNarrativeTimeCues(text);
+        if (cues) {
+          if (cues.advanceDays) {
+            this.lkMemory.advanceDay(cues.advanceDays, cues.timeOfDay ?? "morning");
+          } else if (cues.timeOfDay) {
+            this.lkMemory.setTimeOfDay(cues.timeOfDay);
+          }
+          this._updateDayCounterUI();
+        }
+      }
+    } catch (_) { /* non-critical */ }
+
+    this._speakText(text, voiceGender);
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────────── */
+  /*  Encounter Action Handlers                                                  */
+  /* ──────────────────────────────────────────────────────────────────────────── */
+
+  /**
+   * 📢 Narrate the encounter read-aloud text to players.
+   */
+  static _onNarrateEncounter(event, target) {
+    if (!this._encounterData?.readAloud) {
+      ui.notifications?.warn("ACE: No read-aloud text in the current encounter.");
+      return;
+    }
+    this._narrateText(this._encounterData.readAloud);
+  }
+
+  /**
+   * ⬆ Make Harder — add one minion, boost boss HP.
+   */
+  static _onEncounterScaleUp(event, target) {
+    const data = this._encounterData;
+    if (!data?.creatures?.length) return;
+
+    // Find lowest-CR creature (the minions) and add one
+    const sorted = [...data.creatures].sort((a, b) => (a.cr ?? 0) - (b.cr ?? 0));
+    const minion = sorted[0];
+    minion.quantity++;
+
+    // Boost highest-CR creature HP by 20%
+    const boss = sorted[sorted.length - 1];
+    if (boss.hp) boss.hp = Math.ceil(boss.hp * 1.2);
+
+    // Re-render creature section
+    const container = this.element?.querySelector("#ace-enc-creatures");
+    if (container) {
+      container.outerHTML = this._renderEncounterCreatures(data);
+      this._wireEncounterDragDrop();
+    }
+
+    // Update cached HTML
+    this._lastEncounterHtml = this.element?.querySelector("#ace-encounter")?.innerHTML ?? "";
+    ui.notifications?.info(`ACE: Made harder — +1 ${minion.name}${boss.hp ? `, ${boss.name} HP → ${boss.hp}` : ""}`);
+  }
+
+  /**
+   * ⬇ Make Easier — remove one minion, reduce all HP.
+   */
+  static _onEncounterScaleDown(event, target) {
+    const data = this._encounterData;
+    if (!data?.creatures?.length) return;
+
+    // Find creature with highest quantity and reduce by 1 (min 1)
+    const sorted = [...data.creatures].sort((a, b) => b.quantity - a.quantity);
+    const target_ = sorted[0];
+    if (target_.quantity > 1) target_.quantity--;
+
+    // Reduce all HP by 20%
+    for (const c of data.creatures) {
+      if (c.hp) c.hp = Math.max(1, Math.floor(c.hp * 0.8));
+    }
+
+    // Re-render
+    const container = this.element?.querySelector("#ace-enc-creatures");
+    if (container) {
+      container.outerHTML = this._renderEncounterCreatures(data);
+      this._wireEncounterDragDrop();
+    }
+
+    this._lastEncounterHtml = this.element?.querySelector("#ace-encounter")?.innerHTML ?? "";
+    ui.notifications?.info(`ACE: Made easier — ${target_.name} ×${target_.quantity}, all HP reduced 20%`);
+  }
+
   // ── Crit / Fumble Table ─────────────────────────────────────
 
   _showCritFumble(type) {
@@ -4537,6 +5561,8 @@ Appropriate loot, XP, and story rewards.
       </div>
       ${result}
     `;
+    this._lastCfHtml  = container.innerHTML;
+    this._lastCfClass = cls;
     container.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
   }
 
@@ -4881,12 +5907,12 @@ MAGNITUDE: [local/regional/major/legendary]`;
 
         <!-- Stats bar -->
         <div class="ace-library-stats">
-          <span title="Total documents">\u{1F4C4} ${stats.totalDocuments} doc${stats.totalDocuments !== 1 ? "s" : ""}</span>
+          <span title="Total documents"><i class="fas fa-file-alt" style="opacity:0.5;margin-right:3px"></i>${stats.totalDocuments} doc${stats.totalDocuments !== 1 ? "s" : ""}</span>
           <span class="ace-library-stats-sep">\u00B7</span>
-          <span title="Active documents">\u2705 ${stats.enabledDocuments} active</span>
+          <span title="Active documents"><i class="fas fa-check-circle" style="opacity:0.5;margin-right:3px;color:#50c878"></i>${stats.enabledDocuments} active</span>
           <span class="ace-library-stats-sep">\u00B7</span>
-          <span title="Text chunks extracted">\u{1F9E9} ${stats.totalChunks} chunks</span>
-          ${stats.totalImages > 0 ? `<span class="ace-library-stats-sep">\u00B7</span><span title="Image references">\u{1F5BC} ${stats.totalImages} image${stats.totalImages !== 1 ? "s" : ""}</span>` : ""}
+          <span title="Text chunks extracted"><i class="fas fa-puzzle-piece" style="opacity:0.5;margin-right:3px"></i>${stats.totalChunks} chunks</span>
+          ${stats.totalImages > 0 ? `<span class="ace-library-stats-sep">\u00B7</span><span title="Image references"><i class="fas fa-image" style="opacity:0.5;margin-right:3px"></i>${stats.totalImages} image${stats.totalImages !== 1 ? "s" : ""}</span>` : ""}
         </div>
 
         <!-- Document list -->
@@ -4917,19 +5943,29 @@ MAGNITUDE: [local/regional/major/legendary]`;
     return `
       <div class="ace-digest-section">
         <div class="ace-digest-header">
-          🧠 AI Digests <span class="ace-digest-count">${allDigests.length}</span>
+          <i class="fas fa-brain"></i> Extracted Knowledge <span class="ace-digest-count">${allDigests.length}</span>
         </div>
-        <div class="ace-digest-hint">Structured knowledge — shared across all worlds. Toggle on/off per campaign.</div>
+        <div class="ace-digest-hint">AI-extracted NPCs, locations, items &amp; lore from your documents. Shared across all worlds \u2014 toggle per campaign.</div>
         <div class="ace-digest-list">
           ${allDigests.map(d => {
             const active = activeIds.has(d.id);
             const cats = d.categories ?? {};
             const totalEntries = Object.values(cats).reduce((n, v) => n + (v ?? 0), 0);
+            // Build a quick category breakdown
+            const catParts = [];
+            if (cats.npcs) catParts.push(`${cats.npcs} NPCs`);
+            if (cats.locations) catParts.push(`${cats.locations} locations`);
+            if (cats.items) catParts.push(`${cats.items} items`);
+            if (cats.encounters) catParts.push(`${cats.encounters} encounters`);
+            if (cats.plotHooks) catParts.push(`${cats.plotHooks} hooks`);
+            if (cats.factions) catParts.push(`${cats.factions} factions`);
+            if (cats.lore) catParts.push(`${cats.lore} lore`);
+            const catSummary = catParts.length ? catParts.join(", ") : `${totalEntries} entries`;
             return `
               <div class="ace-digest-card ${active ? "ace-digest-active" : ""}" data-digest-id="${d.id}">
                 <div class="ace-digest-card-info">
                   <div class="ace-digest-card-name">${d.displayName ?? d.sourceFile ?? "Unknown"}</div>
-                  <div class="ace-digest-card-meta">${totalEntries} entries · ${d.pageCount ?? "?"} pages</div>
+                  <div class="ace-digest-card-meta">${catSummary} \u00B7 ${d.pageCount ?? "?"} pages</div>
                 </div>
                 <div class="ace-digest-card-actions">
                   <button class="ace-lib-action" data-action="libToggleDigest" data-digest-id="${d.id}"
@@ -4950,19 +5986,26 @@ MAGNITUDE: [local/regional/major/legendary]`;
   _buildDocumentCard(doc) {
     const statusClass = doc.status === "ready" ? "ace-lib-ready"
                       : doc.status === "processing" ? "ace-lib-processing"
-                      : doc.status === "error" ? "ace-lib-error" : "";
+                      : doc.status === "error" ? "ace-lib-error"
+                      : doc.status === "no_text" ? "ace-lib-no-text" : "";
     const statusLabel = doc.status === "processing" ? "\u23F3 Processing\u2026"
                       : doc.status === "error" ? `\u274C ${doc.error || "Error"}`
-                      : doc.status === "uploading" ? "\u{1F4E4} Uploading\u2026" : "";
+                      : doc.status === "uploading" ? "\u{1F4E4} Uploading\u2026"
+                      : doc.status === "no_text" ? "\u26A0\uFE0F Scanned PDF \u2014 no extractable text" : "";
 
     const chunkCount = doc.chunks?.length ?? 0;
     const tags = doc.tags ?? [];
 
     // Compact meta line — just type + page count + size
     let meta = doc.type.toUpperCase();
-    if (doc.pageCount) meta += ` · ${doc.pageCount} pg`;
+    if (doc.pageCount) meta += ` \u00B7 ${doc.pageCount} pg`;
     const sizeKB = doc.fileSize ? Math.round(doc.fileSize / 1024) : 0;
-    if (sizeKB) meta += ` · ${sizeKB >= 1024 ? (sizeKB / 1024).toFixed(1) + " MB" : sizeKB + " KB"}`;
+    if (sizeKB) meta += ` \u00B7 ${sizeKB >= 1024 ? (sizeKB / 1024).toFixed(1) + " MB" : sizeKB + " KB"}`;
+
+    // Publication year badge (clickable to edit)
+    const pubYear = doc.publishedYear;
+    const yearHtml = `<span class="ace-lib-year-badge" data-action="libEditYear" data-doc-id="${doc.id}"
+                            title="Click to ${pubYear ? "edit" : "set"} publication year">${pubYear ? `\u00A9${pubYear}` : "Set year"}</span>`;
 
     // Icon / thumbnail: use cover image if available, else type-based icon
     const coverImg = doc.images?.[0]?.src ?? doc.coverImage ?? null;
@@ -4979,6 +6022,26 @@ MAGNITUDE: [local/regional/major/legendary]`;
            <div class="ace-library-card-icon-fallback" style="display:none"><i class="fas ${fallbackIcon}"></i></div>`
         : `<div class="ace-library-card-icon-fallback"><i class="fas ${fallbackIcon}"></i></div>`;
 
+    // Check if a digest already exists for this document
+    let digestBtnHtml = "";
+    if (doc.status === "ready" && chunkCount > 0) {
+      const allDigests = this._digestEngine?.getAllDigests() ?? [];
+      const hasDigest = allDigests.some(d => d.sourceFile === doc.fileName);
+      if (hasDigest) {
+        digestBtnHtml = `
+          <button class="ace-lib-action ace-lib-action-digested" data-action="libGenerateDigest" data-doc-id="${doc.id}"
+                  title="Digest exists \u2014 click to regenerate">
+            <i class="fas fa-check-circle"></i> Digested
+          </button>`;
+      } else {
+        digestBtnHtml = `
+          <button class="ace-lib-action ace-lib-action-digest" data-action="libGenerateDigest" data-doc-id="${doc.id}"
+                  title="Generate AI Digest \u2014 extracts NPCs, locations, items, etc.">
+            <i class="fas fa-brain"></i> Digest
+          </button>`;
+      }
+    }
+
     return `
       <div class="ace-library-card ${statusClass} ${!doc.enabled ? "ace-lib-disabled" : ""}" data-doc-id="${doc.id}">
         <div class="ace-library-card-top">
@@ -4988,24 +6051,20 @@ MAGNITUDE: [local/regional/major/legendary]`;
           <div class="ace-library-card-info">
             <div class="ace-library-card-title" data-action="libEditName" data-doc-id="${doc.id}"
                  title="Click to rename">${doc.displayName}</div>
-            <div class="ace-library-card-meta">${meta}</div>
+            <div class="ace-library-card-meta">${meta} ${yearHtml}</div>
             ${statusLabel ? `<div class="ace-library-card-status">${statusLabel}</div>` : ""}
             ${tags.length ? `<div class="ace-library-card-tags">${tags.map(t => `<span class="ace-library-tag">${t}</span>`).join("")}</div>` : ""}
           </div>
         </div>
         <div class="ace-library-card-actions">
-          ${doc.status === "ready" && chunkCount > 0 ? `
-          <button class="ace-lib-action ace-lib-action-digest" data-action="libGenerateDigest" data-doc-id="${doc.id}"
-                  title="Generate AI Digest — extracts NPCs, locations, items, etc.">
-            🧠 Digest
-          </button>` : ""}
+          ${digestBtnHtml}
           <button class="ace-lib-action" data-action="libToggleDoc" data-doc-id="${doc.id}"
                   title="${doc.enabled ? "Disable" : "Enable"} for AI context">
             <i class="fas ${doc.enabled ? "fa-eye" : "fa-eye-slash"}"></i> ${doc.enabled ? "On" : "Off"}
           </button>
           <button class="ace-lib-action ace-lib-action-delete" data-action="libDeleteDoc" data-doc-id="${doc.id}"
-                  title="Delete document">
-            <i class="fas fa-trash-alt"></i>
+                  title="Remove from library (cached on disk for re-import)">
+            <i class="fas fa-box-archive"></i> Remove
           </button>
         </div>
       </div>
@@ -5055,6 +6114,41 @@ MAGNITUDE: [local/regional/major/legendary]`;
     if (container) {
       container.innerHTML = this._buildLibraryPanel();
       this._wireLibraryEvents();
+    }
+    // One-shot: auto-detect publication years for existing docs that lack them
+    if (!this._yearMigrationDone) {
+      this._yearMigrationDone = true;
+      this._migratePublishedYears();
+    }
+  }
+
+  /**
+   * One-time migration: scan existing documents' chunks for copyright years.
+   * Only sets publishedYear on docs that have chunks but no year yet.
+   */
+  async _migratePublishedYears() {
+    const store = this._documentEngine?._mm?.documents;
+    if (!store) return;
+    const docs = store.getAll();
+    let updated = 0;
+    try {
+      const { detectPublishedYear } = await import("./document-engine.mjs");
+      for (const doc of docs) {
+        if (doc.publishedYear) continue;                     // already has a year
+        if (!doc.chunks?.length) continue;                   // no text to scan
+        const year = detectPublishedYear(doc.chunks);
+        if (year) {
+          store.setPublishedYear(doc.id, year);
+          updated++;
+        }
+      }
+      if (updated) {
+        this._saveDocuments();
+        this._refreshLibraryUI();
+        console.log(`${MODULE_ID} | Auto-detected publication year for ${updated} existing document(s).`);
+      }
+    } catch (e) {
+      console.warn(`${MODULE_ID} | Year migration failed (non-critical):`, e);
     }
   }
 
@@ -5117,6 +6211,29 @@ MAGNITUDE: [local/regional/major/legendary]`;
     }
   }
 
+  static async _onLibEditYear(event, target) {
+    const docId = target.closest("[data-doc-id]")?.dataset.docId;
+    const store = this._documentEngine?._mm?.documents;
+    if (!docId || !store) return;
+    const doc = store.getDocument(docId);
+    if (!doc) return;
+
+    const current = doc.publishedYear ?? "";
+    const input = prompt("Publication year (e.g. 2016):", current);
+    if (input === null) return;                       // cancelled
+    const year = parseInt(input.trim(), 10);
+    if (input.trim() === "") {
+      store.setPublishedYear(docId, null);            // clear it
+    } else if (!isNaN(year) && year >= 1970 && year <= new Date().getFullYear() + 1) {
+      store.setPublishedYear(docId, year);
+    } else {
+      ui.notifications.warn("ACE | Enter a valid year between 1970 and now.");
+      return;
+    }
+    this._saveDocuments();
+    this._refreshLibraryUI();
+  }
+
   static async _onLibEditTags(event, target) {
     const docId = target.closest("[data-doc-id]")?.dataset.docId;
     const store = this._documentEngine?._mm?.documents;
@@ -5142,16 +6259,24 @@ MAGNITUDE: [local/regional/major/legendary]`;
     if (!doc) return;
 
     const confirmed = await _aceConfirmDialog(
-      "Delete Document",
-      `<p>Are you sure you want to delete <strong>${doc.displayName}</strong>?</p>` +
-      `<p>This removes the document record and all extracted text chunks. The original file in the library/ folder is not deleted.</p>`
+      "Remove from Library",
+      `<p>Remove <strong>${doc.displayName}</strong> from the active library?</p>` +
+      `<p>The extracted data is safely cached on disk and can be re-imported later. Nothing is permanently deleted.</p>`,
+      { yesLabel: "Remove", yesIcon: "fas fa-box-archive", noLabel: "Cancel", noIcon: "fas fa-times" }
     ).catch(() => false);
     if (!confirmed) return;
+
+    // Ensure the document is cached before removing
+    if (this._documentEngine && doc.status === "ready") {
+      await this._documentEngine.saveDocumentCache(doc).catch(err =>
+        console.warn(`${MODULE_ID} | Pre-removal cache save failed:`, err)
+      );
+    }
 
     store.removeDocument(docId);
     this._saveDocuments();
     this._refreshLibraryUI();
-    ui.notifications.info(`ACE | Deleted document: ${doc.displayName}`);
+    ui.notifications.info(`ACE | Removed from library: ${doc.displayName} (cached on disk for re-import)`);
   }
 
   // ── Digest Action Handlers ─────────────────────────────────
@@ -5180,6 +6305,13 @@ MAGNITUDE: [local/regional/major/legendary]`;
     this._saveDocuments();
     this._refreshLibraryUI();
 
+    // Rebuild world graph after toggle change
+    if (this._digestEngine) {
+      this._digestEngine.rebuildWorldGraph(store.getActiveDigests()).catch(err =>
+        console.warn(`${MODULE_ID} | World graph rebuild after toggle failed:`, err)
+      );
+    }
+
     const meta = this._digestEngine?.getDigestMeta(digestId);
     const name = meta?.displayName ?? digestId;
     ui.notifications.info(`ACE | Digest "${name}" ${newEnabled ? "enabled" : "disabled"} for this world`);
@@ -5198,7 +6330,8 @@ MAGNITUDE: [local/regional/major/legendary]`;
     const confirmed = await _aceConfirmDialog(
       "Delete Digest",
       `<p>Are you sure you want to permanently delete the digest for <strong>${name}</strong>?</p>` +
-      `<p>This removes the structured knowledge index. The JSON data file remains on disk but will no longer be used.</p>`
+      `<p>This removes the structured knowledge index. The JSON data file remains on disk but will no longer be used.</p>`,
+      { yesLabel: "Delete", yesIcon: "fas fa-trash", noLabel: "Cancel", noIcon: "fas fa-times" }
     ).catch(() => false);
     if (!confirmed) return;
 
@@ -5210,6 +6343,14 @@ MAGNITUDE: [local/regional/major/legendary]`;
     }
 
     await this._digestEngine.deleteDigest(digestId);
+
+    // Rebuild world graph after deletion
+    if (store && this._digestEngine) {
+      this._digestEngine.rebuildWorldGraph(store.getActiveDigests()).catch(err =>
+        console.warn(`${MODULE_ID} | World graph rebuild after delete failed:`, err)
+      );
+    }
+
     this._refreshLibraryUI();
     ui.notifications.info(`ACE | Deleted digest: ${name}`);
   }
@@ -5232,11 +6373,13 @@ MAGNITUDE: [local/regional/major/legendary]`;
       return;
     }
 
-    // Disable the generate button during processing
-    const btn = this.element?.querySelector(`.ace-lib-action-digest[data-doc-id="${docId}"]`);
+    // Replace the generate button with a pause button during processing
+    const btn = this.element?.querySelector(`[data-action="libGenerateDigest"][data-doc-id="${docId}"]`);
     if (btn) {
-      btn.disabled = true;
-      btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
+      btn.dataset.action = "digestPause";
+      btn.innerHTML = `<i class="fas fa-pause"></i>`;
+      btn.title = "Pause digest";
+      btn.classList.add("ace-digest-running");
     }
 
     try {
@@ -5295,6 +6438,16 @@ MAGNITUDE: [local/regional/major/legendary]`;
         this._saveDocuments();
       }
 
+      // Rebuild unified world graph from all active digests
+      if (store && this._digestEngine) {
+        this._updateLibraryCardStatus(docId, `🌍 Building world graph…`);
+        try {
+          await this._digestEngine.rebuildWorldGraph(store.getActiveDigests());
+        } catch (wgErr) {
+          console.warn(`${MODULE_ID} | World graph rebuild failed:`, wgErr);
+        }
+      }
+
       this._updateLibraryCardStatus(docId, "");
       this._refreshLibraryUI();
       ui.notifications.info(`ACE | Digest created for "${doc.displayName}" — ${Object.values(categories).reduce((a, b) => a + b, 0)} entries extracted`);
@@ -5304,10 +6457,13 @@ MAGNITUDE: [local/regional/major/legendary]`;
       this._updateLibraryCardStatus(docId, `❌ Digest failed: ${err.message}`);
       ui.notifications.error(`ACE | Digest generation failed: ${err.message}`);
 
-      // Re-enable the button
+      // Re-enable the button back to brain icon
       if (btn) {
+        btn.dataset.action = "libGenerateDigest";
         btn.disabled = false;
         btn.innerHTML = `<i class="fas fa-brain"></i>`;
+        btn.title = "Generate AI Digest";
+        btn.classList.remove("ace-digest-running", "ace-digest-paused");
       }
     }
   }
@@ -5368,6 +6524,47 @@ MAGNITUDE: [local/regional/major/legendary]`;
       this._saveDocuments();
       this._refreshLibraryUI();
 
+      // 2b. Check for cached extraction before doing heavy processing
+      const cached = await this._documentEngine.loadDocumentCache(file.name).catch(() => null);
+
+      // If cache exists with 0 chunks, it's a known-scanned PDF — skip re-processing
+      if (cached && Array.isArray(cached.chunks) && cached.chunks.length === 0 && type === "pdf") {
+        store.setPageCount(docRecord.id, cached.pageCount ?? 0);
+        store.setStatus(docRecord.id, "no_text");
+        this._saveDocuments();
+        this._refreshLibraryUI();
+        ui.notifications.warn(
+          `ACE | "${cached.displayName ?? file.name}" is a scanned PDF (no extractable text). `
+          + `Try a version with an OCR text layer.`
+        );
+        continue;
+      }
+
+      if (cached && cached.chunks?.length) {
+        const useCached = await _aceConfirmDialog(
+          "Cached Extraction Found",
+          `<p>A cached extraction for <strong>${cached.displayName}</strong> was found on disk.</p>` +
+          `<p>${cached.chunkCount ?? cached.chunks.length} text chunks, cached ${new Date(cached.cachedAt).toLocaleDateString()}.</p>` +
+          `<p>Use the cached version (instant) or re-extract from the file?</p>`,
+          { yesLabel: "Use Cache", yesIcon: "fas fa-bolt", noLabel: "Re-extract", noIcon: "fas fa-redo" }
+        ).catch(() => false);
+
+        if (useCached) {
+          // Restore from cache — skip heavy extraction entirely
+          store.setChunks(docRecord.id, cached.chunks);
+          if (cached.images?.length) {
+            for (const img of cached.images) store.addImage(docRecord.id, img);
+          }
+          if (cached.tags?.length)      store.setTags(docRecord.id, cached.tags);
+          if (cached.pageCount)          store.setPageCount(docRecord.id, cached.pageCount);
+          store.setStatus(docRecord.id, "ready");
+          this._saveDocuments();
+          this._refreshLibraryUI();
+          ui.notifications.info(`ACE | Restored from cache: ${cached.displayName} (${cached.chunks.length} chunks)`);
+          continue; // skip to next file
+        }
+      }
+
       // 3. Process in background (extract text, chunk, tag)
       try {
         await this._processDocument(docRecord.id, file, type);
@@ -5407,18 +6604,59 @@ MAGNITUDE: [local/regional/major/legendary]`;
       const chunks = this._documentEngine.chunkPages(pages);
       store.setChunks(docId, chunks);
 
+      // ── Scanned-PDF detection ─────────────────────────────────
+      // If we got pages but zero chunks, the PDF is almost certainly
+      // a scanned document (images only, no embedded text layer).
+      if (chunks.length === 0 && pages.length > 0) {
+        store.setStatus(docId, "no_text");
+        this._saveDocuments();
+        this._refreshLibraryUI();
+        const docName = store.getDocument(docId)?.displayName ?? file.name;
+        ui.notifications.warn(
+          `ACE | "${docName}" appears to be a scanned PDF (no extractable text). `
+          + `Try a version with an OCR text layer, or a digitally-created PDF.`
+        );
+
+        // Still cache globally so we don't re-process the same file
+        const finishedDoc = store.getDocument(docId);
+        if (finishedDoc) {
+          this._documentEngine.saveDocumentCache(finishedDoc).catch(err =>
+            console.warn(`${MODULE_ID} | Document cache save failed:`, err)
+          );
+        }
+        return;
+      }
+
       // Auto-extract document-level tags from first few chunks
       const sample = chunks.slice(0, 5).map(c => c.text).join(" ");
       const { extractKeywords } = await import("./document-store.mjs");
       const autoTags = extractKeywords(sample, 6);
       store.setTags(docId, autoTags);
 
+      // Auto-detect publication year from copyright text
+      try {
+        const { detectPublishedYear } = await import("./document-engine.mjs");
+        const year = detectPublishedYear(chunks);
+        if (year) {
+          store.setPublishedYear(docId, year);
+          console.log(`${MODULE_ID} | Auto-detected publication year: ${year}`);
+        }
+      } catch (e) { /* non-critical */ }
+
       store.setStatus(docId, "ready");
       this._saveDocuments();
       this._refreshLibraryUI();
 
-      const docName = store.getDocument(docId)?.displayName;
+      const finishedDoc = store.getDocument(docId);
+      const docName = finishedDoc?.displayName;
       ui.notifications.info(`ACE | Processed: ${docName} (${pages.length} pages, ${chunks.length} chunks)`);
+
+      // Cache extraction globally for cross-world reuse
+      if (finishedDoc) {
+        this._documentEngine.saveDocumentCache(finishedDoc).catch(err =>
+          console.warn(`${MODULE_ID} | Document cache save failed:`, err)
+        );
+      }
 
     } else if (type === "txt" || type === "md") {
       // ── Text / Markdown: chunk by paragraphs or headings ──
@@ -5432,12 +6670,30 @@ MAGNITUDE: [local/regional/major/legendary]`;
       const autoTags = extractKeywords(sample, 6);
       store.setTags(docId, autoTags);
 
+      // Auto-detect publication year from copyright text
+      try {
+        const { detectPublishedYear } = await import("./document-engine.mjs");
+        const year = detectPublishedYear(chunks);
+        if (year) {
+          store.setPublishedYear(docId, year);
+          console.log(`${MODULE_ID} | Auto-detected publication year: ${year}`);
+        }
+      } catch (e) { /* non-critical */ }
+
       store.setStatus(docId, "ready");
       this._saveDocuments();
       this._refreshLibraryUI();
 
-      const docName = store.getDocument(docId)?.displayName;
+      const finishedDoc = store.getDocument(docId);
+      const docName = finishedDoc?.displayName;
       ui.notifications.info(`ACE | Processed: ${docName} (${chunks.length} chunks)`);
+
+      // Cache extraction globally for cross-world reuse
+      if (finishedDoc) {
+        this._documentEngine.saveDocumentCache(finishedDoc).catch(err =>
+          console.warn(`${MODULE_ID} | Document cache save failed:`, err)
+        );
+      }
 
     } else if (type === "image") {
       // ── Image: store as image reference, no text extraction ──
@@ -5479,6 +6735,14 @@ MAGNITUDE: [local/regional/major/legendary]`;
       this._refreshLibraryUI();
 
       ui.notifications.info(`ACE | Image uploaded: ${doc?.displayName} (${img.naturalWidth}\u00D7${img.naturalHeight})`);
+
+      // Cache image document globally for cross-world reuse
+      const imgDoc = store.getDocument(docId);
+      if (imgDoc) {
+        this._documentEngine.saveDocumentCache(imgDoc).catch(err =>
+          console.warn(`${MODULE_ID} | Document cache save failed:`, err)
+        );
+      }
     }
   }
 }

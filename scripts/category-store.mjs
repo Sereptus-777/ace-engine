@@ -176,7 +176,7 @@ export class CategoryStore {
             // so we overwrite with an empty marker to reclaim intent.
             // In practice, GMs can manually clear the backups folder.
             // Log what would be pruned for manual cleanup.
-            console.log(`${MODULE_ID} | ${this.category}: old backup eligible for cleanup: ${path.split("/").pop()}`);
+            console.debug(`${MODULE_ID} | ${this.category}: old backup eligible for cleanup: ${path.split("/").pop()}`);
           } catch (_) { /* ignore cleanup errors */ }
         }
         if (toDelete.length) {

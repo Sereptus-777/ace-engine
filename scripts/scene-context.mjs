@@ -93,10 +93,136 @@ export class SceneContext {
       lines.push(`**Lighting:** ${timeOfDay} (darkness: ${Math.round(darknessLevel * 100)}%)`);
     }
 
-    const weather = scene.weather ?? scene.flags?.weather ?? "";
-    if (weather) lines.push(`**Weather:** ${weather}`);
+    // ── Weather detection — Foundry native + FXMaster ──
+    const weatherDesc = this._detectWeather(scene);
+    if (weatherDesc) lines.push(`**Weather:** ${weatherDesc}`);
 
     return lines.join("\n");
+  }
+
+  /**
+   * Detect active weather effects from multiple sources:
+   *  1. Foundry native scene.weather (class name key)
+   *  2. FXMaster flags (scene.flags.fxmaster.effects)
+   *  3. Simple Weather flags
+   * Translates technical identifiers into natural-language descriptions.
+   */
+  _detectWeather(scene) {
+    const effects = [];
+
+    // ── Source 1: Foundry native weather ──
+    const nativeWeather = scene.weather ?? "";
+    if (nativeWeather) {
+      const readable = this._weatherKeyToLabel(nativeWeather);
+      if (readable) effects.push(readable);
+    }
+
+    // ── Source 2: FXMaster module flags ──
+    const fxEffects = scene.flags?.fxmaster?.effects;
+    if (fxEffects && typeof fxEffects === "object") {
+      // FXMaster stores effects as an object: { "effectId": { type: "...", options: {...} }, ... }
+      const fxEntries = Array.isArray(fxEffects) ? fxEffects : Object.values(fxEffects);
+      for (const fx of fxEntries) {
+        if (!fx || typeof fx !== "object") continue;
+        const fxType = fx.type ?? fx.id ?? "";
+        const readable = this._weatherKeyToLabel(fxType);
+        if (readable && !effects.includes(readable)) effects.push(readable);
+
+        // Also check for density/intensity if available
+        if (fx.options?.density && fx.options.density > 0.5) {
+          const idx = effects.indexOf(readable);
+          if (idx >= 0) effects[idx] = `Heavy ${readable.toLowerCase()}`;
+        }
+      }
+    }
+
+    // ── Source 3: Simple Weather module ──
+    const simpleWeather = scene.flags?.["simple-weather"]?.weather
+                       ?? scene.flags?.["simple-weather"]?.current;
+    if (simpleWeather && typeof simpleWeather === "string") {
+      const readable = this._weatherKeyToLabel(simpleWeather) || simpleWeather;
+      if (!effects.includes(readable)) effects.push(readable);
+    }
+
+    return effects.length ? effects.join(", ") : "";
+  }
+
+  /**
+   * Convert a weather effect class name / key into a human-readable label.
+   * Handles Foundry native names, FXMaster class names, and plain strings.
+   */
+  _weatherKeyToLabel(key) {
+    if (!key || typeof key !== "string") return "";
+
+    // Lookup table: known weather class/type identifiers → readable labels
+    const WEATHER_MAP = {
+      // Foundry native
+      "rain":           "Rain",         "rainweathereffect":       "Rain",
+      "snow":           "Snow",         "snowweathereffect":       "Snow",
+      "leaves":         "Falling leaves","leavesweathereffect":    "Falling leaves",
+      "fog":            "Fog",          "fogweathereffect":        "Fog",
+      // FXMaster types
+      "raintop":        "Rain",         "raintopweathereffect":    "Rain",
+      "snowstorm":      "Snowstorm",    "snowstormweathereffect":  "Snowstorm",
+      "blizzard":       "Blizzard",     "blizzardweathereffect":   "Blizzard",
+      "hail":           "Hail",         "hailweathereffect":       "Hail",
+      "sandstorm":      "Sandstorm",    "sandstormweathereffect":  "Sandstorm",
+      "embers":         "Embers",       "embersweathereffect":     "Embers",
+      "clouds":         "Cloudy",       "cloudsweathereffect":     "Cloudy",
+      "autumnleaves":   "Autumn leaves","autumnleavesweathereffect":"Autumn leaves",
+      "bubbles":        "Bubbles",      "bubblesweathereffect":    "Bubbles",
+      "stars":          "Starry sky",   "starsweathereffect":      "Starry sky",
+      "fireflies":      "Fireflies",    "firefliesweathereffect":  "Fireflies",
+      "sakurablossoms": "Cherry blossoms","sakurablossomsweathereffect":"Cherry blossoms",
+      "sakurabloom":    "Cherry blossoms","sakurabloomweathereffect":"Cherry blossoms",
+      "magiccrystals":  "Magical energy","magiccrystalsweathereffect":"Magical energy",
+      "ghosts":         "Ghostly apparitions","ghostsweathereffect":"Ghostly apparitions",
+      // FXMaster Config class names (sometimes stored with "Config" suffix)
+      "snowweathereffectsconfig":       "Snow",
+      "snowstormweathereffectsconfig":  "Snowstorm",
+      "rainweathereffectsconfig":       "Rain",
+      "raintopweathereffectsconfig":    "Rain",
+      "fogweathereffectsconfig":        "Fog",
+      "hailweathereffectsconfig":       "Hail",
+      "sandstormweathereffectsconfig":  "Sandstorm",
+      "embersweathereffectsconfig":     "Embers",
+      "cloudsweathereffectsconfig":     "Cloudy",
+      "autumnleavesweathereffectsconfig":"Autumn leaves",
+      "batsweathereffectsconfig":       "Bats flying",
+      "birdsweathereffectsconfig":      "Birds flying",
+      "crowsweathereffectsconfig":      "Crows flying",
+      "eaglesweathereffectsconfig":     "Eagles flying",
+      "ratsweathereffectsconfig":       "Rats scurrying",
+      "spidersweathereffectsconfig":    "Spiders crawling",
+      "fishweathereffectsconfig":       "Fish swimming",
+      "bubblesweathereffectsconfig":    "Bubbles rising",
+      "starsweathereffectsconfig":      "Starry sky",
+      "firefliesweathereffectsconfig":  "Fireflies",
+      "sakurablossomsweathereffectsconfig":"Cherry blossoms",
+      "sakurabloomweathereffectsconfig": "Cherry blossoms",
+      "magiccrystalsweathereffectsconfig":"Magical energy",
+      "ghostsweathereffectsconfig":     "Ghostly apparitions",
+    };
+
+    // Normalize: strip module prefix (e.g. "fxmaster.Snow..." → "Snow..."),
+    // remove dots/hyphens, lowercase for lookup
+    let normalized = key.replace(/^fxmaster\./i, "")
+                        .replace(/[.\-_]/g, "")
+                        .toLowerCase();
+    if (WEATHER_MAP[normalized]) return WEATHER_MAP[normalized];
+
+    // Fallback: try to extract a readable word from the class name
+    // e.g. "SnowWeatherEffect" → "Snow", "HeavyRainEffect" → "HeavyRain"
+    const match = key.match(/^(?:fxmaster\.)?([A-Za-z]+?)(?:Weather)?(?:Effects?)?(?:Config)?$/i);
+    if (match?.[1]) {
+      // Convert camelCase to spaced: "HeavyRain" → "Heavy Rain"
+      const spaced = match[1].replace(/([a-z])([A-Z])/g, "$1 $2");
+      return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+    }
+
+    // Last resort: return cleaned-up original if it looks like a word
+    if (key.length < 30 && /^[a-zA-Z]+$/.test(key)) return key;
+    return "";
   }
 
   _gatherNarrativeTime() {
@@ -175,7 +301,18 @@ export class SceneContext {
   }
 
   _gatherParty() {
-    const partyActors = game.actors?.filter((a) => a.hasPlayerOwner && a.type === "character") ?? [];
+    // Only include PCs who have a token on the CURRENT scene.
+    // _gatherTokens() already provides detailed info for scene tokens,
+    // so this section is a safety net — it won't duplicate if tokens cover all PCs.
+    const sceneActorIds = new Set(
+      (canvas?.scene?.tokens ?? [])
+        .filter(td => td.actor?.hasPlayerOwner)
+        .map(td => td.actor.id)
+    );
+
+    const partyActors = game.actors?.filter((a) =>
+      a.hasPlayerOwner && a.type === "character" && sceneActorIds.has(a.id)
+    ) ?? [];
     if (!partyActors.length) return "";
 
     const lines = ["### Party Overview"];

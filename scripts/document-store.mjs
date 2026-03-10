@@ -120,11 +120,12 @@ export class DocumentStore extends CategoryStore {
       pageCount:   0,
       tags:        [],
       enabled:     true,
-      storedPath:  storedPath ?? "",
-      chunks:      [],
-      images:      [],
-      status:      "uploading",
-      error:       null,
+      storedPath:     storedPath ?? "",
+      publishedYear:  null,          // publication year (e.g. 2016) for lore priority
+      chunks:         [],
+      images:         [],
+      status:         "uploading",
+      error:          null,
     };
 
     this._data.documents[id] = record;
@@ -220,6 +221,18 @@ export class DocumentStore extends CategoryStore {
     const doc = this._data.documents[docId];
     if (!doc) return;
     doc.displayName = (name ?? "").slice(0, 120) || doc.fileName;
+    this.markDirty();
+  }
+
+  /**
+   * Set the publication year (for lore-priority conflict resolution).
+   * @param {string} docId
+   * @param {number|null} year - e.g. 2016, or null to clear
+   */
+  setPublishedYear(docId, year) {
+    const doc = this._data.documents[docId];
+    if (!doc) return;
+    doc.publishedYear = (typeof year === "number" && year > 1900 && year < 2100) ? year : null;
     this.markDirty();
   }
 

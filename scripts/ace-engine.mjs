@@ -368,6 +368,19 @@ Hooks.once("ready", async () => {
 
   console.log(`${MODULE_ID} | ACE ready — GM mode active`);
 
+  // ── Envoy sync status ──────────────────────────────────────
+  if (game.modules.get("ace-envoy")?.active) {
+    try {
+      const envoySync = game.settings.get("ace-envoy", "useAceEngineSettings");
+      const cfg = AceSettings.getProviderConfig();
+      if (envoySync) {
+        console.log(`${MODULE_ID} | Envoy sync: ON — both modules using ${cfg.provider} → ${cfg.modelName}`);
+      } else {
+        console.log(`${MODULE_ID} | Envoy sync: OFF — Envoy is using its own AI settings`);
+      }
+    } catch (_) { /* Envoy may not have the new setting yet */ }
+  }
+
   // ── One-time system prompt migrations ──
   try {
     let currentPrompt = game.settings.get(MODULE_ID, "systemPrompt") || "";
@@ -382,6 +395,12 @@ Hooks.once("ready", async () => {
     // Migration 2: structured digest + training knowledge awareness
     if (currentPrompt && !currentPrompt.includes("STRUCTURED REFERENCE DATA")) {
       currentPrompt += ` When STRUCTURED REFERENCE DATA is present, it contains AI-extracted entities (NPCs, locations, items, encounters, factions, lore) from the GM's sourcebooks — use it directly. For published content (official D&D modules, Pathfinder adventures, etc.), ALSO use your own training knowledge to fill in gaps the reference data does not cover. If neither reference data nor your training covers the question, say so honestly.`;
+      changed = true;
+    }
+
+    // Migration 3: source conflict resolution
+    if (currentPrompt && !currentPrompt.includes("conflicting information")) {
+      currentPrompt += `\n\nWhen multiple source documents contain conflicting information (different editions, timeline changes, retcons), prefer the most recently uploaded document. GM session notes and campaign-specific content ALWAYS take priority over published sourcebooks. If you notice a conflict, briefly mention it so the GM can decide.`;
       changed = true;
     }
 
@@ -534,6 +553,43 @@ Hooks.once("ready", async () => {
     triggerSfx:      (effect) => _triggerSfx(effect),
     stopSfx:         () => stopAllSfx(),
     getSubtleRolls:  () => subtleRolls,
+
+    /** Clear all Envoy conversation history from NPC actors.
+     *  Usage: `ace.clearEnvoyMemory()` — wipes memoryLog flags from ALL NPC actors.
+     *  Pass a single Actor or array to target specific NPCs:
+     *    `ace.clearEnvoyMemory(game.actors.getName("Lich"))` */
+    clearEnvoyMemory: async (targets) => {
+      if (!game.user.isGM) { ui.notifications?.warn("GM only."); return; }
+      const actors = targets
+        ? (Array.isArray(targets) ? targets : [targets])
+        : game.actors.filter(a => a.type === "npc" && a.getFlag("ace-envoy", "memoryLog")?.length);
+
+      if (!actors.length) {
+        ui.notifications?.info("ACE: No NPC conversation data found to clear.");
+        return;
+      }
+
+      const names = actors.map(a => a.name);
+      const confirm = await Dialog.confirm({
+        title:   "Clear Envoy Conversation Data",
+        content: `<p>This will erase conversation history from <strong>${actors.length}</strong> NPC(s):</p>` +
+                 `<p style="color:#e06060;font-style:italic;">${names.join(", ")}</p>` +
+                 `<p>This cannot be undone. Continue?</p>`,
+      });
+      if (!confirm) return;
+
+      let cleared = 0;
+      for (const actor of actors) {
+        try {
+          await actor.unsetFlag("ace-envoy", "memoryLog");
+          cleared++;
+          console.log(`${MODULE_ID} | Cleared Envoy memory for: ${actor.name}`);
+        } catch (err) {
+          console.error(`${MODULE_ID} | Failed to clear Envoy memory for ${actor.name}:`, err);
+        }
+      }
+      ui.notifications?.info(`ACE: Cleared conversation history from ${cleared} NPC(s).`);
+    },
   };
   game.modules.get(MODULE_ID).api = api;
 
@@ -1306,6 +1362,9 @@ Hooks.on("createToken", (tokenDoc) => {
   if (!game.user.isGM) return;
   if (sceneCtx) sceneCtx.refresh();
   if (panel?.rendered) panel.refreshSelectPanel();
+
+  // ── Encounter: track placed creatures ──
+  if (panel) panel._onTokenCreatedForEncounter(tokenDoc);
 
   // ── Reputation: check newly placed NPC tokens for faction awareness ──
   if (reputationEngine && aceMemory) {
