@@ -333,23 +333,6 @@ export class SceneContext {
       lines.push(hpLine);
     }
 
-    // ── NPCs: minimal tactical profile only (saves tokens) ──
-    // Full detail is reserved for PCs — NPCs only need HP/AC, conditions,
-    // weapons, defenses, and senses for the AI to give good tactical advice.
-    if (!isPC) {
-      const conditions = this._getActorConditions(actor);
-      if (conditions.length) lines.push(`  Conditions: ${conditions.join(", ")}`);
-      const equipment = this._extractEquipment(actor);
-      if (equipment) lines.push(equipment);
-      const defenses = this._extractDefenses(actor);
-      if (defenses) lines.push(defenses);
-      const senses = this._extractSenses(actor);
-      if (senses) lines.push(`  Senses: ${senses}`);
-      return lines.join("\n");
-    }
-
-    // ── PCs: full detail below ──────────────────────────────
-
     // Spell slots remaining
     const slots = this._extractSpellSlots(actor);
     if (slots) lines.push(`  Spell Slots: ${slots}`);
