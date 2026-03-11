@@ -434,6 +434,33 @@
   margin: 6px 0;
 }
 
+/* ── [NARRATION] blocks in Chat messages — gold-bordered read-aloud prose ── */
+.ace-narration-block {
+  border-left: 3px solid var(--ace-accent);
+  background: rgba(201, 168, 76, 0.06);
+  border-radius: 0 var(--ace-radius-sm) var(--ace-radius-sm) 0;
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+
+.ace-narration-block-label {
+  font-size: 10px;
+  color: var(--ace-accent);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: bold;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ace-narration-block-text {
+  font-style: italic;
+  line-height: 1.6;
+  color: var(--ace-text-primary);
+}
+
 /* ── Gold Divider Bar — separates chat/narration log from input ── */
 .ace-gold-divider {
   display: flex;

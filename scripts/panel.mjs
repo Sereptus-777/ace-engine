@@ -203,6 +203,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       voiceInput:          AcePanel._onVoiceInput,
       analyzeNpcTactics:   AcePanel._onAnalyzeNpcTactics,
       copyMessage:         AcePanel._onCopyMessage,
+      sendToNarration:     AcePanel._onSendToNarration,
       saveToJournal:       AcePanel._onSaveToJournal,
       // ── Narration tab ──────────────────────────────────
       narrationVoice:      AcePanel._onNarrationVoice,
@@ -429,7 +430,6 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
                     title="Quick voice — speaks and auto-sends to AI">
               <i class="fas ${this._isListening ? "fa-circle ace-mic-pulse" : "fa-microphone"}"></i>
             </button>
-            <div class="ace-input-spacer"></div>
             <button class="ace-btn ace-btn-send" data-action="sendMessage"
                     ${this._isStreaming ? "disabled" : ""}
                     title="Send to AI (private — players do not see this)">
@@ -481,6 +481,12 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
                     title="Speak narration — fills textarea for review before sending">
               <i class="fas ${this._narrationListening ? "fa-circle ace-mic-pulse" : "fa-microphone"}"></i>
             </button>
+            <button class="ace-btn ace-btn-narrate-send" data-action="narrateSend"
+                    ${this._isNarrationStreaming ? "disabled" : ""}
+                    title="Send narration to ALL players via Foundry chat + speak aloud">
+              <i class="fas fa-scroll"></i> To Players
+            </button>
+            <div class="ace-input-spacer"></div>
             <button class="ace-btn ace-btn-voice-gender ${this._voiceGender === "female" ? "ace-voice-female" : this._voiceGender === "male" ? "ace-voice-male" : ""}"
                     data-action="toggleVoiceGender"
                     title="Voice gender: ${this._voiceGender ?? "auto"} — click to cycle (auto → male → female)">
@@ -489,12 +495,6 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
             <button class="ace-btn ace-btn-polish" data-action="polishNarration"
                     title="AI Polish — add punctuation, capitalize, and clean up spoken text">
               <i class="fas fa-magic"></i>
-            </button>
-            <div class="ace-input-spacer"></div>
-            <button class="ace-btn ace-btn-narrate-send" data-action="narrateSend"
-                    ${this._isNarrationStreaming ? "disabled" : ""}
-                    title="Send narration to ALL players via Foundry chat + speak aloud">
-              <i class="fas fa-scroll"></i> To Players
             </button>
             <button class="ace-btn ace-btn-clear" data-action="clearNarration"
                     title="Clear narration history">
@@ -1903,6 +1903,9 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
             <span class="ace-msg-role">${roleLabel}</span>
             ${msg.role === "assistant" ? `
               <div class="ace-msg-actions">
+                <button class="ace-icon-btn" data-action="sendToNarration" data-index="${i}" title="Send narration to Narration tab">
+                  <i class="fas fa-scroll"></i>
+                </button>
                 <button class="ace-icon-btn" data-action="copyMessage" data-index="${i}" title="Copy">
                   <i class="fas fa-copy"></i>
                 </button>
@@ -1912,7 +1915,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
               </div>
             ` : ""}
           </div>
-          <div class="ace-msg-body">${this._renderMarkdown(msg.content)}</div>
+          <div class="ace-msg-body">${this._renderChatBody(msg.content)}</div>
         </div>`;
       })
       .join("");
@@ -2667,6 +2670,33 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       navigator.clipboard.writeText(msg.content);
       ui.notifications.info("Copied to clipboard!");
     }
+  }
+
+  /**
+   * Send narration text from a chat message to the Narration tab textarea.
+   * Extracts [NARRATION] block if present, otherwise sends full message.
+   */
+  static _onSendToNarration(event, target) {
+    const idx = parseInt(target.dataset.index ?? target.closest("[data-index]")?.dataset.index);
+    const msg = this._chatHistory[idx];
+    if (!msg) return;
+
+    // Extract narration content (strips [NARRATION] tags, or uses full text)
+    let text = AcePanel._extractNarration(msg.content);
+    // Strip remaining markdown for clean textarea content
+    text = text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1").replace(/^#+\s+/gm, "").trim();
+
+    // Switch to narration tab and fill textarea
+    this._switchToTab("narration");
+    const textarea = this.element.querySelector("#ace-narration-input");
+    if (textarea) {
+      textarea.value = text;
+      textarea.focus();
+      // Auto-grow textarea to fit content
+      textarea.style.height = "auto";
+      textarea.style.height = Math.min(textarea.scrollHeight, 200) + "px";
+    }
+    ui.notifications.info("Sent to Narration tab — review and edit before broadcasting.");
   }
 
   static _onCopyNarration(event, target) {
@@ -4540,7 +4570,7 @@ Appropriate loot, XP, and story rewards.
     if (!log) return;
     const msgEl = log.querySelector(`[data-index="${index}"] .ace-msg-body`);
     if (msgEl) {
-      msgEl.innerHTML = this._renderMarkdown(this._chatHistory[index].content);
+      msgEl.innerHTML = this._renderChatBody(this._chatHistory[index].content);
       this._scrollChatToBottom();
     }
   }
@@ -4599,6 +4629,56 @@ Appropriate loot, XP, and story rewards.
     html = html.replace(/\n/g, "<br>");
 
     return html;
+  }
+
+  /**
+   * Render a chat message body with [NARRATION] blocks visually separated.
+   * Content inside [NARRATION]...[/NARRATION] gets a gold-bordered box.
+   * Everything else renders as normal markdown.
+   */
+  _renderChatBody(text) {
+    if (!text) return "";
+
+    // Check for [NARRATION] blocks
+    const narrationRegex = /\[NARRATION\]\s*([\s\S]*?)\s*\[\/NARRATION\]/gi;
+    if (!narrationRegex.test(text)) return this._renderMarkdown(text);
+
+    // Reset regex
+    narrationRegex.lastIndex = 0;
+
+    let result = "";
+    let lastIndex = 0;
+    let match;
+    while ((match = narrationRegex.exec(text)) !== null) {
+      // Render text before the narration block
+      const before = text.slice(lastIndex, match.index).trim();
+      if (before) result += this._renderMarkdown(before);
+
+      // Render the narration block in a styled container
+      const narrationText = match[1].trim();
+      result += `<div class="ace-narration-block">
+        <div class="ace-narration-block-label"><i class="fas fa-scroll"></i> Narration</div>
+        <div class="ace-narration-block-text">${this._renderMarkdown(narrationText)}</div>
+      </div>`;
+
+      lastIndex = match.index + match[0].length;
+    }
+
+    // Render any text after the last narration block
+    const after = text.slice(lastIndex).trim();
+    if (after) result += this._renderMarkdown(after);
+
+    return result;
+  }
+
+  /**
+   * Extract narration text from a chat message (content inside [NARRATION] tags).
+   * Falls back to the full message if no tags are present.
+   */
+  static _extractNarration(content) {
+    const match = content.match(/\[NARRATION\]\s*([\s\S]*?)\s*\[\/NARRATION\]/i);
+    if (match) return match[1].trim();
+    return content;
   }
 
   _escapeHtml(text) {
