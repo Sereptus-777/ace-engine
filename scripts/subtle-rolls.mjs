@@ -56,11 +56,14 @@ const NARRATION_PROMPT = `You are a vivid, immersive D&D narrator. A player just
 - Roll Total: {total} (Natural d20: {natural})
 - Result: {resultCategory}
 
-## SCENE CONTEXT
+## SCENE CONTEXT (USE THIS — DO NOT INVENT LOCATIONS OR SETTINGS)
 {sceneContext}
 
 ## NPC / SITUATION CONTEXT
 {npcContext}
+
+## CRITICAL — USE THE ACTUAL SCENE
+Your narration MUST match the ACTUAL scene described above. If players are outdoors, describe outdoor sensations. If in a tavern, describe tavern details. NEVER invent locations, rooms, or environments that are not in the scene context. If no scene description is available, keep the narration generic and environment-neutral — do NOT fabricate a setting.
 
 ## CRITICAL — STAY ON SKILL
 Your narration MUST be about the specific skill being used. Do NOT generate unrelated lore, secrets, or information that has nothing to do with the skill check.
@@ -246,10 +249,13 @@ export class SubtleRollManager {
         //   showForRoll(roll, user, synchronize, users, blind, messageId, speaker, options)
         //   - blind:  skips LOCAL animation (sender doesn't see dice)
         //   - secret: via options {secret:true} — shows "?" faces on receiving clients
-        // Dice So Nice — GM only, never sent to players (truly blind)
+        // Dice So Nice — GM sees real dice, players see blind "?" dice
         if (game.dice3d) {
           try {
+            // 1. GM sees real dice locally (not synchronized)
             await game.dice3d.showForRoll(roll, game.user, false, null, false, null, null);
+            // 2. Players see ghost "?" dice (synchronized, blind=true skips GM local, ghost shows "?")
+            await game.dice3d.showForRoll(roll, game.user, true, null, true, null, null, { ghost: true });
           } catch (e) {
             console.warn(`${MODULE_ID} | Dice So Nice roll failed:`, e);
           }

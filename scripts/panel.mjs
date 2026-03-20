@@ -157,6 +157,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     // ── TTS ────────────────────────────────────────────────
     this._ttsUtterance       = null;
     this._ttsAudio           = null;
+    this._ttsAbort           = null;   // AbortController for in-flight ElevenLabs fetch
     this._ttsPlaying         = false;
     this._ttsPaused          = false;
     this._voicesReady        = false;
@@ -249,6 +250,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       // ── Encounter tab ──────────────────────────────────
       saveSceneDesc:       AcePanel._onSaveSceneDesc,
       clearSceneDesc:      AcePanel._onClearSceneDesc,
+      deleteSceneDesc:     AcePanel._onDeleteSceneDesc,
       generateEncounter:   AcePanel._onGenerateEncounter,
       rollEncounter:       AcePanel._onRollEncounter,
       copyEncounterResult: AcePanel._onCopyEncounterResult,
@@ -259,8 +261,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       // ── Shared (always visible) ────────────────────────
       switchTab:           AcePanel._onSwitchTab,
       stopAudio:           AcePanel._onStopAudio,
-      ttsToggle:           AcePanel._onTtsToggle,
-      ttsStop:             AcePanel._onTtsStop,
+      /* ttsToggle/ttsStop removed — single stop button now */
       digestPause:         AcePanel._onDigestPause,
       endSession:          AcePanel._onEndSession,
       saveNote:            AcePanel._onSaveNote,
@@ -421,23 +422,14 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
                 data-action="switchTab" data-tab="library">
           <i class="fas fa-book-open"></i> Library
         </button>
-        <!-- TTS Controls — context-aware pause/resume/stop, always visible -->
+        <!-- TTS Stop — single button, pulses red when audio is active -->
         <div class="ace-tts-controls" id="ace-tts-controls">
-          ${this._ttsPlaying
-            ? `<button class="ace-btn ace-btn-tts-main ace-tts-playing" data-action="ttsToggle"
-                       title="Pause narration"><i class="fas fa-pause"></i></button>`
-            : this._ttsPaused
-              ? `<button class="ace-btn ace-btn-tts-main ace-tts-paused" data-action="ttsToggle"
-                         title="Resume narration"><i class="fas fa-play"></i></button>
-                 <button class="ace-btn ace-btn-tts-stop" data-action="ttsStop"
-                         title="Stop narration"><i class="fas fa-stop"></i></button>`
-              : `<button class="ace-btn ace-btn-tts-main" data-action="stopAudio"
-                         title="Stop all audio"><i class="fas fa-volume-mute"></i></button>`}
+          <button class="ace-btn ace-btn-tts-main${this._ttsPlaying ? " ace-tts-active" : ""}" data-action="stopAudio"
+                  title="Stop all audio"><i class="fas fa-stop"></i></button>
         </div>
       </nav>
 
-      <!-- ── Survival Tracker — always visible ────────────── -->
-      ${this._buildSurvivalBar()}
+      <!-- Survival tracker removed from UI (AI still tracks internally) -->
 
       <!-- ═══════════════════════════════════════════════════
            CHAT TAB — Private AI conversation (GM only)
@@ -497,13 +489,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
                   title="Earthquake shake + falling debris + bass rumble — all players see &amp; hear it">
             <i class="fas fa-mountain"></i> Earthquake
           </button>
-          <button class="ace-divider-action ace-sfx-subtle" data-action="sfxStealthFail"
-                  title="Stealth FAIL — twig snap / kicked rock — played to one player">
-            <i class="fas fa-shoe-prints"></i> Stealth Fail
-          </button>
-          <button class="ace-divider-action ace-sfx-subtle" data-action="sfxPerceptionPass"
-                  title="Perception PASS — faint rustle / whisper — played to one player">
-            <i class="fas fa-ear-listen"></i> Perception</button>
+          <!-- Stealth/Perception buttons removed -->
           <div class="ace-input-spacer"></div>
           ${this._renderSessionRecapButton()}
         </div>
@@ -581,16 +567,20 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
             <div class="ace-scene-desc-header">
               <i class="fas fa-scroll"></i> <span class="ace-scene-desc-label">GM Scene Notes</span>
               <span class="ace-scene-desc-name">${canvas?.scene?.name ?? "No scene"}</span>
-              <button class="ace-scene-desc-btn" data-action="clearSceneDesc" title="Clear notes">
+              <button class="ace-scene-desc-btn" data-action="clearSceneDesc" title="Clear text area">
                 <i class="fas fa-eraser"></i>
+              </button>
+              <button class="ace-scene-desc-btn ace-scene-desc-delete" data-action="deleteSceneDesc" title="Delete saved notes from this scene">
+                <i class="fas fa-trash"></i>
               </button>
               <button class="ace-scene-desc-btn ace-scene-desc-save" data-action="saveSceneDesc" title="Save to this scene">
                 <i class="fas fa-save"></i> Save
               </button>
             </div>
+            ${(canvas?.scene?.flags?.["ace-engine"]?.sceneDescription) ? `<div class="ace-scene-desc-saved"><i class="fas fa-check-circle" style="color:#4caf50;margin-right:4px;"></i><strong>Saved notes:</strong> ${this._escapeHtml(canvas.scene.flags["ace-engine"].sceneDescription).slice(0, 200)}${canvas.scene.flags["ace-engine"].sceneDescription.length > 200 ? "..." : ""}</div>` : ""}
             <textarea class="ace-scene-desc-input" id="ace-scene-desc"
                       placeholder="Tell ACE about this scene — what does the party see? Only you (the GM) see this. ACE uses it to give better answers about this location."
-                      spellcheck="true">${canvas?.scene?.flags?.["ace-engine"]?.sceneDescription ?? ""}</textarea>
+                      spellcheck="true"></textarea>
           </div>
 
           <!-- ── Draggable gold divider ── -->
@@ -1221,7 +1211,16 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     const endpoint = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
     console.log(`${MODULE_ID} | NPC Speech: voice=${voiceId}, model=${modelId}`);
 
+    // v3 model only accepts discrete stability values: 0.0, 0.5, or 1.0
+    let stability = voiceSettings.stability ?? 0.5;
+    if (modelId === "eleven_v3") {
+      stability = stability <= 0.25 ? 0.0 : stability >= 0.75 ? 1.0 : 0.5;
+    }
+
     try {
+      this._ttsAbort = new AbortController();
+      this._updateTtsUI();   // pulse the stop button immediately while fetching
+      const timeout = setTimeout(() => this._ttsAbort?.abort(), 30_000);
       const resp = await fetch(endpoint, {
         method: "POST",
         headers: { "xi-api-key": apiKey, "Content-Type": "application/json", "Accept": "audio/mpeg" },
@@ -1229,14 +1228,15 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
           text: clean,
           model_id: modelId,
           voice_settings: {
-            stability: voiceSettings.stability ?? 0.5,
+            stability,
             similarity_boost: voiceSettings.similarity_boost ?? 0.8,
             style: voiceSettings.style ?? 0.35,
             use_speaker_boost: true,
           },
         }),
-        signal: AbortSignal.timeout(30_000),
+        signal: this._ttsAbort.signal,
       });
+      clearTimeout(timeout);
 
       if (!resp.ok) {
         console.warn(`${MODULE_ID} | ElevenLabs NPC speech error ${resp.status}`);
@@ -2174,43 +2174,137 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       return;
     }
 
-    for (const { actor, isPlayer } of actors) {
-      // Request mode: whisper to owning player to ask them to roll
-      if (rollMode === "request" && isPlayer) {
+    const labels   = rollType === "skill" ? TCC_SKILL_LABELS : TCC_ABILITY_LABELS;
+    const label    = labels[rollId] ?? rollId;
+    const typeLabel = rollType === "skill" ? "Skill Check"
+                    : rollType === "save"  ? "Saving Throw" : "Ability Check";
+
+    // ── Request mode: send roll-button card to each player ─────
+    if (rollMode === "request") {
+      for (const { actor, isPlayer } of actors) {
+        if (!isPlayer) continue;
         const ownerUser = game.users.find(u => !u.isGM && actor.testUserPermission(u, "OWNER"));
-        if (ownerUser) {
-          const labels = rollType === "skill" ? TCC_SKILL_LABELS : TCC_ABILITY_LABELS;
-          const label  = labels[rollId] ?? rollId;
-          const typeLabel = rollType === "skill" ? "Skill Check"
-                          : rollType === "save"  ? "Saving Throw" : "Ability Check";
-          await ChatMessage.create({
-            content: `<div class="ace-group-roll-request"><i class="fas fa-dice-d20"></i> <strong>${actor.name}</strong>, please roll a <strong>${label} ${typeLabel}</strong> (DC ${dc}).</div>`,
-            whisper: [ownerUser.id],
-            speaker: ChatMessage.getSpeaker({ alias: "ACE" }),
-          });
-          rolled++;
-        }
-        continue;
+        if (!ownerUser) continue;
+        const reqId = `tcc-req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const cardHtml =
+          `<div class="ace-subtle-request" style="background:#1c150e;border-left:4px solid #8a5bbf;` +
+          `border-radius:4px;padding:10px 12px;font-family:'IM Fell English','Palatino Linotype',serif;line-height:1.6;">` +
+          `<div style="color:#c4a8f0;font-weight:bold;font-size:1.05em;margin-bottom:6px;letter-spacing:0.5px;">` +
+          `<i class="fas fa-eye-slash" style="margin-right:4px;"></i> ${this._escapeHtml(typeLabel)}</div>` +
+          `<div style="font-style:italic;color:#eddfc5;margin-bottom:10px;">` +
+          `The GM calls for a <strong>${this._escapeHtml(label)}</strong> check.</div>` +
+          `<button class="ace-chat-btn" data-ace-btn="tcc-request-roll" ` +
+          `data-request-id="${reqId}" data-roll-type="${rollType}" data-roll-id="${rollId}" ` +
+          `data-actor-id="${actor.id}" ` +
+          `style="display:block;width:100%;padding:8px 12px;background:#18102a;` +
+          `border:1px solid #8a5bbf;border-radius:4px;color:#c4a8f0;cursor:pointer;` +
+          `font-family:inherit;font-size:1em;text-align:center;font-weight:bold;` +
+          `transition:all 0.2s;">` +
+          `<i class="fas fa-dice-d20" style="margin-right:6px;"></i>` +
+          `Roll ${this._escapeHtml(label)}</button>` +
+          `<div style="font-size:0.78em;color:#7a6042;margin-top:6px;text-align:center;">` +
+          `Select your token first, then click to roll.</div>` +
+          `</div>`;
+
+        await ChatMessage.create({
+          content: cardHtml,
+          speaker: { alias: "ACE" },
+          whisper: [ownerUser.id],
+          flags: {
+            "ace-engine": {
+              isTccRollRequest: true,
+              tccRequestId:    reqId,
+              tccRollType:     rollType,
+              tccRollId:       rollId,
+              tccDC:           dc,
+              tccActorId:      actor.id,
+            },
+          },
+        });
+        rolled++;
       }
-      // GM rolls directly (for NPCs always, or GM mode for everyone)
+      target.disabled = false;
+      ui.notifications?.info(`ACE: ${rolled} roll request${rolled !== 1 ? "s" : ""} sent.`);
+      return;
+    }
+
+    // ── GM Roll mode: silent roll, real dice GM, blind dice players, GM-only card ──
+    const gmResults = [];
+    for (const { actor, token } of actors) {
       try {
+        const displayName = token?.document?.name ?? token?.name ?? actor.prototypeToken?.name ?? actor.name;
+        const displayImg  = token?.document?.texture?.src ?? actor.prototypeToken?.texture?.src ?? actor.img;
+
+        // Get modifier based on roll type
+        let mod = 0;
         if (rollType === "skill") {
-          try { await actor.rollSkill({ skill: rollId }); }
-          catch { await actor.rollSkill(rollId); }  // v3 fallback
+          mod = actor.system?.skills?.[rollId]?.total ?? actor.system?.skills?.[rollId]?.mod ?? 0;
         } else if (rollType === "save") {
-          try { await actor.rollSavingThrow({ ability: rollId }); }
-          catch { await actor.rollSavingThrow(rollId); }
+          mod = actor.system?.abilities?.[rollId]?.save ?? 0;
         } else {
-          try { await actor.rollAbilityCheck({ ability: rollId }); }
-          catch { await actor.rollAbilityCheck(rollId); }
+          mod = actor.system?.abilities?.[rollId]?.mod ?? 0;
         }
+
+        // Roll silently — no chat message
+        const roll = await new Roll(`1d20 + ${mod}`).evaluate();
+
+        // Dice So Nice — GM sees real dice, players see blind "?" dice
+        if (game.dice3d) {
+          try {
+            await game.dice3d.showForRoll(roll, game.user, false, null, false, null, null);
+            await game.dice3d.showForRoll(roll, game.user, true, null, true, null, null, { ghost: true });
+          } catch (e) {
+            console.warn(`${MODULE_ID} | Dice So Nice roll failed:`, e);
+          }
+        }
+
+        const total   = roll.total;
+        const natural = roll.dice?.[0]?.total ?? total;
+        const passed  = total >= dc;
+
+        gmResults.push({ displayName, displayImg, total, natural, mod, passed });
         rolled++;
       } catch (err) {
-        console.error(`${MODULE_ID} | TCC group roll error for ${actor.name}:`, err);
+        console.error(`${MODULE_ID} | TCC GM roll error for ${actor.name}:`, err);
       }
     }
+
+    // Build GM-only results card
+    if (gmResults.length) {
+      const rows = gmResults.map(r => {
+        const passClass = r.passed ? "color:#4caf50;" : "color:#f44336;";
+        const passLabel = r.passed ? "PASS" : "FAIL";
+        const natTag    = r.natural === 20 ? ' <span style="color:#ffd700;font-weight:bold;">NAT 20</span>'
+                        : r.natural === 1  ? ' <span style="color:#f44336;font-weight:bold;">NAT 1</span>' : "";
+        return (
+          `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #2a2a2a;">` +
+          `<img src="${r.displayImg}" style="width:28px;height:28px;border-radius:50%;border:1px solid #555;" />` +
+          `<span style="flex:1;color:#eddfc5;">${this._escapeHtml(r.displayName)}</span>` +
+          `<span style="color:#aaa;font-size:0.85em;">${r.natural} + ${r.mod} = <strong style="color:#fff;">${r.total}</strong>${natTag}</span>` +
+          `<span style="font-weight:bold;font-size:0.9em;min-width:36px;text-align:center;${passClass}">${passLabel}</span>` +
+          `</div>`
+        );
+      }).join("");
+
+      const passCount = gmResults.filter(r => r.passed).length;
+      const cardHtml =
+        `<div class="ace-gm-roll-card" style="background:#1c150e;border-left:4px solid #c9a84c;` +
+        `border-radius:6px;padding:12px 14px;font-family:'Rajdhani','Segoe UI',sans-serif;line-height:1.5;">` +
+        `<div style="color:#c9a84c;font-weight:bold;font-size:1.05em;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">` +
+        `<i class="fas fa-dice-d20" style="margin-right:6px;"></i>${this._escapeHtml(label)} ${this._escapeHtml(typeLabel)} — DC ${dc}</div>` +
+        rows +
+        `<div style="text-align:right;color:#888;font-size:0.8em;margin-top:6px;">${passCount}/${gmResults.length} passed</div>` +
+        `</div>`;
+
+      await ChatMessage.create({
+        content: cardHtml,
+        speaker: { alias: "ACE" },
+        whisper: [game.user.id],
+      });
+    }
+
     target.disabled = false;
-    ui.notifications?.info(`ACE: ${rolled} roll${rolled !== 1 ? "s" : ""} ${rollMode === "request" ? "requested" : "executed"}.`);
+    ui.notifications?.info(`ACE: ${rolled} blind roll${rolled !== 1 ? "s" : ""} executed.`);
   }
 
   static async _onTccBulkCondition(event, target) {
@@ -2545,13 +2639,13 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       if (this._activeTab === "chat") input.focus();
     }
 
-    // Narration textarea — Enter sends to players
+    // Narration textarea — Enter adds newline (send via button only)
     const narInput = this.element.querySelector("#ace-narration-input");
     if (narInput) {
-      narInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          this._narrateSendMessage();
+      // Auto-stop mic when user starts typing manually
+      narInput.addEventListener("input", () => {
+        if (this._narrationListening) {
+          this._stopNarrationVoice();
         }
       });
       if (this._activeTab === "narration") narInput.focus();
@@ -2735,22 +2829,14 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     // Also kill standalone narration audio (broadcast TTS that bypasses panel)
     const api = game.modules.get("ace-engine")?.api;
     if (api?.stopAllAudio) api.stopAllAudio();
+    // Broadcast stop to ALL players so their audio stops too
+    game.socket.emit(`module.${MODULE_ID}`, {
+      type: "stop-audio",
+      userId: game.user.id,
+    });
   }
 
   // ── TTS Pause / Resume / Stop ────────────────────────────
-
-  static _onTtsToggle(event, target) {
-    if (this._ttsPlaying) {
-      this._pauseTTS();
-    } else if (this._ttsPaused) {
-      this._resumeTTS();
-    }
-  }
-
-  static _onTtsStop(event, target) {
-    this._cancelTTS();
-    this.stopSfx();
-  }
 
   // ── Digest Pause (library card button) ─────────────────────
 
@@ -3647,9 +3733,14 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     const textarea = this.element.querySelector("#ace-scene-desc");
     if (!textarea) return;
     const text = textarea.value.trim();
+    if (!text) {
+      ui.notifications.warn("ACE: Nothing to save — enter scene notes first.");
+      return;
+    }
     const current = scene.flags?.["ace-engine"]?.sceneDescription ?? "";
     if (text === current) {
-      ui.notifications.info(`ACE: Scene description unchanged.`);
+      ui.notifications.info(`ACE: Scene notes unchanged — already saved.`);
+      textarea.value = "";
       return;
     }
     target.disabled = true;
@@ -3658,7 +3749,20 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     this.scene?.refresh(); // clear scene context cache
     target.disabled = false;
     target.innerHTML = '<i class="fas fa-check"></i> Saved!';
-    ui.notifications.info(`ACE: "${scene.name}" scene description saved.`);
+    textarea.value = "";
+    // Update or add the saved-notes indicator
+    let savedDiv = this.element.querySelector(".ace-scene-desc-saved");
+    const preview = this._escapeHtml(text).slice(0, 200) + (text.length > 200 ? "..." : "");
+    const savedHtml = `<i class="fas fa-check-circle" style="color:#4caf50;margin-right:4px;"></i><strong>Saved notes:</strong> ${preview}`;
+    if (savedDiv) {
+      savedDiv.innerHTML = savedHtml;
+    } else {
+      savedDiv = document.createElement("div");
+      savedDiv.className = "ace-scene-desc-saved";
+      savedDiv.innerHTML = savedHtml;
+      textarea.parentNode.insertBefore(savedDiv, textarea);
+    }
+    ui.notifications.info(`ACE: Scene notes saved for "${scene.name}".`);
     setTimeout(() => {
       if (target) target.innerHTML = '<i class="fas fa-save"></i> Save';
     }, 2000);
@@ -3667,12 +3771,25 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
   static async _onClearSceneDesc(event, target) {
     const textarea = this.element.querySelector("#ace-scene-desc");
     if (textarea) textarea.value = "";
+    // Only clears the text area — does NOT delete saved notes from the scene
+  }
+
+  static async _onDeleteSceneDesc(event, target) {
     const scene = canvas?.scene;
-    if (scene) {
-      await scene.unsetFlag("ace-engine", "sceneDescription");
-      this.scene?.refresh();
-      ui.notifications.info(`ACE: "${scene.name}" scene notes cleared.`);
+    if (!scene) return;
+    const saved = scene.flags?.["ace-engine"]?.sceneDescription;
+    if (!saved) {
+      ui.notifications.info("ACE: No saved notes to delete.");
+      return;
     }
+    await scene.unsetFlag("ace-engine", "sceneDescription");
+    this.scene?.refresh();
+    // Clear textarea and remove saved indicator
+    const textarea = this.element.querySelector("#ace-scene-desc");
+    if (textarea) textarea.value = "";
+    const savedDiv = this.element.querySelector(".ace-scene-desc-saved");
+    if (savedDiv) savedDiv.remove();
+    ui.notifications.info(`ACE: Saved scene notes deleted for "${scene.name}".`);
   }
 
   // ── Encounter tab Actions ──────────────────────────────────
@@ -3928,11 +4045,13 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
    * No AI response — this is pure GM-to-players broadcast.
    */
   async _narrateSendMessage() {
-    // Stop mic FIRST so it doesn't keep writing to the textarea after we clear it
-    if (this._narrationListening) this._stopNarrationVoice();
-
+    // Read the textarea BEFORE stopping mic — user edits must be preserved
     const input = this.element.querySelector("#ace-narration-input");
     const text  = input?.value?.trim();
+
+    // Now stop mic (won't overwrite since we already captured the text)
+    if (this._narrationListening) this._stopNarrationVoice();
+
     if (!text || this._isNarrationStreaming) return;
 
     input.value = "";
@@ -4397,8 +4516,9 @@ Appropriate loot, XP, and story rewards.
 
   _stopNarrationVoice() {
     this._narrationListening = false;
-    // Null out handlers BEFORE .stop() to prevent late async onresult from
-    // writing the transcript back into the textarea after we've cleared it.
+
+    // Kill recognition FIRST — null handlers to prevent any late onresult
+    // from overwriting the textarea after we stop.
     if (this._narrationRecognition) {
       this._narrationRecognition.onresult = null;
       this._narrationRecognition.onend    = null;
@@ -4407,22 +4527,24 @@ Appropriate loot, XP, and story rewards.
     }
     this._narrationRecognition = null;
 
+    // Update mic button visual
     const micBtn = this.element?.querySelector('[data-action="narrationVoice"]');
-    const input  = this.element?.querySelector("#ace-narration-input");
-
     if (micBtn) {
       micBtn.innerHTML = '<i class="fas fa-microphone"></i>';
       micBtn.classList.remove("ace-btn-mic-active");
       micBtn.title = "Speak narration — fills textarea for review before sending";
     }
+
+    // Restore placeholder
+    const input = this.element?.querySelector("#ace-narration-input");
     if (input && this._narOrigPlaceholder) {
       input.placeholder = this._narOrigPlaceholder;
     }
 
-    // Commit any remaining final transcript to the input, with basic cleanup
-    if (input && this._narFinalTranscript) {
-      input.value = this._cleanupTranscript(this._narFinalTranscript);
-    }
+    // NEVER overwrite the textarea — whatever is in there is the user's text.
+    // The onresult handler already kept it updated during recording.
+    // If the user edited it manually, their edits are preserved.
+
     this._narFinalTranscript = "";
     this._narOrigPlaceholder = "";
   }
@@ -4680,6 +4802,13 @@ Appropriate loot, XP, and story rewards.
 
   async _speakElevenLabs(text, apiKey, gender = "male", broadcast = false) {
     // config.local.json takes priority; fall back to Settings, then hardcoded defaults
+    // ── Narrator voice override: if enabled + populated, use it for everything ──
+    let narratorOverride = "";
+    try {
+      const overrideOn = game.settings.get(MODULE_ID, "narratorVoiceOverrideEnabled");
+      if (overrideOn) narratorOverride = (game.settings.get(MODULE_ID, "narratorVoiceOverrideId") || "").trim();
+    } catch (_) {}
+
     const maleVoiceId =
       localCredentials?.elevenLabsVoiceId ||
       game.settings.get(MODULE_ID, "elevenLabsVoiceId") ||
@@ -4690,7 +4819,7 @@ Appropriate loot, XP, and story rewards.
     try { femaleVoiceId = game.settings.get(MODULE_ID, "elevenLabsFemaleVoiceId") || ""; } catch (_) {}
     if (!femaleVoiceId) femaleVoiceId = localCredentials?.elevenLabsFemaleVoiceId || "";
 
-    const voiceId = (gender === "female" && femaleVoiceId) ? femaleVoiceId : maleVoiceId;
+    const voiceId = narratorOverride || ((gender === "female" && femaleVoiceId) ? femaleVoiceId : maleVoiceId);
 
     const modelId =
       localCredentials?.elevenLabsModel ||
@@ -4702,6 +4831,10 @@ Appropriate loot, XP, and story rewards.
     }
 
     try {
+      // AbortController — lets _cancelTTS() kill in-flight fetches instantly
+      this._ttsAbort = new AbortController();
+      this._updateTtsUI();   // pulse the stop button immediately while fetching
+      const timeout = setTimeout(() => this._ttsAbort?.abort(), 30_000);
       const resp = await fetch(endpoint, {
         method:  "POST",
         headers: { "xi-api-key": apiKey, "Content-Type": "application/json", "Accept": "audio/mpeg" },
@@ -4710,8 +4843,9 @@ Appropriate loot, XP, and story rewards.
           model_id: modelId,
           voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.35, use_speaker_boost: true },
         }),
-        signal: AbortSignal.timeout(30_000),
+        signal: this._ttsAbort.signal,
       });
+      clearTimeout(timeout);
 
       if (!resp.ok) {
         const errBody = await resp.text().catch(() => "");
@@ -4972,6 +5106,11 @@ Appropriate loot, XP, and story rewards.
   }
 
   _cancelTTS() {
+    // Abort any in-flight ElevenLabs fetch first
+    if (this._ttsAbort) {
+      try { this._ttsAbort.abort(); } catch (_) {}
+      this._ttsAbort = null;
+    }
     if (this._ttsAudio) {
       this._ttsAudio.pause();
       this._ttsAudio.src = "";
@@ -4984,52 +5123,13 @@ Appropriate loot, XP, and story rewards.
     this._updateTtsUI();
   }
 
-  _pauseTTS() {
-    if (this._ttsAudio && !this._ttsAudio.paused) {
-      this._ttsAudio.pause();
-    }
-    if (window.speechSynthesis?.speaking && !window.speechSynthesis.paused) {
-      window.speechSynthesis.pause();
-    }
-    this._ttsPlaying = false;
-    this._ttsPaused = true;
-    this._updateTtsUI();
-    console.log(`${MODULE_ID} | TTS paused`);
-  }
-
-  _resumeTTS() {
-    if (this._ttsAudio?.paused) {
-      this._ttsAudio.play();
-    }
-    if (window.speechSynthesis?.paused) {
-      window.speechSynthesis.resume();
-    }
-    this._ttsPlaying = true;
-    this._ttsPaused = false;
-    this._updateTtsUI();
-    console.log(`${MODULE_ID} | TTS resumed`);
-  }
-
-  /** Targeted DOM update for TTS control buttons — no full re-render needed. */
+  /** Targeted DOM update for TTS stop button — toggles pulse when audio is active. */
   _updateTtsUI() {
-    const container = this.element?.querySelector("#ace-tts-controls");
-    if (!container) return;
-
-    if (this._ttsPlaying) {
-      container.innerHTML =
-        `<button class="ace-btn ace-btn-tts-main ace-tts-playing" data-action="ttsToggle"
-                 title="Pause narration"><i class="fas fa-pause"></i></button>`;
-    } else if (this._ttsPaused) {
-      container.innerHTML =
-        `<button class="ace-btn ace-btn-tts-main ace-tts-paused" data-action="ttsToggle"
-                 title="Resume narration"><i class="fas fa-play"></i></button>
-         <button class="ace-btn ace-btn-tts-stop" data-action="ttsStop"
-                 title="Stop narration"><i class="fas fa-stop"></i></button>`;
-    } else {
-      container.innerHTML =
-        `<button class="ace-btn ace-btn-tts-main" data-action="stopAudio"
-                 title="Stop all audio"><i class="fas fa-volume-mute"></i></button>`;
-    }
+    const btn = this.element?.querySelector("#ace-tts-controls .ace-btn-tts-main");
+    if (!btn) return;
+    const isActive = this._ttsPlaying || !!this._ttsAbort || !!this._ttsAudio
+      || window.speechSynthesis?.speaking;
+    btn.classList.toggle("ace-tts-active", isActive);
   }
 
   // ── Context stub ────────────────────────────────────────────

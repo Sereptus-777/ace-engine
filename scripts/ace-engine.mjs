@@ -473,6 +473,12 @@ Hooks.once("ready", async () => {
       }
     }
 
+    // ── Stop audio broadcast — GM told everyone to stop ─────────
+    if (data?.type === "stop-audio") {
+      if (data.userId && !game.users.get(data.userId)?.isGM) return; // GM-only
+      _stopAllAudio();
+    }
+
     // ── Narration audio broadcast (ElevenLabs quality) ────────────
     if (data?.type === "narration-audio" && data.audio) {
       if (data.userId === game.user.id) return;  // sender already plays locally
@@ -2165,6 +2171,7 @@ async function _aceHandleButton(btn) {
     case "subtle-pick":         return subtleRolls?.pickNarration(btn);
     case "subtle-send-request": return _handleSubtleSendRequest(btn);
     case "subtle-broadcast":    return _handleSubtleBroadcast(btn);
+    case "tcc-request-roll":    return _handleTccRequestRollClick(btn);
     default: console.warn(`${MODULE_ID} | Unknown ACE button type: "${btn.dataset.aceBtn}"`);
   }
 }
@@ -2560,6 +2567,127 @@ async function _handleSubtleRollClick(btn) {
     btn.disabled = false;
     btn.style.opacity = "1";
     Hooks.off("preCreateChatMessage", hookId); // Clean up hook on failure
+  }
+}
+
+/**
+ * Player clicks the Roll button on a TCC Request Roll card.
+ * Rolls blind — player sees "?" dice, GM gets the result whispered.
+ */
+async function _handleTccRequestRollClick(btn) {
+  const rollType = btn.dataset.rollType;   // "skill" | "save" | "check"
+  const rollId   = btn.dataset.rollId;     // e.g. "prc", "dex"
+  const actorId  = btn.dataset.actorId;
+
+  // Resolve actor
+  let actor = actorId ? game.actors?.get(actorId) : null;
+  if (!actor) {
+    // Fallback: use selected token
+    const token = canvas?.tokens?.controlled?.[0];
+    actor = token?.actor;
+  }
+  if (!actor) {
+    ui.notifications?.warn("ACE: Select your token first, then click to roll.");
+    return;
+  }
+
+  // Disable button immediately
+  btn.disabled      = true;
+  btn.textContent   = "Rolling...";
+  btn.style.opacity = "0.6";
+
+  try {
+    // Get modifier based on roll type
+    let mod = 0;
+    if (rollType === "skill") {
+      mod = actor.system?.skills?.[rollId]?.total ?? actor.system?.skills?.[rollId]?.mod ?? 0;
+    } else if (rollType === "save") {
+      mod = actor.system?.abilities?.[rollId]?.save ?? 0;
+    } else {
+      mod = actor.system?.abilities?.[rollId]?.mod ?? 0;
+    }
+
+    // Roll silently — no chat message
+    const roll = await new Roll(`1d20 + ${mod}`).evaluate();
+
+    // Dice So Nice — player sees blind "?" dice, GM sees real dice
+    if (game.dice3d) {
+      try {
+        // Player sees "?" dice locally (not synchronized, ghost shows "?" faces)
+        await game.dice3d.showForRoll(roll, game.user, false, null, false, null, null, { ghost: true });
+        // GM sees real dice (synchronized only to GM users, blind=true skips local player)
+        const gmUsers = game.users.filter(u => u.isGM).map(u => u.id);
+        if (gmUsers.length) {
+          await game.dice3d.showForRoll(roll, game.user, true, gmUsers, true, null, null);
+        }
+      } catch (e) {
+        console.warn(`${MODULE_ID} | Dice So Nice roll failed:`, e);
+      }
+    }
+
+    const total   = roll.total;
+    const natural = roll.dice?.[0]?.total ?? total;
+
+    // Find the original request message to get the DC (stored in flags, not shown to player)
+    const requestId = btn.dataset.requestId;
+    const origMsg   = requestId ? game.messages.contents.find(m =>
+      m.flags?.["ace-engine"]?.tccRequestId === requestId
+    ) : null;
+    const dc = origMsg?.flags?.["ace-engine"]?.tccDC ?? 15;
+
+    const passed   = total >= dc;
+    const passText = passed ? "PASS" : "FAIL";
+    const passColor = passed ? "#4caf50" : "#f44336";
+    const natTag   = natural === 20 ? ' <span style="color:#ffd700;font-weight:bold;">NAT 20</span>'
+                   : natural === 1  ? ' <span style="color:#f44336;font-weight:bold;">NAT 1</span>' : "";
+
+    const TCC_SKILL_LABELS = {
+      acr: "Acrobatics",  ani: "Animal Handling", arc: "Arcana",
+      ath: "Athletics",   dec: "Deception",       his: "History",
+      ins: "Insight",     itm: "Intimidation",    inv: "Investigation",
+      med: "Medicine",    nat: "Nature",          prc: "Perception",
+      prf: "Performance", per: "Persuasion",      rel: "Religion",
+      slt: "Sleight of Hand", ste: "Stealth",     sur: "Survival",
+    };
+    const TCC_ABILITY_LABELS = {
+      str: "Strength", dex: "Dexterity",     con: "Constitution",
+      int: "Intelligence", wis: "Wisdom",    cha: "Charisma",
+    };
+    const rollLabels = rollType === "skill" ? TCC_SKILL_LABELS : TCC_ABILITY_LABELS;
+    const label      = rollLabels[rollId] ?? rollId;
+    const typeLabel  = rollType === "skill" ? "Skill Check"
+                     : rollType === "save"  ? "Saving Throw" : "Ability Check";
+
+    // Send result to GM only
+    const gmCardHtml =
+      `<div class="ace-gm-roll-card" style="background:#1c150e;border-left:4px solid #c9a84c;` +
+      `border-radius:6px;padding:12px 14px;font-family:'Rajdhani','Segoe UI',sans-serif;line-height:1.5;">` +
+      `<div style="color:#c9a84c;font-weight:bold;font-size:1.05em;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">` +
+      `<i class="fas fa-dice-d20" style="margin-right:6px;"></i>${_escapeHtml(label)} ${_escapeHtml(typeLabel)} — DC ${dc}</div>` +
+      `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;">` +
+      `<img src="${actor.prototypeToken?.texture?.src ?? actor.img}" style="width:28px;height:28px;border-radius:50%;border:1px solid #555;" />` +
+      `<span style="flex:1;color:#eddfc5;">${_escapeHtml(actor.name)}</span>` +
+      `<span style="color:#aaa;font-size:0.85em;">${natural} + ${mod} = <strong style="color:#fff;">${total}</strong>${natTag}</span>` +
+      `<span style="font-weight:bold;font-size:0.9em;min-width:36px;text-align:center;color:${passColor};">${passText}</span>` +
+      `</div>` +
+      `</div>`;
+
+    // Find GM user to whisper to
+    const gmUser = game.users.find(u => u.isGM);
+    if (gmUser) {
+      await ChatMessage.create({
+        content: gmCardHtml,
+        speaker: { alias: "ACE" },
+        whisper: [gmUser.id],
+      });
+    }
+
+    btn.textContent = "Rolled!";
+  } catch (err) {
+    console.error(`${MODULE_ID} | TCC request roll failed:`, err);
+    btn.textContent = "Roll Failed";
+    btn.disabled = false;
+    btn.style.opacity = "1";
   }
 }
 

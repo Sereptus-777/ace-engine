@@ -315,6 +315,22 @@ export class AceSettings {
       default: "",
     });
 
+    s("narratorVoiceOverrideEnabled", {
+      scope: "client",
+      name: "Use Custom Narrator Voice ID",
+      hint: "Enable this to override the dropdown above with a custom ElevenLabs Voice ID for all narration.",
+      type: Boolean,
+      default: false,
+    });
+
+    s("narratorVoiceOverrideId", {
+      scope: "client",
+      name: "Custom Narrator Voice ID",
+      hint: "Paste any ElevenLabs Voice ID here. Only used when the checkbox above is enabled.",
+      type: String,
+      default: "",
+    });
+
     s("elevenLabsModel", {
       scope: "client",
       name: "ElevenLabs Model",
@@ -322,6 +338,7 @@ export class AceSettings {
       type: String,
       choices: {
         eleven_multilingual_v2: "Multilingual v2 (best quality)",
+        eleven_v3: "v3 (newest — best quality, stability clamped to 0/0.5/1)",
         eleven_turbo_v2_5: "Turbo v2.5 (fast, great quality)",
         eleven_flash_v2_5: "Flash v2.5 (fastest, lowest latency)",
         eleven_monolingual_v1: "Monolingual v1 (English only, classic)",
