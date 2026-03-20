@@ -208,6 +208,293 @@ function _playRumbleSynth() {
   }
 }
 
+/* ── Stealth Fail — twig snap / kicked rock / armor clank ── */
+
+const _stealthFailSounds = [
+  _synthTwigSnap,
+  _synthKickedRock,
+  _synthArmorClank,
+  _synthStumble,
+  _synthLoosePebbles,
+];
+
+export function triggerStealthFail() {
+  const fn = _stealthFailSounds[Math.floor(Math.random() * _stealthFailSounds.length)];
+  fn();
+}
+
+function _synthTwigSnap() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Sharp transient crack — very short burst of filtered noise
+    const dur = 0.08;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const env = Math.exp(-i / (d.length * 0.08));   // fast decay
+      d[i] = (Math.random() * 2 - 1) * env * 1.2;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass"; hp.frequency.value = 1800;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.7;
+    src.connect(hp).connect(gain).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  } catch (_) {}
+}
+
+function _synthKickedRock() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Short thud + scrape: low thump then gritty skitter
+    const dur = 0.25;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t = i / ctx.sampleRate;
+      const thud = Math.sin(t * 180 * Math.PI * 2) * Math.exp(-t * 30) * 0.6;
+      const scrape = (Math.random() * 2 - 1) * Math.max(0, t - 0.04) * Math.exp(-(t - 0.04) * 12) * 0.5;
+      d[i] = thud + scrape;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.6;
+    src.connect(gain).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  } catch (_) {}
+}
+
+function _synthArmorClank() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Metallic ping — two close sine bursts at harmonic frequencies
+    const dur = 0.3;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t = i / ctx.sampleRate;
+      const ping1 = Math.sin(t * 3200 * Math.PI * 2) * Math.exp(-t * 18) * 0.3;
+      const ping2 = Math.sin(t * 4800 * Math.PI * 2) * Math.exp(-t * 22) * 0.2;
+      const noise = (Math.random() * 2 - 1) * Math.exp(-t * 25) * 0.15;
+      d[i] = ping1 + ping2 + noise;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.5;
+    src.connect(gain).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  } catch (_) {}
+}
+
+function _synthStumble() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Two thuds in quick succession — a foot catching then hitting
+    const dur = 0.35;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t = i / ctx.sampleRate;
+      const thud1 = Math.sin(t * 120 * Math.PI * 2) * Math.exp(-t * 20) * 0.5;
+      const t2 = Math.max(0, t - 0.12);
+      const thud2 = Math.sin(t2 * 90 * Math.PI * 2) * Math.exp(-t2 * 15) * 0.7;
+      const dirt = (Math.random() * 2 - 1) * Math.exp(-t * 8) * 0.15;
+      d[i] = thud1 + (t > 0.12 ? thud2 : 0) + dirt;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 600;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.65;
+    src.connect(lp).connect(gain).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  } catch (_) {}
+}
+
+function _synthLoosePebbles() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Rapid sequence of tiny clicks — like pebbles skittering
+    const dur = 0.4;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    const clicks = [0.0, 0.04, 0.07, 0.11, 0.16, 0.22, 0.30];
+    for (let i = 0; i < d.length; i++) {
+      const t = i / ctx.sampleRate;
+      let val = 0;
+      for (const ct of clicks) {
+        const dt = t - ct;
+        if (dt >= 0 && dt < 0.02) {
+          val += (Math.random() * 2 - 1) * Math.exp(-dt * 200) * (0.3 + Math.random() * 0.3);
+        }
+      }
+      d[i] = val;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.frequency.value = 2500; bp.Q.value = 0.8;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.55;
+    src.connect(bp).connect(gain).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  } catch (_) {}
+}
+
+/* ── Perception Pass — faint rustle / distant footstep / whisper / creak ── */
+
+const _perceptionPassSounds = [
+  _synthFaintRustle,
+  _synthDistantFootstep,
+  _synthEerieCreak,
+  _synthWhisper,
+  _synthBreathingClose,
+];
+
+export function triggerPerceptionPass() {
+  const fn = _perceptionPassSounds[Math.floor(Math.random() * _perceptionPassSounds.length)];
+  fn();
+}
+
+function _synthFaintRustle() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Soft filtered noise that swells and fades — leaves rustling
+    const dur = 0.8;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t = i / ctx.sampleRate;
+      const env = Math.sin(t / dur * Math.PI) * 0.3;  // gentle swell
+      d[i] = (Math.random() * 2 - 1) * env;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.frequency.value = 3000; bp.Q.value = 0.5;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.25;
+    src.connect(bp).connect(gain).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  } catch (_) {}
+}
+
+function _synthDistantFootstep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Single muffled thump — like a boot on dirt, far away
+    const dur = 0.3;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t = i / ctx.sampleRate;
+      const thud = Math.sin(t * 60 * Math.PI * 2) * Math.exp(-t * 12) * 0.4;
+      const ground = (Math.random() * 2 - 1) * Math.exp(-t * 10) * 0.08;
+      d[i] = thud + ground;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 300;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.3;
+    src.connect(lp).connect(gain).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  } catch (_) {}
+}
+
+function _synthEerieCreak() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Slow frequency sweep — like old wood groaning
+    const dur = 0.6;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t = i / ctx.sampleRate;
+      const freq = 400 + Math.sin(t * 8) * 200;   // wobbling frequency
+      const env = Math.sin(t / dur * Math.PI) * 0.25;
+      d[i] = Math.sin(t * freq * Math.PI * 2) * env * 0.15 + (Math.random() * 2 - 1) * env * 0.1;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.frequency.value = 500; bp.Q.value = 2;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.3;
+    src.connect(bp).connect(gain).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  } catch (_) {}
+}
+
+function _synthWhisper() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Breathy noise shaped like speech cadence — unsettling whisper
+    const dur = 1.0;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t = i / ctx.sampleRate;
+      // Pulsing envelope simulates syllables
+      const syllable = Math.sin(t * 6 * Math.PI * 2) * 0.3 + 0.7;
+      const env = Math.sin(t / dur * Math.PI);
+      d[i] = (Math.random() * 2 - 1) * env * syllable * 0.2;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.frequency.value = 2000; bp.Q.value = 1;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.2;
+    src.connect(bp).connect(gain).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  } catch (_) {}
+}
+
+function _synthBreathingClose() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Two slow breaths — filtered noise with rhythmic envelope
+    const dur = 1.4;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t = i / ctx.sampleRate;
+      // Two breath cycles
+      const breath1 = t < 0.6 ? Math.sin(t / 0.6 * Math.PI) : 0;
+      const breath2 = t > 0.7 && t < 1.3 ? Math.sin((t - 0.7) / 0.6 * Math.PI) : 0;
+      const env = (breath1 + breath2) * 0.2;
+      d[i] = (Math.random() * 2 - 1) * env;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 1200;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass"; hp.frequency.value = 200;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.25;
+    src.connect(lp).connect(hp).connect(gain).connect(ctx.destination);
+    src.start();
+    src.onended = () => ctx.close().catch(() => {});
+  } catch (_) {}
+}
+
 /* ── Stop all ────────────────────────────────────────────── */
 
 export function stopAllSfx() {

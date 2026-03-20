@@ -21,17 +21,24 @@ export class NpcMemoryReader {
   }
 
   getAllMemories(maxTokens = 2000) {
-    // Try ace-envoy API first
+    // Try ace-envoy API first — use getRecentConversationSummaries for all NPCs
     const envoy = game.modules.get("ace-envoy")?.active
       ? game.modules.get("ace-envoy").api : null;
-    if (envoy?.getConversationHistory) {
+    if (envoy?.getRecentConversationSummaries) {
       try {
-        const history = envoy.getConversationHistory();
-        if (history) {
-          // Enforce maxTokens limit (≈4 chars per token)
+        const summaries = envoy.getRecentConversationSummaries(false); // all NPCs, not scene-only
+        if (summaries?.length) {
+          const lines = ["### NPC Memories"];
+          let charCount = 0;
           const charLimit = maxTokens * 4;
-          if (history.length > charLimit) return history.slice(0, charLimit);
-          return history;
+          for (const s of summaries) {
+            const recent = (s.exchanges || []).map(e => `${e.role}: ${e.content}`).join("\n");
+            const block = `\n**${s.npcName}:**\n${recent}`;
+            if (charCount + block.length > charLimit) break;
+            lines.push(block);
+            charCount += block.length;
+          }
+          if (lines.length > 1) return lines.join("\n");
         }
       } catch { /* fall through to journal reader */ }
     }
@@ -56,10 +63,16 @@ export class NpcMemoryReader {
   getMemoryFor(npcName) {
     const envoy = game.modules.get("ace-envoy")?.active
       ? game.modules.get("ace-envoy").api : null;
-    if (envoy?.getNpcProfile) {
+    if (envoy?.getNpcPersonality) {
       try {
-        const profile = envoy.getNpcProfile(npcName);
-        if (profile) return profile;
+        const profile = envoy.getNpcPersonality(npcName);
+        if (profile) {
+          // Format the profile object into a readable string
+          const parts = [];
+          if (profile.personality) parts.push(`Personality: ${profile.personality}`);
+          if (profile.secretLore)  parts.push(`Knowledge: ${profile.secretLore}`);
+          return parts.join("\n") || "";
+        }
       } catch { /* fall through */ }
     }
 
@@ -80,13 +93,19 @@ export class NpcMemoryReader {
     const envoy = game.modules.get("ace-envoy")?.active
       ? game.modules.get("ace-envoy").api : null;
     const coveredNames = new Set();
-    if (envoy?.getNpcProfile) {
+    if (envoy?.getNpcPersonality) {
       for (const name of sceneTokenNames) {
         try {
-          const profile = envoy.getNpcProfile(name);
+          const profile = envoy.getNpcPersonality(name);
           if (profile) {
-            memories.push({ npcName: name, content: profile });
-            coveredNames.add(name);
+            const parts = [];
+            if (profile.personality) parts.push(`Personality: ${profile.personality}`);
+            if (profile.secretLore)  parts.push(`Knowledge: ${profile.secretLore}`);
+            const content = parts.join("\n");
+            if (content) {
+              memories.push({ npcName: name, content });
+              coveredNames.add(name);
+            }
           }
         } catch { /* skip */ }
       }

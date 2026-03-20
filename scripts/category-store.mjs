@@ -518,6 +518,16 @@ export class PcStore extends CategoryStore {
         crits: 0,
         fumbles: 0,
         deaths: 0,
+        hits: 0,
+        misses: 0,
+        damageDealt: 0,
+        damageTaken: 0,
+        healingDone: 0,
+        timesKO: 0,
+        deathSavePass: 0,
+        deathSaveFail: 0,
+        sessions: 0,
+        highestHit: 0,
         scenes: [],
         relationships: {},
         notes: [],
@@ -941,8 +951,8 @@ export class WorldStore extends CategoryStore {
 
 // ── History Store ───────────────────────────────────────────
 
-const MAX_EVENTS  = 5000;
-const PRUNE_COUNT = 1000;
+const MAX_EVENTS  = 1000000;
+const PRUNE_COUNT = 10000;
 
 export class HistoryStore extends CategoryStore {
   constructor() { super("history", "ace-history.json"); }
@@ -988,9 +998,20 @@ export class HistoryStore extends CategoryStore {
   push(partial) {
     const event = { t: Math.floor(Date.now() / 1000), ...partial };
     this._data.events.push(event);
-    if (this._data.events.length > MAX_EVENTS) {
+    // Warn GM when approaching the event cap (90% threshold)
+    const count = this._data.events.length;
+    if (count === Math.floor(MAX_EVENTS * 0.9)) {
+      console.warn(`${MODULE_ID} | ⚠️ Event history at 90% capacity (${count.toLocaleString()} / ${MAX_EVENTS.toLocaleString()})`);
+      if (game.user?.isGM) {
+        ui.notifications?.warn(`ACE Engine: Event history reaching capacity (${count.toLocaleString()} / ${MAX_EVENTS.toLocaleString()}). Oldest events will be pruned soon.`, { permanent: true });
+      }
+    }
+    if (count > MAX_EVENTS) {
       this._data.events.splice(0, PRUNE_COUNT);
       console.log(`${MODULE_ID} | history: pruned ${PRUNE_COUNT} oldest events.`);
+      if (game.user?.isGM) {
+        ui.notifications?.info(`ACE Engine: Pruned ${PRUNE_COUNT.toLocaleString()} oldest events to free space.`);
+      }
     }
     this._dirty = true;
     return event;

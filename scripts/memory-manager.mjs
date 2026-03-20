@@ -381,6 +381,89 @@ export class MemoryManager {
     if (pc) this.writePcJournal(pc.actorId).catch(() => {});
   }
 
+  /**
+   * Log an attack hit or miss for a PC.
+   * @param {{ actorName: string, hit: boolean, damage: number, weaponName: string|null }} opts
+   */
+  logAttackResult({ actorName, hit, damage = 0, weaponName = null } = {}) {
+    const pc = this._findPcByName(actorName);
+    if (!pc) return;
+    if (hit) {
+      pc.hits = (pc.hits ?? 0) + 1;
+      if (damage > 0) {
+        pc.damageDealt = (pc.damageDealt ?? 0) + damage;
+        if (damage > (pc.highestHit ?? 0)) pc.highestHit = damage;
+      }
+    } else {
+      pc.misses = (pc.misses ?? 0) + 1;
+    }
+    this.pcs.markDirty();
+    this._scheduleSaves(["pcs"]);
+  }
+
+  /**
+   * Log HP damage taken by a PC.
+   * @param {{ actorName: string, amount: number }} opts
+   */
+  logDamageTaken({ actorName, amount } = {}) {
+    if (!amount || amount <= 0) return;
+    const pc = this._findPcByName(actorName);
+    if (!pc) return;
+    pc.damageTaken = (pc.damageTaken ?? 0) + amount;
+    this.pcs.markDirty();
+    this._scheduleSaves(["pcs"]);
+  }
+
+  /**
+   * Log healing done by a PC (to any target).
+   * @param {{ actorName: string, amount: number }} opts
+   */
+  logHealing({ actorName, amount } = {}) {
+    if (!amount || amount <= 0) return;
+    const pc = this._findPcByName(actorName);
+    if (!pc) return;
+    pc.healingDone = (pc.healingDone ?? 0) + amount;
+    this.pcs.markDirty();
+    this._scheduleSaves(["pcs"]);
+  }
+
+  /**
+   * Log a PC being knocked to 0 HP.
+   * @param {{ actorName: string }} opts
+   */
+  logKnockout({ actorName } = {}) {
+    const pc = this._findPcByName(actorName);
+    if (!pc) return;
+    pc.timesKO = (pc.timesKO ?? 0) + 1;
+    this.pcs.markDirty();
+    this._scheduleSaves(["pcs"]);
+  }
+
+  /**
+   * Log a death save result for a PC.
+   * @param {{ actorName: string, success: boolean }} opts
+   */
+  logDeathSave({ actorName, success } = {}) {
+    const pc = this._findPcByName(actorName);
+    if (!pc) return;
+    if (success) pc.deathSavePass = (pc.deathSavePass ?? 0) + 1;
+    else         pc.deathSaveFail = (pc.deathSaveFail ?? 0) + 1;
+    this.pcs.markDirty();
+    this._scheduleSaves(["pcs"]);
+  }
+
+  /**
+   * Increment session count for a PC.
+   * @param {{ actorName: string }} opts
+   */
+  logSession({ actorName } = {}) {
+    const pc = this._findPcByName(actorName);
+    if (!pc) return;
+    pc.sessions = (pc.sessions ?? 0) + 1;
+    this.pcs.markDirty();
+    this._scheduleSaves(["pcs"]);
+  }
+
   /** Log a scene transition. Fan-out: history, scenes, tiles (location) */
   logSceneChange(fromScene, toScene) {
     this.history.push({
@@ -800,6 +883,97 @@ export class MemoryManager {
   }
 
   /**
+   * Get the next session number based on existing records.
+   */
+  getNextSessionNum() {
+    const lastSession = this.world.getLastSession();
+    return (lastSession?.num ?? 0) + 1;
+  }
+
+  /**
+   * Generate a retroactive session summary from events on a specific date.
+   * @param {string} dateStr  ISO date like "2026-03-10"
+   * @param {object} aiProvider  AI provider instance
+   * @param {object} sceneCtx    Scene context (optional)
+   * @param {Function} onChunk   Streaming callback (optional)
+   * @returns {string} The generated summary text
+   */
+  async generateRetroactiveSummary(dateStr, aiProvider, sceneCtx = null, onChunk = null) {
+    // Filter events by date
+    const targetDate = dateStr; // "2026-03-10"
+    const allEvents = this.history.getAll();
+    const dayEvents = allEvents.filter(e => {
+      if (!e.t) return false;
+      return new Date(e.t * 1000).toISOString().slice(0, 10) === targetDate;
+    });
+
+    if (!dayEvents.length) {
+      throw new Error(`No events found for ${dateStr}`);
+    }
+
+    // Build digest from those events
+    const digest = dayEvents.map(e => this.history.eventToText(e)).filter(Boolean).join("\n");
+    const narrations = dayEvents.filter(e => e.k === "narration").map(e => e.txt).filter(Boolean).join("\n- ");
+
+    // Extract party names from events (actors mentioned in combat, kills, crits)
+    const partyNamesSet = new Set();
+    for (const e of dayEvents) {
+      if (e.p && Array.isArray(e.p)) e.p.forEach(n => partyNamesSet.add(n));
+      if (e.a) {
+        const actor = game.actors?.find(a => a.name === e.a && a.hasPlayerOwner);
+        if (actor) partyNamesSet.add(e.a);
+      }
+    }
+    const partyNames = partyNamesSet.size > 0
+      ? [...partyNamesSet].join(", ")
+      : (game.actors?.filter(a => a.hasPlayerOwner && a.type === "character") ?? []).map(a => a.name).join(", ");
+
+    // Extract scene names mentioned
+    const sceneNames = [...new Set(dayEvents.filter(e => e.s).map(e => e.s))];
+    const sceneLabel = sceneNames.length ? sceneNames.join(", ") : "unknown";
+
+    const prompt = `You are ACE, the AI Campaign Engine chronicler for a tabletop RPG campaign.
+
+Based on these events from a session on ${targetDate}, write a concise session summary (3-5 paragraphs) suitable for a campaign journal. Write in past tense, third person. Focus on dramatic moments, character decisions, and story beats — not every mechanical detail.
+
+**Scenes visited:** ${sceneLabel}
+**Party:** ${partyNames || "unknown"}
+
+**Events this session:**
+${digest}
+
+${narrations ? `**Narrations sent to players:**\n- ${narrations}` : ""}
+
+Write the session summary now. Be vivid but concise — this is a campaign journal entry, not a transcript.`;
+
+    let summary = "";
+    try {
+      const sceneContext = sceneCtx?.gatherCompact?.() ?? "";
+      if (onChunk) {
+        await aiProvider.chatStream(prompt, sceneContext, "", [], (chunk) => {
+          summary += chunk;
+          onChunk(chunk);
+        });
+      } else {
+        summary = await aiProvider.chat(prompt, sceneContext);
+      }
+    } catch (err) {
+      console.error(`${MODULE_ID} | generateRetroactiveSummary failed:`, err);
+      summary = `Session summary could not be generated. Events: ${digest.slice(0, 500)}`;
+    }
+
+    return { summary: summary.trim(), sceneLabel, partyNames };
+  }
+
+  /**
+   * Check if there are unsaved events (events since the last session_summary marker).
+   * @returns {number} Number of unsaved events
+   */
+  getUnsavedEventCount() {
+    return this.getEventsSinceLastSummary().length;
+  }
+
+  /**
    * Ask the AI to generate a session summary.
    */
   async generateSessionSummary(aiProvider, sceneCtx, onChunk = null) {
@@ -1117,7 +1291,42 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
    * @param {string} npcName - Display name of the NPC
    * @param {string} [content] - Optional raw content override. If omitted, auto-generates from store.
    */
+  /**
+   * Check if an NPC qualifies for a sidebar journal entry.
+   * Criteria: linked actor in this world, OR 2+ encounters, OR among the 20 most recent.
+   */
+  _isNpcJournalWorthy(npcName) {
+    const rec = this.npcs.getRecord(npcName);
+    if (!rec) return false;
+
+    // Linked actors always qualify
+    if (rec.actorId) {
+      const actor = game.actors?.get(rec.actorId);
+      if (actor?.prototypeToken?.actorLink) return true;
+    }
+    // Also check by name — some linked actors might not have actorId stored
+    const actorByName = game.actors?.find(a => a.name === rec.displayName && a.prototypeToken?.actorLink);
+    if (actorByName) return true;
+
+    // 2+ encounters always qualify
+    if ((rec.met ?? 0) >= 2) return true;
+
+    // Check if among the 20 most recent NPCs (by lastSeen timestamp)
+    const allNpcs = this.npcs.getAll()
+      .filter(r => r.displayName)
+      .sort((a, b) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
+    const top20 = allNpcs.slice(0, 20);
+    return top20.some(r => r.displayName?.toLowerCase() === rec.displayName?.toLowerCase());
+  }
+
   async writeNpcJournal(npcName, content) {
+    // Only write to sidebar journal if this NPC qualifies
+    // (All NPC data is always kept in ace-npcs.json regardless)
+    if (!content && !this._isNpcJournalWorthy(npcName)) {
+      console.debug(`${MODULE_ID} | Skipping NPC journal for "${npcName}" — not journal-worthy (data preserved in JSON).`);
+      return;
+    }
+
     try {
       const folder = await this._getAceSubfolder(ACE_SUB_NPC);
       const journal = await this._getOrCreateJournal(folder, npcName);
@@ -1133,6 +1342,34 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       console.debug(`${MODULE_ID} | Journal: wrote NPC "${npcName}"`);
     } catch (err) {
       console.error(`${MODULE_ID} | writeNpcJournal failed:`, err);
+    }
+  }
+
+  /**
+   * Clean up NPC journal entries that no longer qualify for the sidebar.
+   * Removes journals for NPCs that aren't linked, have < 2 encounters,
+   * and aren't in the top 20 most recent. Data stays in ace-npcs.json.
+   */
+  async pruneNpcJournals() {
+    try {
+      const folder = await this._getAceSubfolder(ACE_SUB_NPC);
+      const journals = game.journal?.filter(j => j.folder?.id === folder.id) ?? [];
+      let removed = 0;
+
+      for (const journal of journals) {
+        if (!this._isNpcJournalWorthy(journal.name)) {
+          await journal.delete();
+          removed++;
+        }
+      }
+
+      if (removed > 0) {
+        console.log(`${MODULE_ID} | Pruned ${removed} NPC journal(s) from sidebar (data preserved in JSON).`);
+      }
+      return removed;
+    } catch (err) {
+      console.error(`${MODULE_ID} | pruneNpcJournals failed:`, err);
+      return 0;
     }
   }
 
@@ -1231,8 +1468,14 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
     if (rec.class || rec.level) {
       lines.push(`<p><b>Class:</b> ${rec.class || "?"} &nbsp; | &nbsp; <b>Level:</b> ${rec.level || "?"}</p>`);
     }
-    lines.push(`<p><b>Kills:</b> ${rec.kills ?? 0} &nbsp; | &nbsp; <b>Crits:</b> ${rec.crits ?? 0} &nbsp; | &nbsp; <b>Fumbles:</b> ${rec.fumbles ?? 0} &nbsp; | &nbsp; <b>Deaths:</b> ${rec.deaths ?? 0}</p>`);
-    lines.push(`<p><b>First seen:</b> ${rec.firstSeen ? new Date(rec.firstSeen * 1000).toLocaleDateString() : "?"} &nbsp; | &nbsp; <b>Last seen:</b> ${rec.lastSeen ? new Date(rec.lastSeen * 1000).toLocaleDateString() : "?"}</p>`);
+    // Combat stats
+    lines.push(`<h3>⚔️ Combat Career</h3>`);
+    lines.push(`<p><b>Hits:</b> ${rec.hits ?? 0} &nbsp; | &nbsp; <b>Misses:</b> ${rec.misses ?? 0} &nbsp; | &nbsp; <b>Accuracy:</b> ${(rec.hits ?? 0) + (rec.misses ?? 0) > 0 ? Math.round(((rec.hits ?? 0) / ((rec.hits ?? 0) + (rec.misses ?? 0))) * 100) : 0}%</p>`);
+    lines.push(`<p><b>Damage Dealt:</b> ${rec.damageDealt ?? 0} HP &nbsp; | &nbsp; <b>Highest Single Hit:</b> ${rec.highestHit ?? 0} HP</p>`);
+    lines.push(`<p><b>Damage Taken:</b> ${rec.damageTaken ?? 0} HP &nbsp; | &nbsp; <b>Healing Done:</b> ${rec.healingDone ?? 0} HP</p>`);
+    lines.push(`<p><b>Kills:</b> ${rec.kills ?? 0} &nbsp; | &nbsp; <b>Crits:</b> ${rec.crits ?? 0} &nbsp; | &nbsp; <b>Fumbles:</b> ${rec.fumbles ?? 0}</p>`);
+    lines.push(`<p><b>Times KO'd:</b> ${rec.timesKO ?? 0} &nbsp; | &nbsp; <b>Deaths:</b> ${rec.deaths ?? 0} &nbsp; | &nbsp; <b>Death Saves:</b> ${rec.deathSavePass ?? 0}✓ / ${rec.deathSaveFail ?? 0}✗</p>`);
+    lines.push(`<p><b>Sessions:</b> ${rec.sessions ?? 0} &nbsp; | &nbsp; <b>First seen:</b> ${rec.firstSeen ? new Date(rec.firstSeen * 1000).toLocaleDateString() : "?"} &nbsp; | &nbsp; <b>Last seen:</b> ${rec.lastSeen ? new Date(rec.lastSeen * 1000).toLocaleDateString() : "?"}</p>`);
 
     // Scenes
     if (rec.scenes?.length) {
@@ -1346,6 +1589,10 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       await this._writeSessionJournal(sess);
       count++;
     }
+
+    // Prune NPC journals that no longer qualify for the sidebar
+    const pruned = await this.pruneNpcJournals();
+    if (pruned) console.log(`${MODULE_ID} | Pruned ${pruned} old NPC journal(s) from sidebar.`);
 
     console.log(`${MODULE_ID} | Journal sync complete — ${count} entries written.`);
     return count;

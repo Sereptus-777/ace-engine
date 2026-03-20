@@ -28,25 +28,32 @@ export class AiProvider {
    * @param {Array} [history]
    * @returns {Promise<string>}
    */
-  async chat(userMessage, sceneContext = "", npcMemory = "", history = [], images = []) {
+  async chat(userMessage, sceneContext = "", npcMemory = "", history = [], images = [], options = {}) {
+    if (options.maxTokens) this._maxTokensOverride = options.maxTokens;
+    if (options.timeout) this._timeoutOverride = options.timeout;
     let messages = this._buildMessages(userMessage, sceneContext, npcMemory, history);
     messages = this._applyVisionImages(messages, images);
 
-    switch (this.config.provider) {
-      case "ollama":
-        return this._chatOllama(messages);
-      case "lmstudio":
-        return this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`);
-      case "openai":
-        return this._chatOpenAICompat(messages, "https://api.openai.com/v1/chat/completions");
-      case "openrouter":
-        return this._chatOpenAICompat(messages, "https://openrouter.ai/api/v1/chat/completions");
-      case "anthropic":
-        return this._chatAnthropic(messages);
-      case "custom":
-        return this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`);
-      default:
-        throw new Error(`Unknown AI provider: ${this.config.provider}`);
+    try {
+      switch (this.config.provider) {
+        case "ollama":
+          return await this._chatOllama(messages);
+        case "lmstudio":
+          return await this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`);
+        case "openai":
+          return await this._chatOpenAICompat(messages, "https://api.openai.com/v1/chat/completions");
+        case "openrouter":
+          return await this._chatOpenAICompat(messages, "https://openrouter.ai/api/v1/chat/completions");
+        case "anthropic":
+          return await this._chatAnthropic(messages);
+        case "custom":
+          return await this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`);
+        default:
+          throw new Error(`Unknown AI provider: ${this.config.provider}`);
+      }
+    } finally {
+      this._maxTokensOverride = null;
+      this._timeoutOverride = null;
     }
   }
 
@@ -248,6 +255,8 @@ When suggesting these features, be natural — weave them into your advice. For 
   }
 
   _maxTokens() {
+    // Per-call override takes precedence (set by chat()/chatStream() options)
+    if (this._maxTokensOverride) return this._maxTokensOverride;
     try { return game.settings.get(MODULE_ID, "maxResponseTokens"); }
     catch { return 2048; }
   }
@@ -403,7 +412,8 @@ When suggesting these features, be natural — weave them into your advice. For 
   async _chatAnthropic(messages) {
     const system = messages.find((m) => m.role === "system")?.content ?? "";
     const chatMessages = this._mergeConsecutiveRoles(messages.filter((m) => m.role !== "system"));
-    const baseUrl = this.config.apiUrl || "https://api.anthropic.com";
+    // Always use Anthropic's URL — don't inherit apiUrl which may be set to another provider
+    const baseUrl = "https://api.anthropic.com";
 
     const resp = await this._safeFetch(`${baseUrl}/v1/messages`, {
       method: "POST",
@@ -428,7 +438,8 @@ When suggesting these features, be natural — weave them into your advice. For 
   async _streamAnthropic(messages, onChunk) {
     const system = messages.find((m) => m.role === "system")?.content ?? "";
     const chatMessages = this._mergeConsecutiveRoles(messages.filter((m) => m.role !== "system"));
-    const baseUrl = this.config.apiUrl || "https://api.anthropic.com";
+    // Always use Anthropic's URL — don't inherit apiUrl which may be set to another provider
+    const baseUrl = "https://api.anthropic.com";
 
     const resp = await this._safeFetch(`${baseUrl}/v1/messages`, {
       method: "POST",
@@ -517,8 +528,10 @@ When suggesting these features, be natural — weave them into your advice. For 
    */
   async _safeFetch(url, options, providerName) {
     try {
-      // Add a timeout to prevent hung connections (90s for AI streams that can be slow)
-      if (!options.signal) options.signal = AbortSignal.timeout(90_000);
+      // Add a timeout to prevent hung connections
+      // Use extended timeout (5min) for large generation calls, 90s for normal
+      const timeoutMs = this._timeoutOverride ?? 90_000;
+      if (!options.signal) options.signal = AbortSignal.timeout(timeoutMs);
       return await fetch(url, options);
     } catch (fetchErr) {
       const origin = window.location.origin;

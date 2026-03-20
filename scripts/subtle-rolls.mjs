@@ -1,9 +1,10 @@
 // ============================================================
 // ACE — AI Campaign Engine — Subtle Rolls System
-// Blind skill checks with AI-generated narration options.
-// The player rolls blind, the GM sees the result, and the AI
-// generates 3 narration options (including misinformation on
-// Natural 1s). The GM picks one to deliver to the player.
+// Blind skill checks with AI-generated narration.
+// The GM rolls blind for selected tokens, sees the actual
+// results on a consolidated card, and the AI generates one
+// narration per actor (including misinformation on Natural 1s).
+// The GM clicks "Broadcast" to send each narration to everyone.
 // ============================================================
 
 import { MODULE_ID } from "./ace-engine.mjs";
@@ -18,11 +19,38 @@ const SKILL_LABELS = {
   slt: "Sleight of Hand", ste: "Stealth",       sur: "Survival",
 };
 
-// ── AI Prompt: Generate 3 narrations from a blind roll ──────
-const NARRATION_PROMPT = `You are a vivid, immersive D&D narrator. A player just made a BLIND skill check — they cannot see their own roll result. Based on the outcome, write exactly 3 narration options the GM can choose from. Each narration is delivered to the player as what their character perceives or learns.
+// ── Skill → Ability mapping (for condition-based adv/disadv) ─
+const SKILL_ABILITY = {
+  acr: "dex", ani: "wis", arc: "int", ath: "str", dec: "cha",
+  his: "int", ins: "wis", itm: "cha", inv: "int", med: "wis",
+  nat: "int", prc: "wis", prf: "cha", per: "cha", rel: "int",
+  slt: "dex", ste: "dex", sur: "wis",
+};
+
+// ── Conditions that grant disadvantage on ability checks ─────
+// dnd5e conditions stored in actor.statuses (Set of string IDs)
+const DISADV_CONDITIONS = new Set([
+  "poisoned",    // disadv on all ability checks
+  "frightened",  // disadv on all ability checks while source in sight
+  "exhaustion",  // level 1+ = disadv on ability checks (dnd5e 2014)
+]);
+
+// Conditions that grant disadvantage only on certain ability checks
+const DISADV_DEX_CONDITIONS = new Set([
+  "restrained",  // disadv on Dex checks
+  "prone",       // (usually attack rolls, but some GMs apply to Dex checks)
+]);
+
+// Conditions that grant disadvantage on Perception (sight-based)
+const DISADV_PERCEPTION = new Set([
+  "blinded",     // disadv on Perception checks that rely on sight
+]);
+
+// ── AI Prompt: Generate ONE narration from a blind roll ──────
+const NARRATION_PROMPT = `You are a vivid, immersive D&D narrator. A player just made a BLIND skill check — they cannot see their own roll result. Based on the outcome, write a single narration paragraph that the GM will read aloud to ALL players.
 
 ## ROLL DETAILS
-- Character: {actorName}
+- Character: {actorName} ({actorRace} {actorClass})
 - Skill: {skillLabel} ({skillId})
 - DC: {dc}
 - Roll Total: {total} (Natural d20: {natural})
@@ -34,24 +62,45 @@ const NARRATION_PROMPT = `You are a vivid, immersive D&D narrator. A player just
 ## NPC / SITUATION CONTEXT
 {npcContext}
 
+## CRITICAL — STAY ON SKILL
+Your narration MUST be about the specific skill being used. Do NOT generate unrelated lore, secrets, or information that has nothing to do with the skill check.
+
+**What each skill is about:**
+- **Perception** — noticing things with your senses (seeing, hearing, smelling). NOT recalling knowledge.
+- **Insight** — reading a person's intentions, detecting lies, social intuition. ONLY about people.
+- **Investigation** — examining objects, searching rooms, deductive reasoning about physical things.
+- **Arcana** — recalling knowledge about magic, spells, magical creatures, planes of existence.
+- **History** — recalling knowledge about historical events, people, wars, kingdoms, legends.
+- **Religion** — recalling knowledge about deities, rites, prayers, holy symbols, undead.
+- **Nature** — recalling knowledge about terrain, plants, animals, weather, natural cycles.
+- **Medicine** — assessing wounds, diagnosing illness/poison, stabilizing the dying, examining bodies. ONLY medical things.
+- **Survival** — tracking creatures, navigating wilderness, finding food/water, predicting weather.
+- **Wisdom Save** — resisting charm, fear, psychic effects. The character's mental fortitude.
+- **Intelligence Save** — resisting illusions, psychic intrusion, mental manipulation.
+
 ## NARRATION RULES BY OUTCOME
 
 **Natural 1 (Critical Failure — MISINFORMATION):**
-The character is CONFIDENT but COMPLETELY WRONG. Write narrations where the character firmly believes false information. The falsehoods should be plausible enough that the player cannot tell they were lied to. Do NOT hint that the information is wrong — present it as fact.
+The character is CONFIDENT but COMPLETELY WRONG about the specific thing the skill covers. A Medicine Nat 1 means a wrong medical diagnosis — NOT revealing unrelated secrets. An Insight Nat 1 means misreading a person's intentions — NOT recalling wrong lore. The falsehood must be plausible and skill-appropriate. Do NOT hint that the information is wrong — present it as absolute fact. This is the entire point of a subtle roll.
 
 **Failed (rolled below DC, but not Nat 1):**
-The character gains little useful information. Narrations should be vague, uncertain, or incomplete. Missing by 1-2 gives a faint impression; missing by 5+ gives almost nothing.
+The character gains little useful information about what the skill covers. Narration should be vague, uncertain, or incomplete. Missing by 1-2 gives a faint impression; missing by 5+ gives almost nothing.
 
 **Passed (met or exceeded DC, but not Nat 20):**
-The character gains accurate, useful information. Beating DC by 1-2 gives basic truth; beating by 5+ gives richer detail. Be specific to the current scene and NPCs.
+The character gains accurate, useful information relevant to the skill. Beating DC by 1-2 gives basic truth; beating by 5+ gives richer detail. Be specific to the current scene and NPCs.
 
 **Natural 20 (Critical Success):**
-The character gains exceptional, vivid insight — sharp, specific details others would miss. Make it feel rewarding.
+The character gains exceptional, vivid insight about the skill's domain — sharp, specific details others would miss. Make it dramatic and rewarding.
+
+## PERSPECTIVE RULES — CRITICAL
+- Describe the PLAYER CHARACTER's experience in SECOND PERSON: "You notice...", "You sense...", "You feel..."
+- Describe NPCs in THIRD PERSON: "The guard crosses his arms", NOT "I cross my arms" or "my face"
+- NEVER use first person ("I", "my", "me") — the narration is read aloud BY the GM TO the players
+- NPC actions use their name or "he/she/they": "{actorName} narrows their eyes" NOT "narrows my eyes"
 
 ## OUTPUT FORMAT
-Respond ONLY as a JSON array of exactly 3 strings. Each string is a standalone narration paragraph (2-4 sentences, second person). Vary the tone and detail level across the three options.
-
-["First narration option...", "Second narration option...", "Third narration option..."]`;
+{lengthInstruction}
+No JSON, no quotes, no preamble — just the narration text.`;
 
 // ── AI Prompt: Detect when rolls should happen ──────────────
 const DETECTION_PROMPT = `You are an expert D&D Game Master assistant analyzing the current scene for moments where players should make BLIND skill checks. These checks prevent metagaming — the player should NOT see the result.
@@ -69,13 +118,20 @@ const DETECTION_PROMPT = `You are an expert D&D Game Master assistant analyzing 
 Only suggest these skills: {enabledSkills}
 
 ## RULES
-- Only suggest a roll when the situation CLEARLY warrants it right now
-- Perception: hidden enemies, traps, secret doors, ambushes
-- Insight: NPC lying or hiding motives, social deception in active conversation
-- Investigation: examining objects, searching rooms, finding clues
-- Arcana/History/Religion/Nature: identifying magical effects, recalling lore relevant to what is happening NOW
-- Medicine: diagnosing poison, disease, or unusual death
-- Survival: tracking, finding paths, sensing weather danger
+- ONLY suggest rolls for PLAYER CHARACTERS — never for NPCs, monsters, or enemies
+- ONLY suggest a roll when something CONCRETE and VERIFIABLE is happening right now:
+  - A known trap exists on the scene (listed above)
+  - An NPC is actively lying or hiding motives in a live conversation (listed above)
+  - A specific game element (token, tile, item) on the scene warrants examination
+- Do NOT invent dangers, ambushes, traps, or threats that are not listed in the scene data above
+- Do NOT speculate about what MIGHT be happening — only react to what IS happening
+- If the scene data and conversation context don't contain a clear trigger, return []
+- Perception: ONLY if a known trap/hidden token is on the scene
+- Insight: ONLY if an NPC is actively in conversation and has reason to deceive
+- Investigation: ONLY if a specific object/room feature is described in the scene
+- Arcana/History/Religion/Nature: ONLY if a specific magical effect or creature is present
+- Medicine: ONLY if someone is visibly injured, poisoned, or dead on scene
+- Survival: ONLY if the party is actively traveling or lost
 - Do NOT suggest rolls for things already resolved, obvious, or purely combat-related
 - Maximum 2 suggestions at a time
 - Name the SPECIFIC player character who should roll
@@ -115,6 +171,46 @@ export class SubtleRollManager {
     return `sr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  // ── Advantage / Disadvantage auto-detection ────────────────
+  // Returns "advantage", "disadvantage", or "normal" based on
+  // the actor's active conditions and the skill being rolled.
+  _detectAdvantage(actor, skill) {
+    const statuses = actor?.statuses;  // Set<string> in dnd5e
+    if (!statuses?.size) return "normal";
+
+    let hasAdv = false;
+    let hasDisadv = false;
+    const ability = SKILL_ABILITY[skill] ?? "";
+
+    // Universal disadvantage conditions
+    for (const cond of DISADV_CONDITIONS) {
+      if (statuses.has(cond)) hasDisadv = true;
+    }
+
+    // Dex-specific disadvantage
+    if (ability === "dex") {
+      for (const cond of DISADV_DEX_CONDITIONS) {
+        if (statuses.has(cond)) hasDisadv = true;
+      }
+    }
+
+    // Perception-specific (blinded)
+    if (skill === "prc") {
+      for (const cond of DISADV_PERCEPTION) {
+        if (statuses.has(cond)) hasDisadv = true;
+      }
+    }
+
+    // Invisible grants advantage on Stealth
+    if (skill === "ste" && statuses.has("invisible")) hasAdv = true;
+
+    // Adv + disadv cancel out
+    if (hasAdv && hasDisadv) return "normal";
+    if (hasAdv) return "advantage";
+    if (hasDisadv) return "disadvantage";
+    return "normal";
+  }
+
   // ────────────────────────────────────────────────────────────
   // BATCH — GM rolls all selected tokens, one consolidated card
   // ────────────────────────────────────────────────────────────
@@ -129,36 +225,56 @@ export class SubtleRollManager {
       const displayImg  = token?.document?.texture?.src ?? actor.prototypeToken?.texture?.src ?? actor.img;
 
       try {
+        // ── Advantage / Disadvantage auto-detection ───────────────
+        const advState = this._detectAdvantage(actor, skill);
+        const diceExpr = advState === "advantage"    ? "2d20kh1"
+                       : advState === "disadvantage" ? "2d20kl1"
+                       :                              "1d20";
+
         // Roll silently — no chat message
-        const roll = await new Roll("1d20 + @mod", {
+        const roll = await new Roll(`${diceExpr} + @mod`, {
           mod: actor.system?.skills?.[skill]?.total
             ?? actor.system?.skills?.[skill]?.mod
             ?? 0,
         }).evaluate();
 
-        // ── Dice So Nice: blind 3D animation — players see dice but faces show "?" ──
+        // ── Dice So Nice ──────────────────────────────────────────
+        // 1. GM sees the REAL dice result (local only, not synchronized)
+        // 2. Players see secret "?" dice (synchronized, secret flag hides faces)
+        //
+        // showForRoll signature (Dice So Nice v4+):
+        //   showForRoll(roll, user, synchronize, users, blind, messageId, speaker, options)
+        //   - blind:  skips LOCAL animation (sender doesn't see dice)
+        //   - secret: via options {secret:true} — shows "?" faces on receiving clients
+        // Dice So Nice — GM only, never sent to players (truly blind)
         if (game.dice3d) {
           try {
-            // showForRoll(roll, user, synchronize, whisperTo, blind, chatMessageId)
-            // synchronize=true → all clients see it, blind=true → result hidden (? faces)
-            await game.dice3d.showForRoll(roll, game.user, true, null, true, null);
+            await game.dice3d.showForRoll(roll, game.user, false, null, false, null, null);
           } catch (e) {
-            console.warn(`${MODULE_ID} | Dice So Nice blind roll failed:`, e);
+            console.warn(`${MODULE_ID} | Dice So Nice roll failed:`, e);
           }
         }
 
         const total   = roll.total;
-        const natural = roll.dice?.[0]?.total ?? roll.terms?.[0]?.results?.[0]?.result ?? total;
+        // For 2d20kh/kl, the "kept" die is the active one
+        const natural = roll.dice?.[0]?.total ?? roll.terms?.[0]?.results?.find(r => r.active)?.result ?? total;
+
+        // Extract race/class for AI narration context
+        const race  = actor.system?.details?.race?.name ?? actor.system?.details?.race ?? "";
+        const cls   = actor.system?.details?.class ?? actor.items?.find(i => i.type === "class")?.name ?? "";
 
         results.push({
           actorName: displayName,
           actorImg:  displayImg,
+          actorRace: typeof race === "string" ? race : "",
+          actorClass: cls,
           total,
           natural,
           modifier: total - natural,
           passed:   total >= dc,
           isNat1:   natural === 1,
           isNat20:  natural === 20,
+          advState, // "advantage", "disadvantage", or "normal"
         });
       } catch (err) {
         console.error(`${MODULE_ID} | Subtle batch roll error for ${displayName}:`, err);
@@ -172,9 +288,9 @@ export class SubtleRollManager {
       }
     }
 
-    // Build & post one consolidated GM-only card
+    // Build & post one consolidated GM-only card (without narrations yet)
     const cardHtml = this._buildConsolidatedCard(skillLabel, dc, flavor, results);
-    await ChatMessage.create({
+    const chatMsg = await ChatMessage.create({
       content: cardHtml,
       speaker: { alias: "ACE" },
       whisper: [game.user.id],
@@ -182,80 +298,69 @@ export class SubtleRollManager {
     });
 
     // Log to memory
-    const summary = results.map(r =>
-      `${r.actorName}: ${r.total} ${r.passed ? "PASS" : "FAIL"}`
-    ).join(", ");
+    const summary = results.map(r => {
+      const adv = r.advState === "advantage" ? " [ADV]" : r.advState === "disadvantage" ? " [DIS]" : "";
+      return `${r.actorName}: ${r.total}${adv} ${r.passed ? "PASS" : "FAIL"}`;
+    }).join(", ");
     this.aceMem?.logNote?.(`Subtle Batch Roll (${skillLabel} DC ${dc}): ${summary}`);
 
-    // ── AI narration for Nat 20 / Nat 1 crits ──────────────────
-    const crits = results.filter(r => r.isNat20 || r.isNat1);
-    if (crits.length && this.ai) {
-      this._generateCritNarrations(skillLabel, dc, flavor, crits);  // fire-and-forget
+    // ── AI narration for EVERY result — appended to the card ──
+    if (this.ai) {
+      this._generateAllNarrations(skillLabel, skill, dc, flavor, results, chatMsg);  // fire-and-forget
     }
 
     return results;
   }
 
   // ────────────────────────────────────────────────────────────
-  // AI narration for critical results (Nat 20 / Nat 1)
-  // Posts a GM-only card with narration the GM can copy to Narration tab
+  // AI narration for ALL results — one per actor, appended to
+  // the consolidated card. GM clicks "Broadcast" to send to all.
   // ────────────────────────────────────────────────────────────
 
-  async _generateCritNarrations(skillLabel, dc, flavor, crits) {
+  async _generateAllNarrations(skillLabel, skill, dc, flavor, results, chatMsg) {
     const sceneCtx = this.scene?.gatherCompact?.() ?? "";
+    const npcMem   = this.memory?.getSceneNpcMemories?.() ?? "";
+    const narrations = [];
 
-    for (const crit of crits) {
-      const type = crit.isNat20 ? "NATURAL 20 — Critical Success" : "NATURAL 1 — Critical Failure";
-      const prompt =
-        `You are a vivid D&D narrator. A blind ${skillLabel} check (DC ${dc}) just produced a critical result.\n\n` +
-        `Character: ${crit.actorName}\n` +
-        `Result: ${type} (rolled ${crit.natural}, total ${crit.total})\n` +
-        `GM context: ${flavor || "No additional context."}\n\n` +
-        `Scene: ${sceneCtx || "No scene data."}\n\n` +
-        (crit.isNat20
-          ? `Write a vivid 2-3 sentence narration describing what this character perceives or discovers — exceptional insight, ` +
-            `a crucial detail others would miss. Second person, present tense. Make it dramatic and rewarding.`
-          : `Write a vivid 2-3 sentence narration of confident MISINFORMATION — the character is certain but completely wrong. ` +
-            `The falsehood should be plausible. Do NOT hint that it's wrong. Second person, present tense.`
-        );
+    for (const r of results) {
+      if (r.error) { narrations.push({ ...r, narration: "" }); continue; }
+
+      const resultCategory = this._categorizeResult(r.natural, r.total, dc);
+      const lengthPref = this._getNarrationLength();
+      const prompt = NARRATION_PROMPT
+        .replace("{actorName}",      r.actorName)
+        .replace("{actorRace}",      r.actorRace || "unknown race")
+        .replace("{actorClass}",     r.actorClass || "adventurer")
+        .replace("{skillLabel}",     skillLabel)
+        .replace("{skillId}",        skill)
+        .replace("{dc}",             dc)
+        .replace("{total}",          r.total)
+        .replace("{natural}",        r.natural)
+        .replace("{resultCategory}", resultCategory)
+        .replace("{lengthInstruction}", lengthPref)
+        .replace("{sceneContext}",   sceneCtx || "No scene data available.")
+        .replace("{npcContext}",     npcMem   || "No NPC context available.");
 
       try {
-        const narration = await this.ai.chat(prompt, "", "", []);
-
-        const color = crit.isNat20 ? "#c9a84c" : "#c43b3b";
-        const icon  = crit.isNat20 ? "fa-star"  : "fa-skull";
-        const label = crit.isNat20 ? "CRITICAL SUCCESS" : "CRITICAL FAILURE";
-
-        const cardHtml =
-          `<div class="ace-subtle-crit-narration" style="background:#1c150e;border-left:4px solid ${color};` +
-          `border-radius:4px;padding:10px 12px;font-family:'Rajdhani','Segoe UI',sans-serif;line-height:1.5;">` +
-          // Header
-          `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">` +
-          `<img src="${crit.actorImg}" style="width:28px;height:28px;border-radius:50%;border:1px solid ${color};object-fit:cover;" />` +
-          `<span style="color:${color};font-weight:bold;font-size:0.95em;">` +
-          `<i class="fas ${icon}" style="margin-right:4px;"></i>` +
-          `${_escapeHtml(crit.actorName)} — ${label}</span></div>` +
-          // Skill + roll
-          `<div style="color:#9a9890;font-size:0.82em;margin-bottom:8px;">` +
-          `${_escapeHtml(skillLabel)} — d20: ${crit.natural} + ${crit.modifier} = ${crit.total} vs DC ${dc}</div>` +
-          // AI narration
-          `<div style="font-style:italic;color:#eddfc5;font-size:0.95em;padding:8px;` +
-          `background:${color}15;border:1px solid ${color}33;border-radius:3px;">` +
-          `"${_escapeHtml(narration.trim())}"</div>` +
-          // Hint for GM
-          `<div style="font-size:0.75em;color:#555;margin-top:6px;text-align:center;">` +
-          `Copy this narration to the <strong>Narration tab</strong> to read aloud to the player.</div>` +
-          `</div>`;
-
-        await ChatMessage.create({
-          content: cardHtml,
-          speaker: { alias: "ACE" },
-          whisper: [game.user.id],
-          flags:   { "ace-engine": { isSubtleCritNarration: true } },
-        });
+        let narration = await this.ai.chat(prompt, "", "", []);
+        // Strip any accidental JSON wrapping, quotes, or markdown
+        narration = narration.replace(/```[a-z]*\s*/g, "").replace(/```\s*/g, "").trim();
+        narration = narration.replace(/^\[?"?|"?\]?$/g, "").trim();
+        narrations.push({ ...r, narration });
       } catch (err) {
-        console.error(`${MODULE_ID} | Crit narration failed for ${crit.actorName}:`, err);
+        console.error(`${MODULE_ID} | Narration failed for ${r.actorName}:`, err);
+        // Use fallback narration
+        const fb = this._fallbackNarrations(resultCategory, skillLabel, r.actorName);
+        narrations.push({ ...r, narration: fb[0] });
       }
+    }
+
+    // Rebuild the card with narrations appended
+    const updatedHtml = this._buildConsolidatedCard(skillLabel, dc, flavor, results, narrations);
+    try {
+      await chatMsg.update({ content: updatedHtml });
+    } catch (err) {
+      console.error(`${MODULE_ID} | Failed to update consolidated card:`, err);
     }
   }
 
@@ -394,17 +499,14 @@ export class SubtleRollManager {
     const actorName    = f.subtleActorName ?? "Unknown";
     const skillLabel   = f.subtleSkillLabel ?? "Skill Check";
 
-    // "Send to all players" checkbox
-    const card      = btn.closest(".ace-subtle-picker");
-    const sendToAll = card?.querySelector(".ace-subtle-sendall")?.checked ?? false;
+    const card = btn.closest(".ace-subtle-picker");
 
-    // Build and deliver narration
+    // Build and deliver narration — always public (everyone hears it)
     const deliveryHtml = this._buildNarrationDeliveryCard(actorName, skillLabel, narration);
 
     await ChatMessage.create({
       content:  deliveryHtml,
       speaker:  { alias: "ACE" },
-      whisper:  sendToAll ? undefined : [targetUserId],
       flags:    { "ace-engine": { isSubtleNarration: true, subtleRequestId: requestId } },
     });
 
@@ -417,41 +519,54 @@ export class SubtleRollManager {
     btn.style.opacity     = "1";
     btn.style.borderColor = "#c9a84c";
 
-    // ── TTS broadcast via socket ─────────────────────────────
+    // ── TTS broadcast via socket — everyone hears it ────────
     game.socket.emit(`module.${MODULE_ID}`, {
       type:         "subtle-narration-tts",
       text:         narration,
-      targetUserId: sendToAll ? null : targetUserId,
+      targetUserId: null,  // null = all players
     });
 
     // ── Log to persistent memory ─────────────────────────────
     this.aceMem?.logNote?.(`Subtle Roll: ${actorName} — ${skillLabel}: "${narration}"`);
 
-    console.log(`${MODULE_ID} | Subtle Roll: delivered ${skillLabel} narration to ${sendToAll ? "all" : actorName}`);
+    console.log(`${MODULE_ID} | Subtle Roll: broadcast ${skillLabel} narration for ${actorName} to all players`);
   }
 
   // ────────────────────────────────────────────────────────────
   // AI — Generate 3 narrations for a blind roll result
   // ────────────────────────────────────────────────────────────
 
-  async generateNarrations({ skill, skillLabel, dc, total, natural, actorName, resultCategory }) {
+  async generateNarrations({ skill, skillLabel, dc, total, natural, actorName, actorRace, actorClass, resultCategory }) {
     const sceneCtx = this.scene?.gatherCompact?.() ?? "";
     const npcMem   = this.memory?.getSceneNpcMemories?.() ?? "";
+    const lengthPref = this._getNarrationLength();
 
     const prompt = NARRATION_PROMPT
       .replace("{actorName}",       actorName)
+      .replace("{actorRace}",       actorRace || "unknown race")
+      .replace("{actorClass}",      actorClass || "adventurer")
       .replace("{skillLabel}",      skillLabel)
       .replace("{skillId}",         skill)
       .replace("{dc}",              dc)
       .replace("{total}",           total)
       .replace("{natural}",         natural)
       .replace("{resultCategory}",  resultCategory)
+      .replace("{lengthInstruction}", lengthPref)
       .replace("{sceneContext}",    sceneCtx || "No scene data available.")
       .replace("{npcContext}",      npcMem   || "No NPC context available.");
 
     try {
-      const response = await this.ai.chat(prompt, "", "", []);
-      return this._parseNarrations(response);
+      let response = await this.ai.chat(prompt, "", "", []);
+      // New prompt returns plain text, not JSON — but handle both gracefully
+      response = response.replace(/```[a-z]*\s*/g, "").replace(/```\s*/g, "").trim();
+      // If the AI still returned a JSON array, parse it
+      if (response.startsWith("[")) {
+        const arr = this._parseNarrations(response);
+        if (arr.length) return arr;
+      }
+      // Otherwise treat as a single narration string
+      response = response.replace(/^\[?"?|"?\]?$/g, "").trim();
+      return response ? [response] : this._fallbackNarrations(resultCategory, skillLabel, actorName);
     } catch (err) {
       console.error(`${MODULE_ID} | Subtle Roll narration failed:`, err);
       return this._fallbackNarrations(resultCategory, skillLabel, actorName);
@@ -516,13 +631,19 @@ export class SubtleRollManager {
         .replace("{enabledSkills}", enabledList.map(s => `${s} (${SKILL_LABELS[s] ?? s})`).join(", "));
 
       const response    = await this.ai.chat(prompt, "", "", []);
-      const suggestions = this._parseDetections(response);
+      const raw         = this._parseDetections(response);
+
+      // Hard filter: only player characters, never NPCs
+      const suggestions = raw.filter(s => {
+        const actor = game.actors.getName(s.actorName);
+        return actor?.hasPlayerOwner && actor.type === "character";
+      });
 
       if (suggestions.length) {
         this._notify({ type: "rollSuggestions", suggestions });
-        // Also post a GM-only card for each suggestion
+        // Show a dismissable popup for each suggestion (not in chat)
         for (const s of suggestions) {
-          await this._postDetectionCard(s);
+          this._showDetectionPopup(s);
         }
       }
       return suggestions;
@@ -532,38 +653,114 @@ export class SubtleRollManager {
     }
   }
 
-  async _postDetectionCard(suggestion) {
+  /**
+   * Show a small floating popup in the top-right corner for a
+   * subtle-roll suggestion. Auto-dismisses after 20s.
+   * GM can press Enter, Escape, or click Dismiss to close.
+   */
+  _showDetectionPopup(suggestion) {
     const skillLabel = SKILL_LABELS[suggestion.skill] ?? suggestion.skill;
-
-    // Find the actor + owning user
     const actor = game.actors.getName(suggestion.actorName);
     const owner = actor ? game.users.find(u => !u.isGM && actor.testUserPermission(u, "OWNER")) : null;
 
-    const html =
-      `<div class="ace-subtle-detection" style="background:#1c150e;border-left:4px solid #8a5bbf;` +
-      `border-radius:4px;padding:10px 12px;font-family:'IM Fell English','Palatino Linotype',serif;line-height:1.6;">` +
-      `<div style="color:#c4a8f0;font-weight:bold;font-size:0.95em;margin-bottom:4px;">` +
-      `<i class="fas fa-brain" style="margin-right:4px;"></i> Subtle Roll Suggestion</div>` +
-      `<div style="color:#eddfc5;margin-bottom:6px;">` +
-      `<strong>${suggestion.actorName}</strong> should make a ` +
-      `<strong style="color:#c4a8f0;">${skillLabel}</strong> check (DC ${suggestion.dc})</div>` +
-      `<div style="font-size:0.85em;color:#9a9890;font-style:italic;margin-bottom:8px;">` +
-      `${suggestion.reason}</div>` +
-      `<button class="ace-chat-btn" data-ace-btn="subtle-send-request" ` +
-      `data-skill="${suggestion.skill}" data-dc="${suggestion.dc}" ` +
+    // Remove any existing popup (only one at a time)
+    document.getElementById("ace-subtle-popup")?.remove();
+
+    const popup = document.createElement("div");
+    popup.id = "ace-subtle-popup";
+    popup.setAttribute("tabindex", "0");
+    popup.innerHTML =
+      `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">` +
+      `<span style="color:#c4a8f0;font-weight:bold;font-size:0.9em;">` +
+      `<i class="fas fa-brain" style="margin-right:4px;"></i>Subtle Roll Suggestion</span>` +
+      `<button id="ace-subtle-popup-dismiss" style="background:none;border:none;color:#888;` +
+      `cursor:pointer;font-size:1.1em;padding:0 2px;" title="Dismiss (Enter/Esc)">✕</button>` +
+      `</div>` +
+      `<div style="color:#e0ddd8;margin-bottom:4px;font-size:0.88em;">` +
+      `<strong>${_escapeHtml(suggestion.actorName)}</strong> → ` +
+      `<strong style="color:#c4a8f0;">${_escapeHtml(skillLabel)}</strong> DC ${suggestion.dc}</div>` +
+      `<div style="font-size:0.8em;color:#9a9890;font-style:italic;margin-bottom:8px;">` +
+      `${_escapeHtml(suggestion.reason)}</div>` +
+      `<div style="display:flex;gap:6px;">` +
+      `<button id="ace-subtle-popup-send" data-skill="${suggestion.skill}" data-dc="${suggestion.dc}" ` +
       `data-actor-id="${actor?.id ?? ""}" data-user-id="${owner?.id ?? ""}" ` +
       `data-flavor="${_encodeAttr(suggestion.flavor)}" ` +
-      `style="display:block;width:100%;padding:7px 10px;background:#18102a;` +
-      `border:1px solid #8a5bbf;border-radius:4px;color:#c4a8f0;cursor:pointer;` +
-      `font-family:inherit;font-size:0.95em;text-align:center;font-weight:bold;">` +
-      `<i class="fas fa-paper-plane" style="margin-right:6px;"></i>Send Roll Request</button>` +
+      `style="flex:1;padding:5px 8px;background:#18102a;border:1px solid #8a5bbf;border-radius:3px;` +
+      `color:#c4a8f0;cursor:pointer;font-family:inherit;font-size:0.85em;font-weight:bold;">` +
+      `<i class="fas fa-paper-plane" style="margin-right:4px;"></i>Send</button>` +
+      `<button id="ace-subtle-popup-close" style="flex:1;padding:5px 8px;background:#222;` +
+      `border:1px solid #555;border-radius:3px;color:#ccc;cursor:pointer;font-family:inherit;` +
+      `font-size:0.85em;font-weight:bold;">Dismiss</button>` +
       `</div>`;
 
-    await ChatMessage.create({
-      content: html,
-      speaker: { alias: "ACE" },
-      whisper: [game.user.id],
-      flags:   { "ace-engine": { isSubtleDetection: true } },
+    // Styles — slides in from right edge, docks beside sidebar
+    const sidebar = document.getElementById("sidebar");
+    const sidebarRight = sidebar ? (window.innerWidth - sidebar.getBoundingClientRect().left + 8) : 320;
+    Object.assign(popup.style, {
+      position: "fixed",
+      top: "80px",
+      right: `${sidebarRight}px`,
+      width: "300px",
+      background: "#1c150e",
+      border: "1px solid #8a5bbf",
+      borderLeft: "4px solid #8a5bbf",
+      borderRadius: "6px",
+      padding: "12px 14px",
+      fontFamily: "'Rajdhani', 'Segoe UI', sans-serif",
+      lineHeight: "1.5",
+      zIndex: "10000",
+      boxShadow: "0 4px 20px rgba(0,0,0,0.7)",
+      transform: "translateX(100%)",
+      opacity: "0",
+      transition: "transform 0.35s ease, opacity 0.35s ease",
+    });
+
+    document.body.appendChild(popup);
+    // Trigger slide-in on next frame
+    requestAnimationFrame(() => {
+      popup.style.transform = "translateX(0)";
+      popup.style.opacity = "1";
+      popup.focus();
+    });
+
+    // Dismiss handler — slides out to the right
+    const dismiss = () => {
+      popup.style.transform = "translateX(100%)";
+      popup.style.opacity = "0";
+      setTimeout(() => popup.remove(), 350);
+      document.removeEventListener("keydown", onKey);
+    };
+
+    // No auto-dismiss timer — only replaced when a new suggestion arrives
+
+    // Close on Escape, Enter, or button click
+    const onKey = (e) => {
+      if (e.key === "Escape" || e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        dismiss();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+
+    popup.querySelector("#ace-subtle-popup-dismiss")?.addEventListener("click", dismiss);
+    popup.querySelector("#ace-subtle-popup-close")?.addEventListener("click", dismiss);
+
+    // Send button — triggers roll request and dismisses
+    popup.querySelector("#ace-subtle-popup-send")?.addEventListener("click", (e) => {
+      const btn = e.currentTarget;
+      const skill = btn.dataset.skill;
+      const dc = parseInt(btn.dataset.dc) || 15;
+      const actorId = btn.dataset.actorId;
+      const userId = btn.dataset.userId;
+      const flavor = btn.dataset.flavor || "The DM calls for a check...";
+
+      if (actorId && userId) {
+        this.requestRoll({ targetUserId: userId, actorId, skill, dc, flavor });
+      } else {
+        ui.notifications?.warn("ACE: Cannot send roll — actor or player not found.");
+      }
+      dismiss();
     });
   }
 
@@ -596,6 +793,25 @@ export class SubtleRollManager {
     if (total >= dc)     return `Success (beat DC by ${total - dc})`;
     if (total >= dc - 2) return `Near Miss (missed DC by ${dc - total})`;
     return `Failure (missed DC by ${dc - total})`;
+  }
+
+  /**
+   * Get narration length instruction based on user setting.
+   * Returns the instruction string to inject into the AI prompt.
+   */
+  _getNarrationLength() {
+    let pref = "short";
+    try { pref = game.settings.get(MODULE_ID, "subtleNarrationLength") || "short"; } catch (_) {}
+    switch (pref) {
+      case "short":
+        return "Respond with ONLY 1 sentence (15-25 words max). Be vivid but extremely concise.";
+      case "medium":
+        return "Respond with ONLY 2 sentences (30-50 words max). Be vivid but concise.";
+      case "long":
+        return "Respond with a single narration paragraph (3-5 sentences, 60-100 words). Be vivid and immersive.";
+      default:
+        return "Respond with ONLY 1 sentence (15-25 words max). Be vivid but extremely concise.";
+    }
   }
 
   // ────────────────────────────────────────────────────────────
@@ -639,21 +855,15 @@ export class SubtleRollManager {
     if (resultCategory.includes("Misinformation")) {
       return [
         `${actorName} is absolutely certain about what they perceive. There is nothing unusual here at all — everything is exactly as it appears.`,
-        `After careful consideration, ${actorName} feels completely confident in their assessment. They recall a detail that confirms their initial impression.`,
-        `${actorName}'s ${skillLabel.toLowerCase()} tells them this situation is straightforward. They feel no need for further scrutiny.`,
       ];
     }
     if (resultCategory.includes("Success") || resultCategory.includes("Natural 20")) {
       return [
         `${actorName}'s keen senses pick up on something important about the situation — a detail that others would easily overlook.`,
-        `With focused attention, ${actorName} notices subtle but significant details that paint a clearer picture of what is really going on.`,
-        `${actorName}'s experience and training reveal useful information. Something clicks into place.`,
       ];
     }
     return [
       `${actorName} considers the situation carefully but cannot draw any firm conclusions one way or another.`,
-      `Despite their best efforts, ${actorName} finds it difficult to read the situation clearly. Nothing stands out.`,
-      `${actorName} has a vague feeling about this, but nothing concrete enough to act on with confidence.`,
     ];
   }
 
@@ -730,95 +940,117 @@ export class SubtleRollManager {
         `${_escapeHtml(narr)}</button>`;
     });
 
-    // "Send to all" checkbox
-    html +=
-      `<div style="margin-top:4px;text-align:right;">` +
-      `<label style="font-size:0.8em;color:#7a6042;cursor:pointer;">` +
-      `<input type="checkbox" class="ace-subtle-sendall" style="margin-right:4px;" />` +
-      `Send to all players (not just ${_escapeHtml(actorName)})</label></div>`;
-
     html += `</div>`;
     return html;
   }
 
-  /** Card 3: Narration Delivery — whispered to the player (or public) */
+  /** Card 3: Narration Delivery — broadcast to everyone */
   _buildNarrationDeliveryCard(actorName, skillLabel, narrationText) {
     return (
-      `<div class="ace-subtle-delivery" style="background:#1c150e;border-left:4px solid #c9a84c;` +
-      `border-radius:4px;padding:10px 12px;font-family:'IM Fell English','Palatino Linotype',serif;line-height:1.6;">` +
-      `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">` +
-      `<span style="color:#c9a84c;font-weight:bold;font-size:0.85em;` +
+      `<div class="ace-subtle-delivery" style="background:#1c150e;border-left:6px solid #c9a84c;` +
+      `border-radius:6px;padding:14px 16px;font-family:'IM Fell English','Palatino Linotype',serif;line-height:1.7;">` +
+      `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">` +
+      `<span style="color:#c9a84c;font-weight:bold;font-size:1.1em;` +
       `text-transform:uppercase;letter-spacing:1px;">` +
-      `<i class="fas fa-scroll" style="margin-right:4px;"></i>` +
+      `<i class="fas fa-scroll" style="margin-right:6px;"></i>` +
       `${skillLabel} — ${_escapeHtml(actorName)}</span></div>` +
-      `<div style="font-style:italic;color:#eddfc5;font-size:1em;">` +
+      `<div style="font-style:italic;color:#eddfc5;font-size:1.15em;">` +
       `"${_escapeHtml(narrationText)}"</div>` +
       `</div>`
     );
   }
 
-  /** Card 4: Consolidated Batch — GM-only, one card for all actors */
-  _buildConsolidatedCard(skillLabel, dc, flavor, results) {
-    const passCount = results.filter(r => r.passed).length;
-    const failCount = results.length - passCount;
+  /** Card 4: Consolidated Batch — GM-only, one card for all actors.
+   *  Clean, compact layout inspired by D&D 5e damage application cards.
+   *  @param {Array} [narrations] — Optional. If provided, each entry has a `.narration` string
+   *  that gets appended under the actor's row with a "Broadcast" button. */
+  _buildConsolidatedCard(skillLabel, dc, flavor, results, narrations) {
+    const hasNarrations = narrations?.some(n => n.narration);
 
     let html =
-      `<div class="ace-subtle-batch" style="background:#1c150e;border-left:4px solid #8a5bbf;` +
-      `border-radius:4px;padding:10px 12px;font-family:'Rajdhani','Segoe UI',sans-serif;line-height:1.5;">` +
-      // Header
-      `<div style="color:#c4a8f0;font-weight:bold;font-size:1.05em;margin-bottom:6px;letter-spacing:0.5px;">` +
-      `<i class="fas fa-eye-slash" style="margin-right:4px;"></i> Subtle Roll — ${_escapeHtml(skillLabel)}</div>` +
-      // DC banner
-      `<div style="display:flex;justify-content:space-between;align-items:center;` +
-      `background:#18102a;border:1px solid #8a5bbf44;border-radius:3px;padding:5px 10px;margin-bottom:8px;">` +
-      `<span style="color:#9a9890;font-size:0.85em;">DC <strong style="color:#c4a8f0;font-size:1.1em;">${dc}</strong></span>` +
-      `<span style="font-size:0.85em;">` +
-      `<span style="color:#5db88a;">✓ ${passCount}</span>` +
-      `<span style="color:#555;margin:0 4px;">|</span>` +
-      `<span style="color:#e06060;">✗ ${failCount}</span>` +
-      `</span></div>`;
+      `<div class="ace-subtle-batch" style="background:#1e1e22;border-radius:6px;padding:0;` +
+      `font-family:'Rajdhani','Segoe UI',sans-serif;overflow:hidden;border:1px solid #333;">` +
+      // Header bar
+      `<div style="background:#2a1a3a;padding:8px 14px;display:flex;align-items:center;justify-content:space-between;">` +
+      `<span style="color:#c4a8f0;font-weight:bold;font-size:1em;letter-spacing:0.5px;">` +
+      `<i class="fas fa-eye-slash" style="margin-right:6px;"></i>${_escapeHtml(skillLabel)}</span>` +
+      `<span style="color:#c4a8f0;font-weight:bold;font-size:1em;">DC ${dc}</span>` +
+      `</div>`;
 
-    // Flavor text
+    // Flavor text (compact)
     if (flavor) {
-      html += `<div style="font-style:italic;color:#9a9890;font-size:0.85em;margin-bottom:8px;">` +
-        `"${_escapeHtml(flavor)}"</div>`;
+      html += `<div style="padding:6px 14px;font-style:italic;color:#9a9890;font-size:0.9em;` +
+        `border-bottom:1px solid #2a2a2e;">"${_escapeHtml(flavor)}"</div>`;
     }
 
-    // Actor rows
-    for (const r of results) {
+    // Actor rows — compact like D&D 5e damage cards
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      const n = narrations?.[i];
       const color = r.error  ? "#555"
                   : r.isNat1  ? "#c43b3b"
                   : r.isNat20 ? "#c9a84c"
                   : r.passed  ? "#5db88a"
                   :             "#e06060";
-      const icon  = r.error  ? "⚠"
-                  : r.isNat1  ? "💀"
-                  : r.isNat20 ? "⭐"
-                  : r.passed  ? "✓"
-                  :             "✗";
-      const label = r.error  ? "ERROR"
+      const label = r.error  ? "ERR"
                   : r.isNat1  ? "NAT 1"
                   : r.isNat20 ? "NAT 20"
                   : r.passed  ? "PASS"
                   :             "FAIL";
+      const advTag = r.advState === "advantage"
+        ? ` <span style="color:#5db88a;font-size:0.75em;font-weight:bold;" title="Advantage">ADV</span>`
+        : r.advState === "disadvantage"
+        ? ` <span style="color:#e06060;font-size:0.75em;font-weight:bold;" title="Disadvantage">DIS</span>`
+        : "";
 
       html +=
-        `<div style="display:flex;align-items:center;gap:8px;padding:4px 6px;margin-bottom:3px;` +
-        `background:${color}11;border-left:3px solid ${color};border-radius:2px;">` +
-        // Token portrait
-        `<img src="${r.actorImg}" style="width:28px;height:28px;border-radius:50%;` +
-        `border:1px solid ${color};object-fit:cover;flex-shrink:0;" />` +
+        `<div style="padding:6px 14px;display:flex;align-items:center;gap:10px;` +
+        `border-bottom:1px solid #2a2a2e;">` +
+        // Portrait (small)
+        `<img src="${r.actorImg}" style="width:32px;height:32px;border-radius:50%;` +
+        `border:2px solid ${color};object-fit:cover;flex-shrink:0;" />` +
         // Name
-        `<span style="flex:1;color:#e8e6e0;font-weight:600;font-size:0.92em;` +
-        `white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_escapeHtml(r.actorName)}</span>` +
-        // Roll breakdown
-        `<span style="color:#9a9890;font-size:0.82em;flex-shrink:0;">` +
-        `d20: ${r.natural}${r.modifier >= 0 ? " + " : " − "}${Math.abs(r.modifier)} = ` +
-        `<strong style="color:${color};font-size:1.1em;">${r.total}</strong></span>` +
+        `<span style="flex:1;color:#e0ddd8;font-weight:600;font-size:0.95em;` +
+        `white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">` +
+        `${_escapeHtml(r.actorName)}${advTag}</span>` +
+        // Roll breakdown (compact)
+        `<span style="color:#888;font-size:0.85em;flex-shrink:0;">` +
+        `${r.natural}${r.modifier >= 0 ? "+" : ""}${r.modifier}</span>` +
+        // Total
+        `<span style="color:${color};font-weight:bold;font-size:1.1em;min-width:28px;text-align:right;">` +
+        `${r.total}</span>` +
         // Pass/fail badge
-        `<span style="font-size:0.8em;font-weight:bold;color:${color};` +
-        `min-width:44px;text-align:center;">${icon} ${label}</span>` +
+        `<span style="font-size:0.8em;font-weight:bold;color:#1e1e22;` +
+        `background:${color};border-radius:3px;padding:2px 6px;min-width:44px;text-align:center;">` +
+        `${label}</span>` +
         `</div>`;
+
+      // Narration block (compact, under the actor row)
+      if (n?.narration) {
+        const narrId = `sr_narr_${i}_${Date.now()}`;
+        html +=
+          `<div style="padding:6px 14px 8px 56px;border-bottom:1px solid #2a2a2e;">` +
+          `<div style="font-style:italic;color:#c5bfa8;font-size:0.88em;line-height:1.5;margin-bottom:6px;">` +
+          `"${_escapeHtml(n.narration)}"</div>` +
+          `<button class="ace-chat-btn" data-ace-btn="subtle-broadcast" ` +
+          `data-narr-id="${narrId}" ` +
+          `data-actor-name="${_encodeAttr(r.actorName)}" ` +
+          `data-skill-label="${_encodeAttr(skillLabel)}" ` +
+          `data-narration="${encodeURIComponent(n.narration)}" ` +
+          `style="display:inline-block;padding:4px 12px;background:#2a1a3a;` +
+          `border:1px solid ${color};border-radius:3px;color:${color};cursor:pointer;` +
+          `font-family:inherit;font-size:0.85em;font-weight:bold;transition:all 0.2s;">` +
+          `<i class="fas fa-bullhorn" style="margin-right:4px;"></i>Broadcast</button>` +
+          `</div>`;
+      }
+    }
+
+    // Loading indicator if narrations haven't arrived yet
+    if (!hasNarrations) {
+      html +=
+        `<div style="text-align:center;color:#8a5bbf;font-size:0.85em;padding:8px 0;font-style:italic;">` +
+        `<i class="fas fa-spinner fa-pulse" style="margin-right:4px;"></i>` +
+        `Generating narrations…</div>`;
     }
 
     html += `</div>`;

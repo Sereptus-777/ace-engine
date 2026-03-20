@@ -10,7 +10,7 @@ import { AiProvider }         from "./ai-provider.mjs";
 import { SuggestionEngine }   from "./suggestion-engine.mjs";
 import { NpcMemoryReader }    from "./npc-memory.mjs";
 import { MemoryManager }      from "./memory-manager.mjs";
-import { triggerLightning, triggerEarthquake, stopAllSfx } from "./sfx.mjs";
+import { triggerLightning, triggerEarthquake, triggerStealthFail, triggerPerceptionPass, stopAllSfx } from "./sfx.mjs";
 import { CanvasHighlight }   from "./canvas-highlight.mjs";
 import { ReputationEngine }  from "./reputation-engine.mjs";
 import { SubtleRollManager } from "./subtle-rolls.mjs";
@@ -18,6 +18,7 @@ import { FameEngine }        from "./fame-engine.mjs";
 import { DocumentEngine }    from "./document-engine.mjs";
 import { DigestEngine }      from "./digest-engine.mjs";
 import { SimpleCalendarBridge } from "./simple-calendar-bridge.mjs";
+import { WorldBibleEngine }    from "./world-bible-engine.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -83,6 +84,22 @@ async function _doAppendStoryNote(actor, bulletText) {
 
   await actor.update({ "system.details.biography.value": newBio });
   console.log(`${MODULE_ID} | Story note added to ${actor.name}: ${bulletText}`);
+
+  // Also write to the PC store notes array (for PC journal profiles)
+  if (aceMemory) {
+    const pc = aceMemory.pcs.touchPc(actor.id, actor.name);
+    if (pc) {
+      if (!Array.isArray(pc.notes)) pc.notes = [];
+      // Dedup: skip if this exact text already exists
+      if (!pc.notes.some(n => n.txt === bulletText)) {
+        pc.notes.push({ t: Math.floor(Date.now() / 1000), txt: bulletText });
+        if (pc.notes.length > 100) pc.notes.shift(); // cap at 100 notes
+        aceMemory.pcs.markDirty();
+        aceMemory._scheduleSaves(["pcs"]);
+        aceMemory.writePcJournal(actor.id).catch(() => {});
+      }
+    }
+  }
 }
 
 // ── Significance filters for story notes ────────────────────
@@ -217,6 +234,7 @@ let reputationEngine = null; // ReputationEngine — faction awareness / word-of
 let fameEngine     = null;   // FameEngine — party deed fame / geographic reputation
 let documentEngine = null;   // DocumentEngine — document library / reference RAG
 let digestEngine   = null;   // DigestEngine — AI-powered structured digest (global)
+let worldBible     = null;   // WorldBibleEngine — comprehensive world reference bible
 let calendarBridge = null;   // SimpleCalendarBridge — optional Simple Calendar sync
 let subtleRolls    = null;   // SubtleRollManager — blind skill checks with AI narration
 let _aceReady      = false;  // true after all subsystems (AI, memory, etc.) are initialized
@@ -350,6 +368,22 @@ function _speakBrowserTTS(text, volume = 1.0) {
   window.speechSynthesis.speak(utter);
 }
 
+// ── Global audio stop — kills ALL audio sources (panel, narration, browser TTS) ──
+function _stopAllAudio() {
+  // Stop standalone narration audio
+  if (_narrationAudio) {
+    try { _narrationAudio.pause(); _narrationAudio.src = ""; } catch (_) {}
+    _narrationAudio = null;
+  }
+  // Stop browser TTS
+  if (window.speechSynthesis?.speaking) window.speechSynthesis.cancel();
+  // Stop panel TTS (if panel is open)
+  if (panel?._cancelTTS) panel._cancelTTS();
+  // Stop any SFX
+  if (panel?.stopSfx) panel.stopSfx();
+  console.log(`${MODULE_ID} | All audio stopped`);
+}
+
 // ── Play narration audio from base64 (ElevenLabs quality on player side) ──
 let _narrationAudio = null;
 
@@ -381,6 +415,38 @@ function _playNarrationAudio(base64, volume = 0.8) {
   }
 }
 
+// ── Standalone ElevenLabs TTS (no panel dependency) ─────────────
+// Used by _handleSubtleBroadcast to generate audio when panel is closed.
+
+function _getElevenLabsKeyStandalone() {
+  try { return game.settings.get(MODULE_ID, "elevenLabsApiKey") || ""; }
+  catch (_) { return ""; }
+}
+
+async function _generateElevenLabsAudio(text, apiKey) {
+  if (!text || !apiKey) return null;
+  const voiceId = (() => {
+    try { return game.settings.get(MODULE_ID, "elevenLabsVoiceId") || "o3hzbFqcuIw2MRzP8rQf"; }
+    catch (_) { return "o3hzbFqcuIw2MRzP8rQf"; }
+  })();
+  const resp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+    method: "POST",
+    headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text,
+      model_id: "eleven_multilingual_v2",
+      voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.35, use_speaker_boost: true },
+    }),
+  });
+  if (!resp.ok) throw new Error(`ElevenLabs ${resp.status}: ${resp.statusText}`);
+  const buf = await resp.arrayBuffer();
+  // Convert to base64 for socket transport
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
 // ── Ready: initialize for ALL users (socket listener first) ────
 Hooks.once("ready", async () => {
   // ── Clean up stray CONFIG.debug.hooks left on by other modules (e.g. chat-images)
@@ -392,6 +458,8 @@ Hooks.once("ready", async () => {
     if (data?.type === "sfx") {
       // Only accept SFX from GM users (prevents player socket spoofing)
       if (data.userId && !game.users.get(data.userId)?.isGM) return;
+      // If targeted to a specific player, only that player plays it
+      if (data.targetUserId && data.targetUserId !== game.user.id) return;
       _handleRemoteSfx(data);
     }
     if (data?.type === "subtle-narration-tts" && data.text) {
@@ -566,6 +634,24 @@ Hooks.once("ready", async () => {
     digestEngine = null;
   }
 
+  // ── World Bible — comprehensive world reference ──
+  try {
+    worldBible = new WorldBibleEngine();
+    await worldBible.load(game.world.id);
+    if (worldBible.hasData) {
+      worldBible._buildIndexes();
+      const stats = worldBible.getStats();
+      console.log(`${MODULE_ID} | World Bible loaded: "${stats.setting}" — ${stats.nationCount} nations, ${stats.cityCount} cities, ${stats.factionCount} factions, ${stats.deityCount} deities`);
+      // Give SceneContext access to Bible for auto-location lookup
+      if (sceneCtx) sceneCtx.setWorldBible(worldBible);
+    } else {
+      console.log(`${MODULE_ID} | World Bible: no data yet (generate via panel)`);
+    }
+  } catch (err) {
+    console.error(`${MODULE_ID} | World Bible init failed:`, err);
+    worldBible = null;
+  }
+
   // ── Document Engine — reference library (PDF, text, images) ──
   const libEnabled = game.settings.get(MODULE_ID, "enableDocumentLibrary") ?? true;
   if (aceMemory && libEnabled) {
@@ -674,6 +760,47 @@ Hooks.once("ready", async () => {
       }
       ui.notifications?.info(`ACE: Cleared conversation history from ${cleared} NPC(s).`);
     },
+
+    /**
+     * Generate a retroactive session summary for a past date.
+     * Usage: `ace.retroSummary("2026-03-10")`
+     * @param {string} dateStr  ISO date like "2026-03-10"
+     */
+    retroSummary: async (dateStr) => {
+      if (!game.user.isGM) { ui.notifications?.warn("GM only."); return; }
+      if (!aceMemory || !aiProvider) {
+        ui.notifications?.error("ACE: Memory or AI provider not available.");
+        return;
+      }
+      if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        ui.notifications?.warn('ACE: Provide a date like "2026-03-10"');
+        return;
+      }
+
+      ui.notifications?.info(`ACE: Generating retroactive summary for ${dateStr}…`);
+      try {
+        const { summary, sceneLabel, partyNames } = await aceMemory.generateRetroactiveSummary(
+          dateStr, aiProvider, sceneCtx
+        );
+        if (!summary) {
+          ui.notifications?.warn("ACE: No summary could be generated.");
+          return;
+        }
+        const sessionNum = aceMemory.getNextSessionNum();
+        await aceMemory.saveSessionSummary({
+          sessionNum,
+          date:       dateStr,
+          sceneName:  sceneLabel,
+          summary,
+          partyNames: partyNames ? partyNames.split(", ") : [],
+        });
+        ui.notifications?.info(`ACE: Session ${sessionNum} summary for ${dateStr} saved to journal!`);
+        console.log(`${MODULE_ID} | Retroactive session ${sessionNum} (${dateStr}):\n${summary}`);
+      } catch (err) {
+        console.error(`${MODULE_ID} | retroSummary error:`, err);
+        ui.notifications?.error(`ACE: ${err.message}`);
+      }
+    },
   };
 
   // Expose public API for sister modules (ACE: Envoy, ACE: Trapmaster)
@@ -684,6 +811,7 @@ Hooks.once("ready", async () => {
       getMemory: (category) => aceMemory?.getStore(category)?.getAll() ?? [],
       askAI:     (prompt) => aiProvider?.chat(prompt, "", "", []),
       narrate:   (text) => panel?.narrateText?.(text),
+      stopAllAudio: _stopAllAudio,
 
       // ── Reputation API (used by ACE: Envoy) ──────────────────────
       /**
@@ -867,6 +995,111 @@ Hooks.once("ready", async () => {
 
       /** Get the document engine instance (for advanced use). */
       getDocumentEngine: () => documentEngine,
+
+      // ── World Bible API (used by ACE: Envoy) ─────────────────
+
+      /**
+       * Get city context from the World Bible for AI prompt injection.
+       * Returns formatted text about the city, its nation, local factions, and religions.
+       * @param {string} cityName - City name (case-insensitive)
+       * @returns {string} Formatted world context, or ""
+       */
+      getWorldBibleCityContext: (cityName) => {
+        if (!worldBible?.hasData) return "";
+        return worldBible.getCityContext(cityName);
+      },
+
+      /**
+       * Search the World Bible for any matching entity.
+       * @param {string} query
+       * @param {number} [maxResults=5]
+       * @returns {string} Formatted search results
+       */
+      searchWorldBible: (query, maxResults = 5) => {
+        if (!worldBible?.hasData) return "";
+        return worldBible.search(query, maxResults);
+      },
+
+      /**
+       * Get full faction details from the World Bible.
+       * @param {string} factionName
+       * @returns {string}
+       */
+      getWorldBibleFaction: (factionName) => {
+        if (!worldBible?.hasData) return "";
+        return worldBible.getFactionContext(factionName);
+      },
+
+      /**
+       * Look up any entity by name in the World Bible.
+       * @param {string} name
+       * @returns {{ type, id, data }|null}
+       */
+      findInWorldBible: (name) => {
+        if (!worldBible?.hasData) return null;
+        return worldBible.findByName(name);
+      },
+
+      /** Get stats about the loaded World Bible. */
+      getWorldBibleStats: () => worldBible?.getStats() ?? null,
+
+      /** Get the World Bible engine instance (for advanced use). */
+      getWorldBible: () => worldBible,
+
+      /**
+       * Generate a World Bible. Called from the panel UI.
+       * @param {string} setting - e.g. "Forgotten Realms — Faerûn"
+       * @param {string} era - e.g. "Post-Sundering (5e, ~1489-1496 DR)"
+       * @param {function} onProgress - (step, total, regionName, phase) callback
+       */
+      generateWorldBible: async (setting, era, onProgress) => {
+        if (!worldBible || !aiProvider) {
+          throw new Error("World Bible engine or AI provider not initialized.");
+        }
+        return worldBible.generate(setting, era, aiProvider, game.world.id, onProgress);
+      },
+
+      /** Pause an in-progress World Bible generation. */
+      pauseWorldBible: () => worldBible?.pauseGeneration(),
+
+      /** Resume a paused World Bible generation. */
+      resumeWorldBible: () => worldBible?.resumeGeneration(),
+
+      /** Cancel an in-progress World Bible generation (saves progress). */
+      cancelWorldBible: () => worldBible?.cancelGeneration(),
+
+      /**
+       * Auto-resolve an unknown scene/location name via AI lookup.
+       * Caches the result permanently in the World Bible.
+       * Returns formatted context string, or "" if not found.
+       * @param {string} locationName
+       * @returns {Promise<string>}
+       */
+      resolveWorldBibleLocation: async (locationName) => {
+        if (!worldBible?.hasData || !aiProvider) return "";
+        return worldBible.resolveLocation(locationName, aiProvider, game.world.id);
+      },
+
+      /**
+       * Merge a digest's extracted data into the World Bible.
+       * Runs 5 focused AI calls (locations, factions, NPCs, religions, geography).
+       * @param {object} digestData  - Full digest object ({ summary, npcs, locations, factions, ... })
+       * @param {string} sourceName  - Display name (e.g. "Curse of Strahd")
+       * @param {string} sourceFile  - Filename (e.g. "curse_of_strahd.pdf")
+       * @param {function} onProgress - (step, total, category, phase) callback
+       * @returns {Promise<{ merged: number, updated: number, errors: string[] }>}
+       */
+      mergeDigestIntoBible: async (digestData, sourceName, sourceFile, onProgress, publishedYear = null) => {
+        if (!worldBible?.hasData || !aiProvider) {
+          throw new Error("World Bible must be generated before merging digests. Generate a Bible first.");
+        }
+        return worldBible.mergeFromDigest(digestData, sourceName, sourceFile, aiProvider, game.world.id, onProgress, publishedYear);
+      },
+
+      learnFromText: async (text) => {
+        if (!worldBible?.hasData || !aiProvider) return { learned: 0, skipped: 0 };
+        return worldBible.learnFromText(text, aiProvider, game.world.id);
+      },
     };
   }
 
@@ -920,15 +1153,18 @@ Hooks.once("ready", async () => {
 });
 
 // ── SFX: play locally + broadcast to all other clients ─────────
-function _triggerSfx(effect) {
+// targetUserId: if set, only that player hears it (GM always hears on their own screen)
+function _triggerSfx(effect, targetUserId = null) {
   _handleRemoteSfx({ effect });                                       // play on GM screen
-  game.socket.emit(`module.${MODULE_ID}`, { type: "sfx", effect, userId: game.user.id });
+  game.socket.emit(`module.${MODULE_ID}`, { type: "sfx", effect, userId: game.user.id, targetUserId });
 }
 
 function _handleRemoteSfx({ effect }) {
   switch (effect) {
-    case "lightning":  triggerLightning();  break;
-    case "earthquake": triggerEarthquake(); break;
+    case "lightning":       triggerLightning();       break;
+    case "earthquake":      triggerEarthquake();      break;
+    case "stealthFail":     triggerStealthFail();     break;
+    case "perceptionPass":  triggerPerceptionPass();  break;
     // Laugh variants dormant — uncomment when adding a dedicated SFX panel:
     // case "laughMale":     playEvilLaugh("male");     break;
     // case "laughFemale":   playEvilLaugh("female");   break;
@@ -947,7 +1183,10 @@ async function _autoDiscoverAndSync() {
 
   try {
     // 1. Discover all player-owned characters → PC store + journals
-    const pcs = game.actors?.filter(a => a.hasPlayerOwner && a.type === "character") ?? [];
+    // Filter out junk: tokens without real character names (map tokens, downloads, test actors)
+    const JUNK_PC_RE = /^(group\s*map|download|test|template|copy\s*of)/i;
+    const pcs = (game.actors?.filter(a => a.hasPlayerOwner && a.type === "character") ?? [])
+      .filter(a => a.name && !JUNK_PC_RE.test(a.name.trim()) && a.name.trim().length > 1);
     for (const actor of pcs) {
       aceMemory.pcs.touchPc(actor.id, actor.name);
       // Extract class/level if available
@@ -957,6 +1196,11 @@ async function _autoDiscoverAndSync() {
         rec.level = rec.level || aceMemory._extractLevel(actor);
       }
     }
+    // Increment session count for each PC (once per world load)
+    for (const actor of pcs) {
+      aceMemory.logSession({ actorName: actor.name });
+    }
+
     if (pcs.length) {
       aceMemory.pcs.markDirty();
       aceMemory.saveCategory("pcs");
@@ -1085,6 +1329,10 @@ Hooks.on("canvasReady", () => {
   if (!game.user.isGM || !sceneCtx) return;
   sceneCtx.refresh();
   CanvasHighlight.clearAll();   // remove any lingering highlights from previous scene
+  // Apply subtle gold glow to PC tokens so they're easy to spot
+  if (game.settings.get(MODULE_ID, "pcGlow")) {
+    setTimeout(() => CanvasHighlight.refreshAllPcGlows(), 500);  // short delay for tokens to finish drawing
+  }
   if (panel?.rendered) {
     panel.updateContext();
     panel.trackSceneTransition();   // advance survival tracker on scene change
@@ -1105,6 +1353,24 @@ Hooks.on("canvasReady", () => {
     }
     _lastSceneName = newScene;
 
+    // ── Track scene visit for all PCs ─────────────────────────
+    try {
+      const pcs = game.actors?.filter(a => a.hasPlayerOwner && a.type === "character") ?? [];
+      for (const pc of pcs) {
+        const rec = aceMemory.pcs.touchPc(pc.id, pc.name);
+        if (rec) {
+          if (!Array.isArray(rec.scenes)) rec.scenes = [];
+          if (!rec.scenes.includes(newScene)) {
+            rec.scenes.push(newScene);
+            if (rec.scenes.length > 100) rec.scenes.shift();
+          }
+          // Fix firstSeen if it was never set
+          if (!rec.firstSeen) rec.firstSeen = Math.floor(Date.now() / 1000);
+        }
+      }
+      aceMemory.pcs.markDirty();
+    } catch (_) {}
+
     // ── Deed: first visit to a new scene (travel tracking) ────
     if (fameEngine) {
       // Check if scene was visited before (use SceneStore)
@@ -1122,7 +1388,7 @@ Hooks.on("canvasReady", () => {
     }
 
     // ── Narrative time: advance one step on scene transition ──
-    if (fromScene && game.settings.get(MODULE_ID, "enableNarrativeTime")) {
+    if (!isInitialLoad && game.settings.get(MODULE_ID, "enableNarrativeTime")) {
       aceMemory.advanceTimeStep();
     }
   }
@@ -1351,8 +1617,47 @@ Hooks.on("updateActor", (actor, changes) => {
     }
   }
 
-  // ── PC knockdown: HP drops to 0 (works in or out of combat) ──
-  if (actor.hasPlayerOwner && actor.type === "character") {
+  // ── PC career stats: damage taken, healing received, knockouts ──
+  if (actor.hasPlayerOwner && actor.type === "character" && aceMemory) {
+    const hp = changes?.system?.attributes?.hp;
+    const newHp = hp?.value ?? (typeof hp === "number" ? hp : undefined);
+    if (newHp !== undefined) {
+      const maxHp   = actor.system?.attributes?.hp?.max ?? 0;
+      const prevHp  = actor.system?.attributes?.hp?.value ?? maxHp;
+      // Calculate delta: negative = damage, positive = healing
+      // Note: prevHp is already updated by the time we see it in v13,
+      // so we use the old value from the actor's prior state
+      const oldHp = (typeof actor._source?.system?.attributes?.hp?.value === "number")
+        ? actor._source.system.attributes.hp.value
+        : prevHp;
+      const delta = newHp - oldHp;
+
+      if (delta < 0) {
+        // Damage taken
+        aceMemory.logDamageTaken({ actorName: actor.name, amount: Math.abs(delta) });
+      } else if (delta > 0 && oldHp < maxHp) {
+        // Healing received (not just temp HP manipulation)
+        // Note: this tracks healing received, not healing done
+        // Healing done is tracked via the chat message roll
+      }
+
+      // Knockout detection
+      if (newHp === 0) {
+        aceMemory.logKnockout({ actorName: actor.name });
+
+        const scene    = canvas?.scene?.name ?? "";
+        const attacker = game.combat?.active ? (game.combat.combatant?.name ?? null) : null;
+        let bullet;
+        if (attacker && attacker !== actor.name) {
+          bullet = scene ? `Fell in battle against ${attacker} in ${scene}` : `Fell in battle against ${attacker}`;
+        } else {
+          bullet = scene ? `Fell unconscious in ${scene}` : `Fell unconscious`;
+        }
+        _appendStoryNote(actor, bullet).catch(() => {});
+      }
+    }
+  } else if (actor.hasPlayerOwner && actor.type === "character") {
+    // Fallback: no aceMemory, still log story note for knockdowns
     const hp = changes?.system?.attributes?.hp;
     const newHp = hp?.value ?? (typeof hp === "number" ? hp : undefined);
     if (newHp === 0) {
@@ -1376,6 +1681,14 @@ Hooks.on("updateToken", () => {
     panel.updateContext();
     panel.refreshSelectPanel();
   }
+});
+
+// Re-apply PC glow after token re-renders (movement, refresh, etc.)
+Hooks.on("refreshToken", (token) => {
+  if (!game.user.isGM) return;
+  try {
+    if (game.settings.get(MODULE_ID, "pcGlow")) CanvasHighlight.applyPcGlow(token);
+  } catch (_) {}
 });
 
 // ── Canvas ↔ Panel selection sync — mirror canvas clicks to the Select panel ──
@@ -1567,23 +1880,90 @@ Hooks.on("createChatMessage", async (message) => {
     return;  // don't fall through to crit/fumble
   }
 
-  // ── Crit / Fumble auto-detection ──────────────────────────────
-  // Only acts on d20 attack rolls with a natural 1 or 20 during active combat.
-  if (!panel?.rendered)      return;   // panel must be open
-  if (!game.combat?.active)  return;   // only during active combat
+  // ── PC Career Stats + Crit/Fumble auto-detection ──────────────
   if (message.flags?.["ace-engine"]) return; // skip our own ACE messages
 
-  const type = _detectCritOrFumble(message);
-  if (!type) return;
-
-  // Gather context
   const actorId   = message.speaker?.actor;
   const actor     = actorId ? game.actors?.get(actorId) : null;
   const actorName = message.speaker?.alias
     ?? actor?.name
     ?? message.speaker?.token
     ?? "Unknown";
-  const isPC      = actor ? actor.hasPlayerOwner : true;
+  const isPC      = actor ? actor.hasPlayerOwner : false;
+
+  // ── Track attack hits/misses for PCs ───────────────────────
+  if (aceMemory && isPC && game.combat?.active) {
+    const rollType = message.flags?.dnd5e?.roll?.type;
+    if (rollType === "attack") {
+      try {
+        const rolls = message.rolls ?? [];
+        for (const roll of rolls) {
+          const d20 = roll.terms?.find(t => t.faces === 20);
+          if (!d20) continue;
+          // Determine hit/miss: dnd5e v13 stores the evaluation
+          // A roll total >= target AC = hit. We approximate using the
+          // isCritical flag or by checking if Foundry marked it.
+          // dnd5e sets roll.options.target (the AC) when available.
+          const ac = roll.options?.target ?? roll.options?.targetValue ?? 0;
+          const hit = message.flags?.dnd5e?.roll?.isCritical
+            || (ac > 0 && roll.total >= ac)
+            || (!ac && roll.total >= 10); // fallback heuristic if no AC stored
+          const isFumble = d20.results?.some(r => r.active && r.result === 1);
+          aceMemory.logAttackResult({
+            actorName,
+            hit: isFumble ? false : !!hit,
+            weaponName: _parseWeaponName(message),
+          });
+          break; // one attack roll per message
+        }
+      } catch (_) {}
+    }
+
+    // ── Track damage dealt by PCs ───────────────────────────
+    if (rollType === "damage") {
+      try {
+        const rolls = message.rolls ?? [];
+        let totalDmg = 0;
+        for (const roll of rolls) totalDmg += (roll.total ?? 0);
+        if (totalDmg > 0) {
+          aceMemory.logAttackResult({ actorName, hit: true, damage: totalDmg });
+        }
+      } catch (_) {}
+    }
+
+    // ── Track healing done by PCs ────────────────────────────
+    if (rollType === "healing") {
+      try {
+        const rolls = message.rolls ?? [];
+        let totalHeal = 0;
+        for (const roll of rolls) totalHeal += (roll.total ?? 0);
+        if (totalHeal > 0) {
+          aceMemory.logHealing({ actorName, amount: totalHeal });
+        }
+      } catch (_) {}
+    }
+
+    // ── Track death saves ────────────────────────────────────
+    if (rollType === "death") {
+      try {
+        const rolls = message.rolls ?? [];
+        for (const roll of rolls) {
+          const success = (roll.total ?? 0) >= 10;
+          aceMemory.logDeathSave({ actorName, success });
+          break;
+        }
+      } catch (_) {}
+    }
+  }
+
+  // ── Crit / Fumble auto-detection ──────────────────────────────
+  // Only acts on d20 attack rolls with a natural 1 or 20 during active combat.
+  if (!panel?.rendered)      return;   // panel must be open
+  if (!game.combat?.active)  return;   // only during active combat
+
+  const type = _detectCritOrFumble(message);
+  if (!type) return;
+
   const weaponName = _parseWeaponName(message);
   const targetName = _parseTargetName();
 
@@ -1784,8 +2164,84 @@ async function _aceHandleButton(btn) {
     case "subtle-roll":         return _handleSubtleRollClick(btn);
     case "subtle-pick":         return subtleRolls?.pickNarration(btn);
     case "subtle-send-request": return _handleSubtleSendRequest(btn);
+    case "subtle-broadcast":    return _handleSubtleBroadcast(btn);
     default: console.warn(`${MODULE_ID} | Unknown ACE button type: "${btn.dataset.aceBtn}"`);
   }
+}
+
+/**
+ * GM clicks "Broadcast to Everyone" on a subtle roll narration.
+ * Sends the narration as a public chat message visible to all players + TTS.
+ */
+async function _handleSubtleBroadcast(btn) {
+  if (!game.user.isGM) return;
+
+  const actorName  = btn.dataset.actorName ?? "Unknown";
+  const skillLabel = btn.dataset.skillLabel ?? "Skill Check";
+  const narration  = decodeURIComponent(btn.dataset.narration ?? "");
+
+  if (!narration) return;
+
+  // Disable button immediately
+  btn.disabled      = true;
+  btn.textContent   = "Sent!";
+  btn.style.opacity = "0.5";
+  btn.style.cursor  = "default";
+
+  // Build delivery card
+  const cardHtml =
+    `<div class="ace-subtle-delivery" style="background:#1c150e;border-left:4px solid #c9a84c;` +
+    `border-radius:6px;padding:14px 16px;font-family:'IM Fell English','Palatino Linotype',serif;line-height:1.7;">` +
+    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">` +
+    `<span style="color:#c9a84c;font-weight:bold;font-size:1.1em;` +
+    `text-transform:uppercase;letter-spacing:1px;">` +
+    `<i class="fas fa-scroll" style="margin-right:6px;"></i>` +
+    `${_escapeHtml(skillLabel)} — ${_escapeHtml(actorName)}</span></div>` +
+    `<div style="font-style:italic;color:#eddfc5;font-size:1.15em;">` +
+    `"${_escapeHtml(narration)}"</div>` +
+    `</div>`;
+
+  // Public message — everyone sees it
+  await ChatMessage.create({
+    content: cardHtml,
+    speaker: { alias: "ACE" },
+    flags:   { "ace-engine": { isSubtleNarration: true } },
+  });
+
+  // TTS — generate ElevenLabs audio on GM side, broadcast audio blob to all
+  // This avoids depending on the panel instance (which may be null/closed)
+  const elevenKey = _getElevenLabsKeyStandalone();
+  if (elevenKey) {
+    try {
+      const audioBase64 = await _generateElevenLabsAudio(narration, elevenKey);
+      if (audioBase64) {
+        // Play locally on GM
+        _playNarrationAudio(audioBase64, 0.8);
+        // Broadcast to all players
+        game.socket.emit(`module.${MODULE_ID}`, {
+          type:  "narration-audio",
+          audio: audioBase64,
+          userId: game.user.id,
+        });
+      }
+    } catch (err) {
+      console.warn(`${MODULE_ID} | Subtle broadcast TTS error, falling back to browser:`, err.message);
+      game.socket.emit(`module.${MODULE_ID}`, {
+        type: "subtle-narration-tts",
+        text: narration,
+        targetUserId: null,
+      });
+    }
+  } else {
+    // No ElevenLabs key — fall back to browser TTS broadcast
+    game.socket.emit(`module.${MODULE_ID}`, {
+      type: "subtle-narration-tts",
+      text: narration,
+      targetUserId: null,
+    });
+  }
+
+  console.log(`${MODULE_ID} | Subtle Roll: broadcast ${skillLabel} narration for ${actorName} to all players`);
 }
 
 /** Get targeted tokens first, fall back to selected tokens. */
@@ -2169,6 +2625,7 @@ function openPanel() {
       subtleRolls,
       documentEngine,
       digestEngine,
+      worldBible,
       triggerSfx: _triggerSfx,
       stopSfx:    stopAllSfx,
     });

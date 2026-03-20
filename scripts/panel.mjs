@@ -20,6 +20,24 @@ const TCC_SKILL_LABELS = {
   prf: "Performance", per: "Persuasion",      rel: "Religion",
   slt: "Sleight of Hand", ste: "Stealth",     sur: "Survival",
 };
+
+// Skills where failure is NOT obvious to the player — suitable for blind/subtle rolls.
+// Excluded: Athletics, Acrobatics, Stealth, Sleight of Hand, Performance,
+//           Persuasion, Intimidation, Deception (failure is immediately apparent).
+const TCC_SUBTLE_SKILLS = new Set([
+  "prc",  // Perception — "I see nothing" but is there something?
+  "ins",  // Insight — "They seem honest" but are they?
+  "inv",  // Investigation — "Nothing here" but was there a hidden door?
+  "arc",  // Arcana — recall lore (Nat 1 = wrong lore)
+  "his",  // History — recall lore
+  "rel",  // Religion — recall lore
+  "nat",  // Nature — recall lore / identify creatures
+  "med",  // Medicine — "Patient looks fine" but maybe poisoned
+  "sur",  // Survival — "No tracks" but maybe there are
+]);
+
+// Saves where failure is NOT obvious — only Wisdom (charm/fear) and Intelligence (illusions/psychic).
+const TCC_SUBTLE_SAVES = new Set(["wis", "int"]);
 const TCC_ABILITY_LABELS = {
   str: "Strength", dex: "Dexterity",     con: "Constitution",
   int: "Intelligence", wis: "Wisdom",    cha: "Charisma",
@@ -104,7 +122,7 @@ async function _aceCloseDialog(eventCount, eventLines = []) {
 }
 
 export class AcePanel extends foundry.applications.api.ApplicationV2 {
-  constructor({ aiProvider, sceneCtx, npcMemory, lkMemory, suggestionEngine, reputationEngine, subtleRolls, documentEngine, digestEngine, triggerSfx, stopSfx } = {}) {
+  constructor({ aiProvider, sceneCtx, npcMemory, lkMemory, suggestionEngine, reputationEngine, subtleRolls, documentEngine, digestEngine, worldBible, triggerSfx, stopSfx } = {}) {
     super();
     this.ai          = aiProvider;
     this.scene       = sceneCtx;
@@ -114,6 +132,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this.subtleRolls = subtleRolls ?? null; // SubtleRollManager — blind checks with AI narration
     this._documentEngine = documentEngine ?? null; // DocumentEngine — reference library
     this._digestEngine   = digestEngine   ?? null; // DigestEngine — AI-powered structured digests
+    this._worldBible     = worldBible     ?? null; // WorldBibleEngine — world reference bible
     this.suggestions = suggestionEngine;
     this.triggerSfx  = triggerSfx ?? (() => {});   // broadcasts SFX to all clients
     this.stopSfx     = stopSfx   ?? (() => {});   // stops SFX audio (thunder etc.)
@@ -152,13 +171,14 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this._lastEncounterHtml  = "";  // preserved across re-renders (popout/back)
     this._encounterData      = null; // parsed structured encounter (interactive mode)
     this._compendiumIndexCache = new Map(); // packId → { index, time }
+    this._expandedLibCards     = new Set(); // doc IDs expanded in Library (default: collapsed)
     this._compendiumCacheTTL = 300_000; // 5 minutes
     // ── Splash screen ─────────────────────────────────────
     this._showingSplash      = true;  // cinematic title card on first open
     this._splashTimer        = null;  // auto-dismiss timeout handle
     // ── Session memory ─────────────────────────────────────
     this._isGeneratingSummary = false;
-    this._sessionNum          = 1;    // auto-incremented each time Save Session Recap is used
+    this._sessionNum          = null;  // set from world store in _onRenderReady
     // ── Minimize badge ───────────────────────────────────
     this._savedPosition       = null; // stores position before minimize
     // ── Simple Calendar sync listener ────────────────────
@@ -167,10 +187,15 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this._selectedTokens = new Set();   // actor IDs (players) or token IDs (NPCs)
     this._selectedTiles  = new Set();   // tile IDs
     this._selectedItems  = new Set();   // token IDs (item-type tokens)
+    // ── NPC Speech (Select tab) ─────────────────────────
+    this._npcSpeechListening    = false;
+    this._npcSpeechRecognition  = null;
     // ── Tactical Command Center ──────────────────────────
     this._tccExpanded  = { stats: false, rolls: false, bulk: false, initiative: false };
     this._tccRollType  = "skill";   // "skill" | "save" | "check"
     this._tccRollMode  = "gm";     // "gm" | "subtle" | "request"
+    // ── Select panel collapsible sections ────────────────
+    this._collapsedSections = { players: false, npcs: false, tiles: true, items: true };
     // ── Adventure / Survival Tracker ──────────────────────
     this._tracker = {
       scenesSinceMeal:  0,
@@ -205,6 +230,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       copyMessage:         AcePanel._onCopyMessage,
       sendToNarration:     AcePanel._onSendToNarration,
       saveToJournal:       AcePanel._onSaveToJournal,
+      learnFromChat:       AcePanel._onLearnFromChat,
       // ── Narration tab ──────────────────────────────────
       narrationVoice:      AcePanel._onNarrationVoice,
       toggleVoiceGender:   AcePanel._onToggleVoiceGender,
@@ -214,11 +240,15 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       copyNarration:       AcePanel._onCopyNarration,
       sfxLightning:        AcePanel._onSfxLightning,
       sfxEarthquake:       AcePanel._onSfxEarthquake,
+      sfxStealthFail:      AcePanel._onSfxStealthFail,
+      sfxPerceptionPass:   AcePanel._onSfxPerceptionPass,
       // ── Ideas tab ──────────────────────────────────────
       generateSuggestions: AcePanel._onGenerateSuggestions,
       acceptDirection:     AcePanel._onAcceptDirection,
       dismissDirection:    AcePanel._onDismissDirection,
       // ── Encounter tab ──────────────────────────────────
+      saveSceneDesc:       AcePanel._onSaveSceneDesc,
+      clearSceneDesc:      AcePanel._onClearSceneDesc,
       generateEncounter:   AcePanel._onGenerateEncounter,
       rollEncounter:       AcePanel._onRollEncounter,
       copyEncounterResult: AcePanel._onCopyEncounterResult,
@@ -253,6 +283,10 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       generateBio:         AcePanel._onGenerateBio,
       generateItemBio:     AcePanel._onGenerateItemBio,
       generateAllItemBios: AcePanel._onGenerateAllItemBios,
+      // ── NPC Speech (Select tab) ───────────────────────────
+      npcSpeechSend:       AcePanel._onNpcSpeechSend,
+      npcSpeechVoice:      AcePanel._onNpcSpeechVoice,
+      npcSpeechStop:       AcePanel._onNpcSpeechStop,
       // ── Tactical Command Center ────────────────────────
       tccToggleSection:    AcePanel._onTccToggleSection,
       tccGroupRoll:        AcePanel._onTccGroupRoll,
@@ -272,6 +306,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       badgeClose:          AcePanel._onBadgeClose,
       // ── Document Library ──────────────────────────────
       libUploadClick:      AcePanel._onLibUploadClick,
+      libToggleCollapse:   AcePanel._onLibToggleCollapse,
       libToggleDoc:        AcePanel._onLibToggleDoc,
       libEditName:         AcePanel._onLibEditName,
       libEditYear:         AcePanel._onLibEditYear,
@@ -280,6 +315,11 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       libGenerateDigest:   AcePanel._onLibGenerateDigest,
       libToggleDigest:     AcePanel._onLibToggleDigest,
       libDeleteDigest:     AcePanel._onLibDeleteDigest,
+      libMergeIntoBible:   AcePanel._onLibMergeIntoBible,
+      libMergeDigestIntoBible: AcePanel._onLibMergeDigestIntoBible,
+      // ── World Bible ─────────────────────────────────
+      worldBibleGenerate:  AcePanel._onWorldBibleGenerate,
+      worldBibleRegenerate: AcePanel._onWorldBibleRegenerate,
     },
   };
 
@@ -457,6 +497,13 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
                   title="Earthquake shake + falling debris + bass rumble — all players see &amp; hear it">
             <i class="fas fa-mountain"></i> Earthquake
           </button>
+          <button class="ace-divider-action ace-sfx-subtle" data-action="sfxStealthFail"
+                  title="Stealth FAIL — twig snap / kicked rock — played to one player">
+            <i class="fas fa-shoe-prints"></i> Stealth Fail
+          </button>
+          <button class="ace-divider-action ace-sfx-subtle" data-action="sfxPerceptionPass"
+                  title="Perception PASS — faint rustle / whisper — played to one player">
+            <i class="fas fa-ear-listen"></i> Perception</button>
           <div class="ace-input-spacer"></div>
           ${this._renderSessionRecapButton()}
         </div>
@@ -528,35 +575,62 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
            ENCOUNTER TAB — Encounter generator
            ═══════════════════════════════════════════════════ -->
       <div class="ace-tab-content ${this._activeTab === "encounter" ? "active" : ""}" data-tab-content="encounter">
-        <div class="ace-context-toolbar ace-encounter-toolbar">
-          <button class="ace-btn ace-btn-generate" data-action="generateEncounter">
-            <i class="fas fa-dice-d20"></i> Generate
-          </button>
-          <button class="ace-btn ace-btn-roll-enc" data-action="rollEncounter"
-                  title="Roll for a random encounter based on current terrain (hidden from players)">
-            <i class="fas fa-dice"></i> Random Roll
-          </button>
-          <button class="ace-btn ace-btn-copy-enc" data-action="copyEncounterResult"
-                  title="Copy result to clipboard" style="margin-left:auto">
-            <i class="fas fa-copy"></i>
-          </button>
-        </div>
-        <!-- Crit/fumble results appear here via auto-detection (no manual buttons) -->
-        <div class="ace-cf-result ${this._lastCfClass}" id="ace-cf-result"${this._lastCfHtml ? "" : ' style="display:none"'}>${this._lastCfHtml}</div>
+        <div class="ace-encounter-split">
+          <!-- ── Top pane: GM Scene Notes ── -->
+          <div class="ace-enc-pane ace-enc-pane-top" id="ace-enc-pane-top">
+            <div class="ace-scene-desc-header">
+              <i class="fas fa-scroll"></i> <span class="ace-scene-desc-label">GM Scene Notes</span>
+              <span class="ace-scene-desc-name">${canvas?.scene?.name ?? "No scene"}</span>
+              <button class="ace-scene-desc-btn" data-action="clearSceneDesc" title="Clear notes">
+                <i class="fas fa-eraser"></i>
+              </button>
+              <button class="ace-scene-desc-btn ace-scene-desc-save" data-action="saveSceneDesc" title="Save to this scene">
+                <i class="fas fa-save"></i> Save
+              </button>
+            </div>
+            <textarea class="ace-scene-desc-input" id="ace-scene-desc"
+                      placeholder="Tell ACE about this scene — what does the party see? Only you (the GM) see this. ACE uses it to give better answers about this location."
+                      spellcheck="true">${canvas?.scene?.flags?.["ace-engine"]?.sceneDescription ?? ""}</textarea>
+          </div>
 
-        <div class="ace-encounter-result" id="ace-encounter">
-          ${this._lastEncounterHtml || `<p class="ace-placeholder">
-            <strong>Generate</strong> — builds a complete, ready-to-run encounter from scratch.<br><br>
-            <strong>Random Roll</strong> — secretly rolls based on current terrain. Clear, Signs of Danger, or full encounter.
-          </p>`}
-        </div>
+          <!-- ── Draggable gold divider ── -->
+          <div class="ace-enc-divider" id="ace-enc-divider" title="Drag to resize">
+            <span class="ace-enc-divider-grip"></span>
+          </div>
 
-        <!-- Prompt moved to bottom for consistency -->
-        <div class="ace-encounter-gen-input-wrap">
-          <textarea id="ace-encounter-prompt" spellcheck="true"
-                    class="ace-encounter-gen-input"
-                    placeholder="Describe what you want (e.g. 'goblin ambush on a forest road'). Leave blank to auto-generate from scene."
-                    rows="3"></textarea>
+          <!-- ── Bottom pane: Encounter Generator ── -->
+          <div class="ace-enc-pane ace-enc-pane-bottom" id="ace-enc-pane-bottom">
+            <div class="ace-context-toolbar ace-encounter-toolbar">
+              <button class="ace-btn ace-btn-generate" data-action="generateEncounter">
+                <i class="fas fa-dice-d20"></i> Generate
+              </button>
+              <button class="ace-btn ace-btn-roll-enc" data-action="rollEncounter"
+                      title="Roll for a random encounter based on current terrain (hidden from players)">
+                <i class="fas fa-dice"></i> Random Roll
+              </button>
+              <button class="ace-btn ace-btn-copy-enc" data-action="copyEncounterResult"
+                      title="Copy result to clipboard" style="margin-left:auto">
+                <i class="fas fa-copy"></i>
+              </button>
+            </div>
+            <!-- Crit/fumble results appear here via auto-detection (no manual buttons) -->
+            <div class="ace-cf-result ${this._lastCfClass}" id="ace-cf-result"${this._lastCfHtml ? "" : ' style="display:none"'}>${this._lastCfHtml}</div>
+
+            <div class="ace-encounter-result" id="ace-encounter">
+              ${this._lastEncounterHtml || `<p class="ace-placeholder">
+                <strong>Generate</strong> — builds a complete, ready-to-run encounter from scratch.<br><br>
+                <strong>Random Roll</strong> — secretly rolls based on current terrain. Clear, Signs of Danger, or full encounter.
+              </p>`}
+            </div>
+
+            <!-- Prompt at bottom -->
+            <div class="ace-encounter-gen-input-wrap">
+              <textarea id="ace-encounter-prompt" spellcheck="true"
+                        class="ace-encounter-gen-input"
+                        placeholder="Describe what you want (e.g. 'goblin ambush on a forest road'). Leave blank to auto-generate from scene."
+                        rows="2"></textarea>
+            </div>
+          </div>
         </div>
         <div class="ace-gold-divider ace-recap-divider">${this._renderSessionRecapButton()}</div>
       </div>
@@ -713,31 +787,53 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         </div>
 
         <!-- Players Section — always available -->
-        <section class="ace-el-section">
-          <h4 class="ace-el-section-header"><i class="fas fa-users"></i> Players <span class="ace-el-count">${players.length}</span></h4>
-          ${players.length ? `<div class="ace-el-grid">${players.map(p => this._buildElementCard(p)).join("")}</div>`
-            : `<p class="ace-el-empty">No player characters assigned</p>`}
+        <section class="ace-el-section${this._collapsedSections?.players ? " collapsed" : ""}" data-el-section="players">
+          <h4 class="ace-el-section-header" data-action="toggleElSection" data-el-section="players">
+            <i class="fas fa-users"></i> Players <span class="ace-el-count">${players.length}</span>
+            <i class="fas fa-chevron-down ace-el-chevron"></i>
+          </h4>
+          <div class="ace-el-section-body"${this._collapsedSections?.players ? ' style="display:none"' : ""}>
+            ${players.length ? `<div class="ace-el-grid">${players.map(p => this._buildElementCard(p)).join("")}</div>`
+              : `<p class="ace-el-empty">No player characters assigned</p>`}
+          </div>
         </section>
 
         <!-- NPCs Section — current scene only -->
-        <section class="ace-el-section">
-          <h4 class="ace-el-section-header"><i class="fas fa-skull"></i> NPCs <span class="ace-el-count">${npcs.length}</span></h4>
-          ${npcs.length ? `<div class="ace-el-grid">${npcs.map(n => this._buildElementCard(n)).join("")}</div>`
-            : `<p class="ace-el-empty">No NPCs in current scene</p>`}
+        <section class="ace-el-section${this._collapsedSections?.npcs ? " collapsed" : ""}" data-el-section="npcs">
+          <h4 class="ace-el-section-header" data-action="toggleElSection" data-el-section="npcs">
+            <i class="fas fa-skull"></i> NPCs <span class="ace-el-count">${npcs.length}</span>
+            <i class="fas fa-chevron-down ace-el-chevron"></i>
+          </h4>
+          <div class="ace-el-section-body"${this._collapsedSections?.npcs ? ' style="display:none"' : ""}>
+            ${npcs.length ? `<div class="ace-el-grid">${npcs.map(n => this._buildElementCard(n)).join("")}</div>`
+              : `<p class="ace-el-empty">No NPCs in current scene</p>`}
+          </div>
         </section>
 
+        ${this._buildNpcSpeechBox()}
+
         <!-- Tiles Section — current scene only -->
-        <section class="ace-el-section">
-          <h4 class="ace-el-section-header"><i class="fas fa-image"></i> Tiles <span class="ace-el-count">${tiles.length}</span></h4>
-          ${tiles.length ? `<div class="ace-el-grid">${tiles.map(t => this._buildElementCard(t)).join("")}</div>`
-            : `<p class="ace-el-empty">No tiles in current scene</p>`}
+        <section class="ace-el-section${this._collapsedSections?.tiles ? " collapsed" : ""}" data-el-section="tiles">
+          <h4 class="ace-el-section-header" data-action="toggleElSection" data-el-section="tiles">
+            <i class="fas fa-image"></i> Tiles <span class="ace-el-count">${tiles.length}</span>
+            <i class="fas fa-chevron-down ace-el-chevron"></i>
+          </h4>
+          <div class="ace-el-section-body"${this._collapsedSections?.tiles ? ' style="display:none"' : ""}>
+            ${tiles.length ? `<div class="ace-el-grid">${tiles.map(t => this._buildElementCard(t)).join("")}</div>`
+              : `<p class="ace-el-empty">No tiles in current scene</p>`}
+          </div>
         </section>
 
         <!-- Items Section — current scene only -->
-        <section class="ace-el-section">
-          <h4 class="ace-el-section-header"><i class="fas fa-gem"></i> Items <span class="ace-el-count">${items.length}</span></h4>
-          ${items.length ? `<div class="ace-el-grid">${items.map(it => this._buildElementCard(it)).join("")}</div>`
-            : `<p class="ace-el-empty">No items placed in current scene</p>`}
+        <section class="ace-el-section${this._collapsedSections?.items ? " collapsed" : ""}" data-el-section="items">
+          <h4 class="ace-el-section-header" data-action="toggleElSection" data-el-section="items">
+            <i class="fas fa-gem"></i> Items <span class="ace-el-count">${items.length}</span>
+            <i class="fas fa-chevron-down ace-el-chevron"></i>
+          </h4>
+          <div class="ace-el-section-body"${this._collapsedSections?.items ? ' style="display:none"' : ""}>
+            ${items.length ? `<div class="ace-el-grid">${items.map(it => this._buildElementCard(it)).join("")}</div>`
+              : `<p class="ace-el-empty">No items placed in current scene</p>`}
+          </div>
         </section>
 
         ${this._buildInventoryPanel()}
@@ -810,6 +906,73 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     `;
   }
 
+  // ── NPC Speech Box — "Speaking as [NPC]" ──────────────────
+
+  /**
+   * Returns the single selected NPC actor (if exactly one NPC is selected).
+   * Returns null if 0, 2+, or only players are selected.
+   */
+  _getSelectedNpcForSpeech() {
+    const selected = this._resolveSelectedActors();
+    const npcs = selected.filter(s => !s.isPlayer && s.actor?.type === "npc");
+    if (npcs.length !== 1) return null;
+    return npcs[0];
+  }
+
+  _buildNpcSpeechBox() {
+    const npc = this._getSelectedNpcForSpeech();
+    if (!npc) return "";
+
+    const { actor } = npc;
+    const safeName = this._escapeHtml(actor.name);
+    const envoyActive = !!game.modules?.get("ace-envoy")?.active;
+    const voiceId = envoyActive ? (actor.getFlag("ace-envoy", "voiceId") || "") : "";
+    const voiceAccent = envoyActive ? (actor.getFlag("ace-envoy", "voiceAccent") || "") : "";
+    const voiceMuted = envoyActive ? (actor.getFlag("ace-envoy", "voiceMuted") || false) : false;
+
+    // Voice status indicator
+    let voiceStatus = "";
+    if (!envoyActive) {
+      voiceStatus = `<span class="ace-speech-voice-status ace-speech-no-voice" title="ACE: Envoy not installed — no NPC voice available"><i class="fas fa-volume-mute"></i> No voice</span>`;
+    } else if (voiceMuted) {
+      voiceStatus = `<span class="ace-speech-voice-status ace-speech-muted" title="This NPC is muted (gender set to None in Envoy)"><i class="fas fa-volume-mute"></i> Muted</span>`;
+    } else if (voiceId) {
+      voiceStatus = `<span class="ace-speech-voice-status ace-speech-has-voice" title="Voice: ${voiceAccent || "default"}"><i class="fas fa-volume-up"></i> ${voiceAccent || "Voice ready"}</span>`;
+    } else {
+      voiceStatus = `<span class="ace-speech-voice-status ace-speech-no-voice" title="No voice assigned — drop token on scene or open AI Setup in Envoy"><i class="fas fa-volume-mute"></i> No voice</span>`;
+    }
+
+    return `
+      <section class="ace-npc-speech-box">
+        <div class="ace-speech-header">
+          <img class="ace-speech-portrait" src="${actor.prototypeToken?.texture?.src || actor.img || 'icons/svg/mystery-man.svg'}"
+               alt="${safeName}" onerror="this.src='icons/svg/mystery-man.svg'" />
+          <div class="ace-speech-header-info">
+            <span class="ace-speech-label"><i class="fas fa-comments"></i> Speaking as <strong>${safeName}</strong></span>
+            ${voiceStatus}
+          </div>
+        </div>
+        <textarea id="ace-npc-speech-input" class="ace-npc-speech-input"
+                  placeholder="Type what ${safeName} says…"
+                  spellcheck="true" rows="2"></textarea>
+        <div class="ace-speech-btn-row">
+          <button class="ace-btn ace-btn-mic" data-action="npcSpeechVoice"
+                  title="Voice input — speak as this NPC">
+            <i class="fas fa-microphone"></i>
+          </button>
+          <button class="ace-btn ace-btn-send" data-action="npcSpeechSend"
+                  title="Send to players — posts to chat and speaks aloud">
+            <i class="fas fa-paper-plane"></i> Send
+          </button>
+          <button class="ace-btn ace-btn-stop" data-action="npcSpeechStop"
+                  title="Stop audio playback">
+            <i class="fas fa-stop"></i>
+          </button>
+        </div>
+      </section>
+    `;
+  }
+
   _buildElementCard(el) {
     // Check if this NPC's actor is ACE-linked (persistent memory flag)
     const isLinked = el.type === "npc" && el.actorId && this._isActorLinked(el.actorId);
@@ -873,6 +1036,8 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     if (set.has(id)) {
       set.delete(id);
       target.closest(".ace-el-card")?.classList.remove("ace-el-selected");
+      // Clear canvas highlight when deselecting (mouseleave may not fire on click)
+      CanvasHighlight.unhighlight(id, type);
     } else {
       set.add(id);
       target.closest(".ace-el-card")?.classList.add("ace-el-selected");
@@ -897,12 +1062,16 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
 
     // Refresh Quick Stats if expanded
     this.refreshTccStats();
+    // Refresh NPC speech box (appears/disappears based on selection)
+    this._refreshNpcSpeechBox();
   }
 
   static _onClearSelection() {
     this._selectedTokens.clear();
     this._selectedTiles.clear();
     this._selectedItems.clear();
+    // Clear all canvas highlights (DOM replacement kills mouseleave events)
+    CanvasHighlight.clearAll();
     // Release all canvas selections
     canvas?.tokens?.releaseAll();
     canvas?.tiles?.releaseAll();
@@ -910,6 +1079,303 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     const container = this.element.querySelector('[data-tab-content="elements"]');
     if (container) container.innerHTML = this._buildSelectElementsPanel();
     this._wireSelectPanelEvents();
+  }
+
+  // ── NPC Speech Box — Actions & Helpers ───────────────────
+
+  /** Re-render just the speech box area without touching the rest of the select panel. */
+  _refreshNpcSpeechBox() {
+    const existing = this.element?.querySelector(".ace-npc-speech-box");
+    const newHtml = this._buildNpcSpeechBox();
+
+    if (existing && !newHtml) {
+      // NPC deselected — remove the box
+      if (this._npcSpeechListening) this._stopNpcSpeechVoice();
+      existing.remove();
+    } else if (!existing && newHtml) {
+      // NPC selected — insert after the NPC section
+      const npcSection = this.element?.querySelectorAll(".ace-el-section")?.[1]; // 2nd section = NPCs
+      if (npcSection) npcSection.insertAdjacentHTML("afterend", newHtml);
+      this._wireNpcSpeechEvents();
+      // Auto-scroll to show the speech box
+      requestAnimationFrame(() => {
+        const box = this.element?.querySelector(".ace-npc-speech-box");
+        box?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    } else if (existing && newHtml) {
+      // Selection changed (different NPC) — replace
+      if (this._npcSpeechListening) this._stopNpcSpeechVoice();
+      existing.outerHTML = newHtml;
+      this._wireNpcSpeechEvents();
+      requestAnimationFrame(() => {
+        const box = this.element?.querySelector(".ace-npc-speech-box");
+        box?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    }
+  }
+
+  /** Wire Enter key on the NPC speech textarea. */
+  _wireNpcSpeechEvents() {
+    const input = this.element?.querySelector("#ace-npc-speech-input");
+    if (!input) return;
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        this._npcSpeechSend();
+      }
+    });
+  }
+
+  /** Send NPC speech: TTS + chat + memory. */
+  async _npcSpeechSend() {
+    if (this._npcSpeechListening) this._stopNpcSpeechVoice();
+
+    const input = this.element?.querySelector("#ace-npc-speech-input");
+    const raw = input?.value?.trim();
+    if (!raw) return;
+    input.value = "";
+
+    const text = this._cleanupTranscript(raw);
+
+    const npc = this._getSelectedNpcForSpeech();
+    if (!npc) {
+      ui.notifications?.warn("ACE: Select a single NPC to speak as.");
+      return;
+    }
+
+    const { actor } = npc;
+    const safeName = this._escapeHtml(actor.name);
+    const safeText = this._escapeHtml(text);
+
+    // ── Post to Foundry chat as the NPC ──
+    const chatContent =
+      `<div style="border-left:3px solid #8b5cf6; padding:6px 12px; margin:0; ` +
+      `background:rgba(139,92,246,0.07); border-radius:0 4px 4px 0;">` +
+      `<span style="display:block; font-size:10px; color:#8b5cf6; text-transform:uppercase; ` +
+      `letter-spacing:1px; margin-bottom:4px; font-weight:bold;">` +
+      `<i class="fas fa-comments"></i> ${safeName}</span>` +
+      `<span style="font-style:italic; line-height:1.5;">"${safeText}"</span></div>`;
+
+    // Find the token for this NPC to use as speaker
+    const token = canvas?.tokens?.placeables?.find(t => t.actor?.id === actor.id);
+
+    await ChatMessage.create({
+      content: chatContent,
+      speaker: {
+        alias: actor.name,
+        actor: actor.id,
+        token: token?.id ?? null,
+        scene: canvas?.scene?.id ?? null,
+      },
+      flags: { "ace-engine": { isNpcSpeech: true } },
+    });
+
+    // ── Save to memory ──
+    this.lkMemory?.logNarration?.(`[${actor.name}] "${text}"`, canvas?.scene?.name);
+
+    // ── TTS via Envoy voice ──
+    const envoyActive = !!game.modules?.get("ace-envoy")?.active;
+    if (!envoyActive) {
+      ui.notifications?.warn("ACE: Envoy not installed — text posted to chat but no NPC voice available.");
+      return;
+    }
+
+    const voiceId = actor.getFlag("ace-envoy", "voiceId") || "";
+    const voiceMuted = actor.getFlag("ace-envoy", "voiceMuted") || false;
+
+    if (voiceMuted) {
+      ui.notifications?.info(`ACE: ${actor.name} is muted — text posted to chat only.`);
+      return;
+    }
+    if (!voiceId) {
+      ui.notifications?.warn(`ACE: ${actor.name} has no voice assigned. Drop the token on the scene or open AI Setup in Envoy.`);
+      return;
+    }
+
+    const voiceSettings = actor.getFlag("ace-envoy", "voiceSettings") || {
+      stability: 0.5, similarity_boost: 0.8, style: 0.35,
+    };
+
+    await this._speakAsNpc(text, voiceId, voiceSettings);
+  }
+
+  /**
+   * Speak text using a specific ElevenLabs voice ID + settings (from Envoy flags).
+   * Broadcasts audio to all players via socket.
+   */
+  async _speakAsNpc(text, voiceId, voiceSettings) {
+    this._cancelTTS();
+    const clean = this._cleanForSpeech(text);
+    if (!clean) return;
+
+    const { key: apiKey } = this._getElevenLabsKey();
+    if (!apiKey) {
+      ui.notifications?.warn("ACE: No ElevenLabs API key configured. Set it in Module Settings.");
+      return;
+    }
+
+    const modelId = localCredentials?.elevenLabsModel
+      || game.settings.get(MODULE_ID, "elevenLabsModel")
+      || "eleven_multilingual_v2";
+
+    const endpoint = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+    console.log(`${MODULE_ID} | NPC Speech: voice=${voiceId}, model=${modelId}`);
+
+    try {
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: { "xi-api-key": apiKey, "Content-Type": "application/json", "Accept": "audio/mpeg" },
+        body: JSON.stringify({
+          text: clean,
+          model_id: modelId,
+          voice_settings: {
+            stability: voiceSettings.stability ?? 0.5,
+            similarity_boost: voiceSettings.similarity_boost ?? 0.8,
+            style: voiceSettings.style ?? 0.35,
+            use_speaker_boost: true,
+          },
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+
+      if (!resp.ok) {
+        console.warn(`${MODULE_ID} | ElevenLabs NPC speech error ${resp.status}`);
+        ui.notifications?.warn(`ACE: ElevenLabs returned ${resp.status} — check your API key and voice ID.`);
+        return;
+      }
+
+      const blob = await resp.blob();
+
+      // Broadcast to all players
+      try {
+        const base64 = await AcePanel._blobToBase64(blob);
+        if (base64.length < 700_000) {
+          game.socket.emit(`module.${MODULE_ID}`, {
+            type: "narration-audio",
+            audio: base64,
+            userId: game.user.id,
+          });
+          console.log(`${MODULE_ID} | NPC Speech: broadcast audio (${(base64.length / 1024).toFixed(0)} KB)`);
+        } else {
+          console.warn(`${MODULE_ID} | NPC Speech: audio too large for socket (${(base64.length / 1024).toFixed(0)} KB)`);
+        }
+      } catch (bcastErr) {
+        console.warn(`${MODULE_ID} | NPC Speech: broadcast failed:`, bcastErr);
+      }
+
+      // Play locally for GM
+      const blobUrl = URL.createObjectURL(blob);
+      this._ttsAudio = new Audio(blobUrl);
+      this._ttsAudio.playbackRate = 1.0; // NPC speech at normal speed (not narrator 1.1x)
+      this._ttsAudio.onended = () => {
+        URL.revokeObjectURL(blobUrl);
+        this._ttsAudio = null;
+        this._ttsPlaying = false;
+        this._ttsPaused = false;
+        this._updateTtsUI();
+      };
+      this._ttsAudio.onerror = () => {
+        URL.revokeObjectURL(blobUrl);
+        this._ttsAudio = null;
+        this._ttsPlaying = false;
+        this._ttsPaused = false;
+        this._updateTtsUI();
+      };
+      this._ttsPlaying = true;
+      this._ttsPaused = false;
+      this._updateTtsUI();
+      await this._ttsAudio.play();
+    } catch (err) {
+      console.error(`${MODULE_ID} | NPC Speech TTS failed:`, err);
+      ui.notifications?.warn("ACE: NPC voice playback failed — check console.");
+    }
+  }
+
+  // ── NPC Speech — Action handlers ──
+
+  static async _onNpcSpeechSend(event, target) {
+    await this._npcSpeechSend();
+  }
+
+  static _onNpcSpeechVoice(event, target) {
+    if (this._npcSpeechListening) {
+      this._stopNpcSpeechVoice();
+    } else {
+      this._startNpcSpeechVoice();
+    }
+  }
+
+  static _onNpcSpeechStop(event, target) {
+    this._cancelTTS();
+  }
+
+  _startNpcSpeechVoice() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      ui.notifications?.warn("ACE: Speech recognition not supported in this browser.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    const textarea = this.element?.querySelector("#ace-npc-speech-input");
+    if (!textarea) return;
+
+    let finalTranscript = textarea.value;
+
+    recognition.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          finalTranscript += e.results[i][0].transcript;
+        } else {
+          interim += e.results[i][0].transcript;
+        }
+      }
+      textarea.value = finalTranscript + interim;
+    };
+
+    recognition.onerror = (e) => {
+      console.warn(`${MODULE_ID} | NPC speech recognition error:`, e.error);
+      this._stopNpcSpeechVoice();
+    };
+
+    recognition.onend = () => {
+      // Auto-restart if still in listening mode (browser may stop after silence)
+      if (this._npcSpeechListening) {
+        try { recognition.start(); } catch (_) { this._stopNpcSpeechVoice(); }
+      }
+    };
+
+    this._npcSpeechRecognition = recognition;
+    this._npcSpeechListening = true;
+    recognition.start();
+
+    // Update mic button visual
+    const micBtn = this.element?.querySelector('[data-action="npcSpeechVoice"]');
+    if (micBtn) {
+      micBtn.classList.add("ace-btn-mic-active");
+      micBtn.innerHTML = '<i class="fas fa-circle ace-mic-pulse"></i>';
+    }
+  }
+
+  _stopNpcSpeechVoice() {
+    if (this._npcSpeechRecognition) {
+      this._npcSpeechListening = false;
+      try { this._npcSpeechRecognition.stop(); } catch (_) {}
+      this._npcSpeechRecognition = null;
+    }
+    this._npcSpeechListening = false;
+
+    // Update mic button visual
+    const micBtn = this.element?.querySelector('[data-action="npcSpeechVoice"]');
+    if (micBtn) {
+      micBtn.classList.remove("ace-btn-mic-active");
+      micBtn.innerHTML = '<i class="fas fa-microphone"></i>';
+    }
   }
 
   // ── Canvas → Panel sync (called from controlToken / controlTile hooks) ──
@@ -960,6 +1426,8 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
 
     // Refresh Quick Stats
     this.refreshTccStats();
+    // Refresh NPC speech box
+    this._refreshNpcSpeechBox();
   }
 
   /**
@@ -1326,6 +1794,9 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
 
   /** Wire hover + double-click events for element cards */
   _wireSelectPanelEvents() {
+    // Clear any stuck highlights from previous render (innerHTML kills mouseleave)
+    CanvasHighlight.clearAll();
+
     const cards = this.element.querySelectorAll(".ace-el-card");
     for (const card of cards) {
       const id   = card.dataset.elId;
@@ -1342,6 +1813,24 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
         if (actor) actor.sheet.render(true);
       });
     }
+
+    // Wire collapsible section headers (Players, NPCs, Tiles, Items)
+    const sectionHeaders = this.element.querySelectorAll("[data-action='toggleElSection']");
+    for (const header of sectionHeaders) {
+      header.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const key = header.dataset.elSection;
+        if (!key || !(key in this._collapsedSections)) return;
+        this._collapsedSections[key] = !this._collapsedSections[key];
+        const section = header.closest(".ace-el-section");
+        const body = section?.querySelector(".ace-el-section-body");
+        if (body) body.style.display = this._collapsedSections[key] ? "none" : "block";
+        section?.classList.toggle("collapsed", this._collapsedSections[key]);
+      });
+    }
+
+    // Wire NPC speech box events (Enter key)
+    this._wireNpcSpeechEvents();
 
     // Wire TCC action bar events
     this._wireTccEvents();
@@ -1388,45 +1877,45 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     `;
   }
 
+  /** Render stat rows HTML for an array of resolved actors (shared by build + refresh) */
+  _renderStatRows(actors) {
+    return actors.map(({ actor }) => {
+      const hp    = actor.system?.attributes?.hp;
+      const hpVal = hp?.value ?? 0;
+      const hpMax = hp?.max ?? 1;
+      const pct   = Math.round((hpVal / Math.max(hpMax, 1)) * 100);
+      const ac    = actor.system?.attributes?.ac?.value ?? "\u2014";
+      const spd   = actor.system?.attributes?.movement?.walk ?? "\u2014";
+      const conds = (actor.effects ?? [])
+        .filter(e => !e.disabled)
+        .map(e => e.name || e.label || "")
+        .filter(Boolean)
+        .join(", ");
+      const img   = actor.prototypeToken?.texture?.src || actor.img || "icons/svg/mystery-man.svg";
+      const safeName  = this._escapeHtml(actor.name);
+      const safeConds = this._escapeHtml(conds);
+      return `
+        <div class="ace-tcc-stat-row">
+          <img class="ace-tcc-stat-img" src="${img}" alt="${safeName}"
+               onerror="this.src='icons/svg/mystery-man.svg'" />
+          <span class="ace-tcc-stat-name" title="${safeName}">${safeName}</span>
+          <span class="ace-tcc-stat-hp" title="HP: ${hpVal}/${hpMax}">
+            <span class="ace-tcc-hp-fill" style="width:${pct}%"></span>
+            <span class="ace-tcc-hp-text">${hpVal}/${hpMax}</span>
+          </span>
+          <span class="ace-tcc-stat-ac" title="Armor Class">AC ${ac}</span>
+          <span class="ace-tcc-stat-spd" title="Speed">${spd}ft</span>
+          ${safeConds ? `<span class="ace-tcc-stat-cond" title="${safeConds}">${safeConds}</span>` : ""}
+        </div>`;
+    }).join("");
+  }
+
   _buildTccQuickStats() {
     const exp = this._tccExpanded.stats;
     const actors = this._resolveSelectedActors();
-
-    let content;
-    if (!actors.length) {
-      content = `<p class="ace-el-empty">Select tokens to view stats</p>`;
-    } else {
-      content = actors.map(({ actor }) => {
-        const hp    = actor.system?.attributes?.hp;
-        const hpVal = hp?.value ?? 0;
-        const hpMax = hp?.max ?? 1;
-        const pct   = Math.round((hpVal / Math.max(hpMax, 1)) * 100);
-        const ac    = actor.system?.attributes?.ac?.value ?? "—";
-        const spd   = actor.system?.attributes?.movement?.walk ?? "—";
-        const conds = (actor.effects ?? [])
-          .filter(e => !e.disabled)
-          .map(e => e.name || e.label || "")
-          .filter(Boolean)
-          .join(", ");
-        const img   = actor.prototypeToken?.texture?.src || actor.img || "icons/svg/mystery-man.svg";
-
-        const safeName = this._escapeHtml(actor.name);
-        const safeConds = this._escapeHtml(conds);
-        return `
-          <div class="ace-tcc-stat-row">
-            <img class="ace-tcc-stat-img" src="${img}" alt="${safeName}"
-                 onerror="this.src='icons/svg/mystery-man.svg'" />
-            <span class="ace-tcc-stat-name" title="${safeName}">${safeName}</span>
-            <span class="ace-tcc-stat-hp" title="HP: ${hpVal}/${hpMax}">
-              <span class="ace-tcc-hp-fill" style="width:${pct}%"></span>
-              <span class="ace-tcc-hp-text">${hpVal}/${hpMax}</span>
-            </span>
-            <span class="ace-tcc-stat-ac" title="Armor Class">AC ${ac}</span>
-            <span class="ace-tcc-stat-spd" title="Speed">${spd}ft</span>
-            ${safeConds ? `<span class="ace-tcc-stat-cond" title="${safeConds}">${safeConds}</span>` : ""}
-          </div>`;
-      }).join("");
-    }
+    const content = actors.length
+      ? this._renderStatRows(actors)
+      : `<p class="ace-el-empty">Select tokens to view stats</p>`;
 
     return `
       <div class="ace-tcc-section ${exp ? "expanded" : ""}">
@@ -1487,9 +1976,13 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       </div>`;
   }
 
-  _buildTccRollOptions(type) {
+  _buildTccRollOptions(type, subtleOnly = false) {
     const labels = type === "skill" ? TCC_SKILL_LABELS : TCC_ABILITY_LABELS;
+    const filter = subtleOnly
+      ? (type === "skill" ? TCC_SUBTLE_SKILLS : TCC_SUBTLE_SAVES)
+      : null;
     return Object.entries(labels)
+      .filter(([id]) => !filter || filter.has(id))
       .map(([id, name]) => `<option value="${id}">${name}</option>`)
       .join("");
   }
@@ -1609,30 +2102,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
         statsBody.innerHTML = `<p class="ace-el-empty">Select tokens to view stats</p>`;
         return;
       }
-      statsBody.innerHTML = actors.map(({ actor }) => {
-        const hp    = actor.system?.attributes?.hp;
-        const hpVal = hp?.value ?? 0;
-        const hpMax = hp?.max ?? 1;
-        const pct   = Math.round((hpVal / Math.max(hpMax, 1)) * 100);
-        const ac    = actor.system?.attributes?.ac?.value ?? "\u2014";
-        const spd   = actor.system?.attributes?.movement?.walk ?? "\u2014";
-        const conds = (actor.effects ?? []).filter(e => !e.disabled).map(e => e.name || e.label || "").filter(Boolean).join(", ");
-        const img   = actor.prototypeToken?.texture?.src || actor.img || "icons/svg/mystery-man.svg";
-        const safeName = this._escapeHtml(actor.name);
-        const safeConds = this._escapeHtml(conds);
-        return `
-          <div class="ace-tcc-stat-row">
-            <img class="ace-tcc-stat-img" src="${img}" alt="${safeName}" onerror="this.src='icons/svg/mystery-man.svg'" />
-            <span class="ace-tcc-stat-name" title="${safeName}">${safeName}</span>
-            <span class="ace-tcc-stat-hp" title="HP: ${hpVal}/${hpMax}">
-              <span class="ace-tcc-hp-fill" style="width:${pct}%"></span>
-              <span class="ace-tcc-hp-text">${hpVal}/${hpMax}</span>
-            </span>
-            <span class="ace-tcc-stat-ac" title="Armor Class">AC ${ac}</span>
-            <span class="ace-tcc-stat-spd" title="Speed">${spd}ft</span>
-            ${safeConds ? `<span class="ace-tcc-stat-cond" title="${safeConds}">${safeConds}</span>` : ""}
-          </div>`;
-      }).join("");
+      statsBody.innerHTML = this._renderStatRows(actors);
     }
   }
 
@@ -1648,6 +2118,25 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     section?.classList.toggle("expanded", this._tccExpanded[sectionKey]);
     // Auto-refresh Quick Stats content when expanding
     if (sectionKey === "stats" && this._tccExpanded.stats) this.refreshTccStats();
+    // Scroll expanded section into view
+    if (this._tccExpanded[sectionKey] && section) {
+      requestAnimationFrame(() => section.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+    }
+  }
+
+  /** Toggle collapsible sections in the Select element list (Players, NPCs, Tiles, Items) */
+  static _onToggleElSection(event, target) {
+    const key = target.dataset.elSection;
+    if (!key || !(key in this._collapsedSections)) return;
+    this._collapsedSections[key] = !this._collapsedSections[key];
+    const section = target.closest(".ace-el-section");
+    const body = section?.querySelector(".ace-el-section-body");
+    if (body) body.style.display = this._collapsedSections[key] ? "none" : "block";
+    section?.classList.toggle("collapsed", this._collapsedSections[key]);
+    // Scroll expanded section into view
+    if (!this._collapsedSections[key] && section) {
+      requestAnimationFrame(() => section.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+    }
   }
 
   static async _onTccGroupRoll(event, target) {
@@ -1836,7 +2325,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
         this._tccRollType = btn.dataset.rollType;
         typeButtons.forEach(b => b.classList.toggle("active", b === btn));
         const select = this.element.querySelector("#ace-tcc-roll-id");
-        if (select) select.innerHTML = this._buildTccRollOptions(this._tccRollType);
+        if (select) select.innerHTML = this._buildTccRollOptions(this._tccRollType, this._tccRollMode === "subtle");
       });
     }
 
@@ -1850,6 +2339,9 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
         // Show/hide flavor text input (only for subtle mode)
         const flavorWrap = this.element.querySelector(".ace-roll-flavor-wrap");
         if (flavorWrap) flavorWrap.classList.toggle("visible", this._tccRollMode === "subtle");
+        // Refresh skill dropdown — Subtle mode filters to eligible skills only
+        const select = this.element.querySelector("#ace-tcc-roll-id");
+        if (select) select.innerHTML = this._buildTccRollOptions(this._tccRollType, this._tccRollMode === "subtle");
         // Update execute button label
         const execBtn = this.element.querySelector(".ace-btn-roll-execute");
         if (execBtn) {
@@ -1903,7 +2395,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
             <span class="ace-msg-role">${roleLabel}</span>
             ${msg.role === "assistant" ? `
               <div class="ace-msg-actions">
-                <button class="ace-icon-btn" data-action="sendToNarration" data-index="${i}" title="Send narration to Narration tab">
+                <button class="ace-icon-btn" data-action="sendToNarration" data-index="${i}" title="Send to Narration tab">
                   <i class="fas fa-scroll"></i>
                 </button>
                 <button class="ace-icon-btn" data-action="copyMessage" data-index="${i}" title="Copy">
@@ -1912,6 +2404,10 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
                 <button class="ace-icon-btn" data-action="saveToJournal" data-index="${i}" title="Save to Journal">
                   <i class="fas fa-book"></i>
                 </button>
+                ${this._worldBible?.hasData ? `
+                <button class="ace-icon-btn ace-learn-btn" data-action="learnFromChat" data-index="${i}" title="Learn — extract world knowledge into the Bible">
+                  <i class="fas fa-brain"></i>
+                </button>` : ""}
               </div>
             ` : ""}
           </div>
@@ -2072,6 +2568,9 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       });
     }
 
+    // Encounter tab — draggable split pane divider
+    this._wireEncounterDivider();
+
     // Subscribe to suggestion engine updates (guard: only subscribe once)
     if (this.suggestions && !this._unsubSuggestions) {
       this._unsubSuggestions = this.suggestions.on((directions) => {
@@ -2165,12 +2664,16 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       this._panelDragCleanup = null;
       this._panelDragBound = false;
     }
-    // Clean up sidebar collapse hook
+    // Clean up sidebar observer + hook
+    if (this._sidebarObserver) {
+      this._sidebarObserver.disconnect();
+      this._sidebarObserver = null;
+    }
     if (this._sidebarHookId !== undefined) {
       Hooks.off("collapseSidebar", this._sidebarHookId);
       this._sidebarHookId = undefined;
-      this._sidebarListenerBound = false;
     }
+    this._sidebarListenerBound = false;
     this._stopVoice();
     this._stopNarrationVoice();
     this._cancelTTS();
@@ -2191,6 +2694,11 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     // Auto-stop voice recognition when switching away from its tab
     if (tab !== "narration" && this._narrationListening) this._stopNarrationVoice();
     if (tab !== "chat" && this._isListening) this._stopVoice();
+
+    // Clear canvas highlights when leaving Select tab (mouseleave may not fire on tab switch)
+    if (this._activeTab === "elements" && tab !== "elements") {
+      CanvasHighlight.clearAll();
+    }
 
     this.element.querySelectorAll(".ace-tab").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.tab === tab);
@@ -2224,6 +2732,9 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
   static _onStopAudio(event, target) {
     this._cancelTTS();   // stops ElevenLabs audio + browser TTS
     this.stopSfx();      // stops thunder audio + any browser speech synthesis
+    // Also kill standalone narration audio (broadcast TTS that bypasses panel)
+    const api = game.modules.get("ace-engine")?.api;
+    if (api?.stopAllAudio) api.stopAllAudio();
   }
 
   // ── TTS Pause / Resume / Stop ────────────────────────────
@@ -2265,6 +2776,130 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       btn.classList.remove("ace-digest-paused");
     }
   }
+
+  // ── World Bible Actions ─────────────────────────────────────
+
+  static async _onWorldBibleGenerate(event, target) {
+    if (!this._worldBible || !this.ai) {
+      ui.notifications?.warn("ACE: AI provider not initialized.");
+      return;
+    }
+    if (this._worldBible.isRunning) {
+      ui.notifications?.info("World Bible generation already in progress.");
+      return;
+    }
+
+    // Get selected setting
+    const settingEl = this.element?.querySelector("#ace-world-bible-setting");
+    const settingVal = settingEl?.value ?? "faerun";
+
+    let setting, era;
+    switch (settingVal) {
+      case "faerun":
+        setting = "Forgotten Realms — Faerûn";
+        era = "Post-Sundering (5e, ~1489-1496 DR)";
+        break;
+      case "eberron":
+        setting = "Eberron";
+        era = "998 YK (5e era)";
+        break;
+      case "greyhawk":
+        setting = "Greyhawk — Oerth";
+        era = "Common Year 591 (5e era)";
+        break;
+      default:
+        ui.notifications?.warn("Custom settings not yet supported — coming soon!");
+        return;
+    }
+
+    // Show progress bar
+    const progressEl = this.element?.querySelector("#ace-world-bible-progress");
+    if (progressEl) {
+      progressEl.style.display = "block";
+      progressEl.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Starting World Bible generation...`;
+    }
+
+    // Disable the button
+    const btn = target.closest("button");
+    if (btn) {
+      btn.disabled = true;
+      btn.style.opacity = "0.5";
+      btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Generating...`;
+    }
+
+    try {
+      await this._worldBible.generate(setting, era, this.ai, game.world.id, (step, total, regionName, phase) => {
+        if (progressEl) {
+          const pct = Math.round((step / total) * 100);
+          const bar = `<div style="background:#333;border-radius:3px;height:6px;margin-top:4px;"><div style="background:linear-gradient(90deg,#d4af37,#c49b2f);height:6px;border-radius:3px;width:${pct}%;transition:width 0.3s;"></div></div>`;
+          if (phase === "paused") {
+            progressEl.innerHTML = `<i class="fas fa-pause"></i> Paused at ${regionName} (${step}/${total})${bar}`;
+          } else if (phase === "complete") {
+            progressEl.innerHTML = `<i class="fas fa-check" style="color:#50c878"></i> World Bible complete! ${total} regions generated.${bar}`;
+          } else {
+            progressEl.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${regionName} (${step}/${total})${bar}`;
+          }
+        }
+      });
+
+      ui.notifications?.info(`World Bible generated! ${this._worldBible.getStats()?.nationCount ?? 0} nations, ${this._worldBible.getStats()?.cityCount ?? 0} cities, ${this._worldBible.getStats()?.factionCount ?? 0} factions.`);
+
+      // Refresh the library panel to show the new bible stats
+      this._refreshLibraryUI();
+
+    } catch (err) {
+      console.error(`${MODULE_ID} | World Bible generation error:`, err);
+      if (progressEl) {
+        progressEl.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ff6b6b"></i> ${err.message}`;
+      }
+      if (!err.message?.includes("cancelled")) {
+        ui.notifications?.error(`World Bible: ${err.message}`);
+      }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = "1";
+        btn.innerHTML = `<i class="fas fa-globe"></i> Generate World Bible`;
+      }
+    }
+  }
+
+  static async _onWorldBibleRegenerate(event, target) {
+    const confirmed = await Dialog.confirm({
+      title: "Regenerate World Bible",
+      content: `<p>This will <strong>overwrite</strong> the current World Bible with freshly generated data.</p>
+        <p>A backup of the current version will be saved first.</p>
+        <p style="color:#d4af37;font-weight:600;margin-top:8px;">&#9888; This costs ~14 AI API calls and may use $2\u20134 in API credits depending on your provider.</p>
+        <p>Continue?</p>`,
+    });
+    if (!confirmed) return;
+
+    // Backup current before regenerating
+    if (this._worldBible?.hasData) {
+      await this._worldBible.backup(game.world.id);
+      ui.notifications?.info("Current World Bible backed up.");
+    }
+
+    // Trigger generate with the existing setting
+    const stats = this._worldBible?.getStats();
+    const settingVal = stats?.setting?.includes("Faerûn") ? "faerun"
+                     : stats?.setting?.includes("Eberron") ? "eberron"
+                     : stats?.setting?.includes("Greyhawk") ? "greyhawk"
+                     : "faerun";
+
+    // Create a fake select element value for the generate handler
+    const section = this.element?.querySelector("#ace-world-bible-section");
+    if (section) {
+      // Replace section with generation UI temporarily
+      this._worldBible._bible = null;
+      this._worldBible._loaded = true;
+      this._refreshLibraryUI();
+      // Set the dropdown to match previous setting
+      const dropdown = this.element?.querySelector("#ace-world-bible-setting");
+      if (dropdown) dropdown.value = settingVal;
+    }
+  }
+
 
   // ── Session Memory Actions ──────────────────────────────────
 
@@ -2363,12 +2998,18 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
    */
   _getTargetLeft() {
     const panelW = this.position?.width ?? 555;
-    const gap = 24;
+    const gap = 10;
     let sidebarW = 0;
     try {
-      const sidebarEl = document.getElementById("sidebar");
-      if (sidebarEl && !sidebarEl.classList.contains("collapsed")) {
-        sidebarW = sidebarEl.offsetWidth || 310;
+      // The tab icon strip never moves — its left edge is our anchor.
+      // When collapsed: ACE sits left of the tab strip.
+      // When expanded: ACE sits left of the tab strip + content panel.
+      const contentEl = document.getElementById("sidebar-content");
+      const isExpanded = contentEl?.classList.contains("expanded");
+      // Tab strip width is constant; content width is added when expanded
+      sidebarW = this._sidebarTabsWidth || 58;
+      if (isExpanded) {
+        sidebarW += this._sidebarContentWidth || 312;
       }
     } catch (_) { /* no sidebar */ }
     return Math.max(20, window.innerWidth - panelW - gap - sidebarW);
@@ -2376,18 +3017,69 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
 
   /**
    * Listen for sidebar open/close and reposition the panel to stay clear.
-   * Called once during first render.
+   * Uses a MutationObserver on #sidebar-content to detect the "expanded"
+   * class toggle — works regardless of how the sidebar is opened/closed
+   * (collapse arrow, tab click, API call, etc.).
    */
   _initSidebarListener() {
     if (this._sidebarListenerBound) return;
     this._sidebarListenerBound = true;
 
-    this._sidebarHookId = Hooks.on("collapseSidebar", (_sidebar, collapsed) => {
-      // Don't reposition during splash or when minimized
+    const contentEl = document.getElementById("sidebar-content");
+    const sidebarEl = document.getElementById("sidebar");
+
+    // Measure the tab strip width once (it never changes)
+    const tabsEl = sidebarEl?.querySelector("nav.tabs");
+    this._sidebarTabsWidth = tabsEl ? tabsEl.getBoundingClientRect().width : 58;
+    // Measure content panel width — use CSS variable if available, else measure
+    const sidebarWidth = getComputedStyle(document.documentElement)
+      .getPropertyValue("--sidebar-full-width")?.trim();
+    if (sidebarWidth) {
+      // Parse "calc(300px + 12px)" → just use the sidebar-width (300) + scroll gutter (12)
+      const sw = parseInt(getComputedStyle(document.documentElement)
+        .getPropertyValue("--sidebar-width")) || 300;
+      const sg = parseInt(getComputedStyle(document.documentElement)
+        .getPropertyValue("--sidebar-scroll-gutter")) || 12;
+      this._sidebarContentWidth = sw + sg;
+    } else {
+      this._sidebarContentWidth = contentEl?.getBoundingClientRect().width || 312;
+    }
+
+    if (contentEl) {
+      this._sidebarObserver = new MutationObserver(() => {
+        if (this._showingSplash || this._savedPosition) return;
+        // Slide immediately — no delay, moves in sync with the sidebar
+        this._slideToSidebar();
+      });
+      this._sidebarObserver.observe(contentEl, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+    }
+
+    // Fallback: also listen to Foundry's hook
+    this._sidebarHookId = Hooks.on("collapseSidebar", () => {
       if (this._showingSplash || this._savedPosition) return;
-      const newLeft = this._getTargetLeft();
-      try { this.setPosition({ left: newLeft }); } catch (_) {}
+      this._slideToSidebar();
     });
+  }
+
+  /** Smoothly slide ACE to sit flush against the sidebar's left edge. */
+  _slideToSidebar() {
+    const newLeft = this._getTargetLeft();
+    const el = this.element;
+    if (!el) return;
+    // Skip if panel is already at (or very near) the target position
+    const currentLeft = this.position?.left ?? 0;
+    if (Math.abs(currentLeft - newLeft) < 5) return;
+    el.style.transition = "left 0.35s ease";
+    this.setPosition({ left: newLeft });
+    const cleanup = () => {
+      el.style.transition = "";
+      el.removeEventListener("transitionend", cleanup);
+    };
+    el.addEventListener("transitionend", cleanup, { once: true });
+    setTimeout(cleanup, 400);
   }
 
   // ── Full-Panel Drag ────────────────────────────────────────
@@ -2745,6 +3437,30 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     ui.notifications.info(`Saved to journal: ${journalName}`);
   }
 
+  static async _onLearnFromChat(event, target) {
+    const idx = parseInt(target.dataset.index ?? target.closest("[data-index]")?.dataset.index);
+    if (isNaN(idx)) return;
+
+    // Visual feedback on button
+    const btn = target.closest("[data-action]") || target;
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
+
+    try {
+      const result = await this._learnFromMessage(idx);
+      // Flash green on success
+      btn.innerHTML = `<i class="fas fa-check" style="color:#50c878"></i>`;
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }, 2000);
+    } catch (err) {
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+    }
+  }
+
   // ── Narration tab Actions ──────────────────────────────────
 
   static _onNarrationVoice(event, target) {
@@ -2832,6 +3548,61 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     this.triggerSfx("earthquake");
   }
 
+  static _onSfxStealthFail(event, target) {
+    AcePanel._showPlayerPicker.call(this, "stealthFail", "Stealth Fail — Who stepped on the twig?", target);
+  }
+
+  static _onSfxPerceptionPass(event, target) {
+    AcePanel._showPlayerPicker.call(this, "perceptionPass", "Perception Pass — Who heard something?", target);
+  }
+
+  /**
+   * Shows a quick player-picker dropdown so the GM can target one player.
+   * Plays the SFX only on that player's client.
+   */
+  static _showPlayerPicker(effect, title, buttonEl) {
+    // Get active non-GM players
+    const players = game.users.filter(u => u.active && !u.isGM);
+    if (!players.length) {
+      ui.notifications.warn("No active players connected.");
+      return;
+    }
+
+    // If only one player, skip the picker
+    if (players.length === 1) {
+      this.triggerSfx(effect, players[0].id);
+      ui.notifications.info(`🔊 ${effect === "stealthFail" ? "Stealth fail" : "Perception pass"} sent to ${players[0].name}`);
+      return;
+    }
+
+    // Build a quick dialog with player buttons
+    const btnHtml = players.map(p =>
+      `<button class="ace-player-pick-btn" data-user-id="${p.id}" style="
+        display:block; width:100%; margin:4px 0; padding:8px 12px;
+        background:linear-gradient(135deg,#1a1a1e,#222226); color:#d4af37;
+        border:1px solid #d4af37; border-radius:4px; cursor:pointer;
+        font-family:'Rajdhani',sans-serif; font-size:14px; text-transform:uppercase;
+        letter-spacing:1px; transition: background 0.2s;
+      ">${p.name}</button>`
+    ).join("");
+
+    const d = new Dialog({
+      title,
+      content: `<div style="padding:6px 0;">${btnHtml}</div>`,
+      buttons: {},
+      render: (html) => {
+        html.find(".ace-player-pick-btn").on("click", (ev) => {
+          const userId = ev.currentTarget.dataset.userId;
+          const userName = game.users.get(userId)?.name || "player";
+          this.triggerSfx(effect, userId);
+          ui.notifications.info(`🔊 ${effect === "stealthFail" ? "Stealth fail" : "Perception pass"} sent to ${userName}`);
+          d.close();
+        });
+      },
+    }, { width: 260 });
+    d.render(true);
+  }
+
   // ── Ideas tab Actions ──────────────────────────────────────
 
   static async _onGenerateSuggestions(event, target) {
@@ -2866,6 +3637,42 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     const idx = parseInt(target.dataset.idx ?? target.closest("[data-idx]")?.dataset.idx);
     this._directions.splice(idx, 1);
     this._refreshSuggestionsUI();
+  }
+
+  // ── Scene Description (Encounter tab) ─────────────────────
+
+  static async _onSaveSceneDesc(event, target) {
+    const scene = canvas?.scene;
+    if (!scene) { ui.notifications.warn("ACE: No active scene."); return; }
+    const textarea = this.element.querySelector("#ace-scene-desc");
+    if (!textarea) return;
+    const text = textarea.value.trim();
+    const current = scene.flags?.["ace-engine"]?.sceneDescription ?? "";
+    if (text === current) {
+      ui.notifications.info(`ACE: Scene description unchanged.`);
+      return;
+    }
+    target.disabled = true;
+    target.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    await scene.setFlag("ace-engine", "sceneDescription", text);
+    this.scene?.refresh(); // clear scene context cache
+    target.disabled = false;
+    target.innerHTML = '<i class="fas fa-check"></i> Saved!';
+    ui.notifications.info(`ACE: "${scene.name}" scene description saved.`);
+    setTimeout(() => {
+      if (target) target.innerHTML = '<i class="fas fa-save"></i> Save';
+    }, 2000);
+  }
+
+  static async _onClearSceneDesc(event, target) {
+    const textarea = this.element.querySelector("#ace-scene-desc");
+    if (textarea) textarea.value = "";
+    const scene = canvas?.scene;
+    if (scene) {
+      await scene.unsetFlag("ace-engine", "sceneDescription");
+      this.scene?.refresh();
+      ui.notifications.info(`ACE: "${scene.name}" scene notes cleared.`);
+    }
   }
 
   // ── Encounter tab Actions ──────────────────────────────────
@@ -2985,7 +3792,13 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
 
     // Document Library: inject relevant reference chunks based on the user's message
     const docCtx   = this._buildDocumentContext(text);
-    const fullMem  = docCtx ? `${npcMem}\n\n${docCtx}` : npcMem;
+
+    // World Bible: search for relevant lore entries matching the user's query
+    const bibleCtx = this._buildWorldBibleContext(text, sceneCtx);
+
+    let fullMem = npcMem;
+    if (bibleCtx) fullMem += `\n\n${bibleCtx}`;
+    if (docCtx)   fullMem += `\n\n${docCtx}`;
 
     // Vision images — if enabled, find relevant map/image references
     let visionImages = [];
@@ -3088,6 +3901,14 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       } catch (err) {
         console.warn(`${MODULE_ID} | Disposition tag parsing failed:`, err);
       }
+
+      // ── Auto-Learn to World Bible ──
+      try {
+        const aiResponse = this._chatHistory[aiMsgIndex]?.content ?? "";
+        if (aiResponse) this._maybeLearnFromResponse(aiResponse);
+      } catch (err) {
+        console.warn(`${MODULE_ID} | Auto-learn trigger failed:`, err);
+      }
     } finally {
       // ALWAYS reset streaming state — even if an unexpected error occurs above.
       // Without this, a thrown error permanently locks the input field.
@@ -3148,17 +3969,17 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       });
 
       if (summary) {
+        const sessionNum = this.lkMemory.getNextSessionNum();
         await this.lkMemory.saveSessionSummary({
-          sessionNum: this._sessionNum,
+          sessionNum,
           date:       new Date().toISOString().slice(0, 10),
           sceneName:  canvas?.scene?.name ?? "",
           summary,
           partyNames,
         });
-        this._sessionNum++;
 
         this._pushSystemNote(
-          `📖 **Session ${this._sessionNum - 1} Summary saved to journal** — check the "📖 ACE" folder.\n\n${summary.slice(0, 300)}${summary.length > 300 ? "…" : ""}`,
+          `📖 **Session ${sessionNum} Summary saved to journal** — check the "📖 ACE" folder.\n\n${summary.slice(0, 300)}${summary.length > 300 ? "…" : ""}`,
         );
         ui.notifications?.info("ACE: Session summary saved to journal.");
 
@@ -3244,16 +4065,22 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     const sceneCtx = this.scene?.gather() ?? "";
     const npcMem   = this._buildNpcContext();
     const docCtx   = this._buildDocumentContext(direction.title);
-    const fullMem  = docCtx ? `${npcMem}\n\n${docCtx}` : npcMem;
+    const bibleCtx = this._buildWorldBibleContext(direction.title, sceneCtx);
+    let fullMem = npcMem;
+    if (bibleCtx) fullMem += `\n\n${bibleCtx}`;
+    if (docCtx)   fullMem += `\n\n${docCtx}`;
 
     const prompt = `The GM has chosen this story direction: "${direction.title}". ${direction.description} ${direction.consequence}
 
 Write a short read-aloud passage (2-4 sentences) the GM speaks to players RIGHT NOW to transition into this moment. Requirements:
 - Second person, present tense ("You hear...", "As you step forward...", "A shadow crosses...")
+- NEVER use first person ("I", "my", "me") — you are the narrator, not a character
+- Describe NPC actions in third person ("Her eyes narrow", "The figure steps forward") — never as "I" or "my"
+- No asterisk emotes (*does something*), no parenthetical actions, no stage directions
 - Vivid sensory detail — one sound, one sight, one feeling
 - End with a hook that draws players toward this direction
 - No game mechanics, dice, or stats
-- Keep it concise — this is spoken aloud at the table
+- Keep it concise — this is spoken aloud at the table and read by text-to-speech
 - VOICE TAG: If the passage contains dialogue spoken by a female character, start your response with [voice:female]. If spoken by a male character or mixed/narrator, start with [voice:male]. This controls the TTS voice used to read it aloud.`;
 
     // Switch to Narration tab
@@ -3294,7 +4121,10 @@ Write a short read-aloud passage (2-4 sentences) the GM speaks to players RIGHT 
     const npcMem   = this._buildNpcContext();
     const npcName  = combatant.name;
     const docCtx   = this._buildDocumentContext(npcName);
-    const fullTacticMem = docCtx ? `${npcMem}\n\n${docCtx}` : npcMem;
+    const bibleCtx = this._buildWorldBibleContext(npcName, sceneCtx);
+    let fullTacticMem = npcMem;
+    if (bibleCtx) fullTacticMem += `\n\n${bibleCtx}`;
+    if (docCtx)   fullTacticMem += `\n\n${docCtx}`;
 
     // ── Language context ────────────────────────────────────
     const langNote = this._buildLanguageNote(combatant.actor);
@@ -3342,7 +4172,10 @@ Style examples:
     const npcMem    = this._buildNpcContext();
     const sceneName = canvas?.scene?.name ?? "";
     const docCtx    = this._buildDocumentContext(userPrompt || sceneName);
-    const encMem    = docCtx ? `${npcMem}\n\n${docCtx}` : npcMem;
+    const bibleCtx  = this._buildWorldBibleContext(userPrompt || sceneName, sceneCtx);
+    let encMem = npcMem;
+    if (bibleCtx) encMem += `\n\n${bibleCtx}`;
+    if (docCtx)   encMem += `\n\n${docCtx}`;
     const locTag    = sceneName ? ` in **${sceneName}**` : " in the current location";
 
     const basePrompt = userPrompt
@@ -3372,7 +4205,7 @@ Describe the battlefield, cover, hazards, and where enemies begin.
 How do the enemies open? How do they react when hurt? When do they flee?
 
 ### Read-Aloud Text
-> *The boxed text the GM reads aloud to players when the encounter begins.*
+> *The boxed text the GM reads aloud to players when the encounter begins. Second person ("You see..."), NEVER first person ("I", "my"). Describe NPC actions in third person ("The creature lunges"). No asterisk emotes. This is read by text-to-speech.*
 
 ### Treasure & Rewards
 Appropriate loot, XP, and story rewards.
@@ -3407,6 +4240,7 @@ Appropriate loot, XP, and story rewards.
         container.innerHTML = `<div class="ace-encounter-analysis">${this._addReadAloudCopy(this._renderMarkdown(result))}</div>`;
       }
       this._lastEncounterHtml = container.innerHTML;
+      container.scrollIntoView({ behavior: "smooth", block: "nearest" });
     } catch (err) {
       container.innerHTML = `<p class="ace-error"><i class="fas fa-exclamation-triangle"></i> ${err.message}</p>`;
     }
@@ -3433,6 +4267,7 @@ Appropriate loot, XP, and story rewards.
           <p>${sceneName || "The " + terrain} is quiet. No encounter.</p>
         </div>`;
       this._lastEncounterHtml = container.innerHTML;
+      container.scrollIntoView({ behavior: "smooth", block: "nearest" });
     } else if (result <= 8) {
       container.innerHTML = `
         <div class="ace-roll-result ace-roll-signs">
@@ -3595,8 +4430,11 @@ Appropriate loot, XP, and story rewards.
   /**
    * Basic punctuation/capitalization cleanup for speech-to-text output.
    * The browser SpeechRecognition API gives raw words with no punctuation.
-   * This adds: sentence-initial caps, trailing period, and trims whitespace.
+   * This adds: question marks for detected questions, sentence-initial caps,
+   * trailing period, and trims whitespace.
    */
+  static _QUESTION_WORDS = /^(who|what|where|when|why|how|do|does|did|is|are|was|were|can|could|would|should|will|shall|have|has|had|isn't|aren't|wasn't|weren't|don't|doesn't|didn't|won't|wouldn't|couldn't|shouldn't|hasn't|haven't|hadn't|which|whose|whom)\b/i;
+
   _cleanupTranscript(raw) {
     let text = raw.trim();
     if (!text) return text;
@@ -3604,11 +4442,13 @@ Appropriate loot, XP, and story rewards.
     // Capitalize first letter
     text = text.charAt(0).toUpperCase() + text.slice(1);
 
-    // Add trailing period if no terminal punctuation
-    if (!/[.!?…]$/.test(text)) text += ".";
-
     // Clean up extra spaces (speech API sometimes doubles them)
     text = text.replace(/\s{2,}/g, " ");
+
+    // Add terminal punctuation if missing
+    if (!/[.!?…]$/.test(text)) {
+      text += AcePanel._QUESTION_WORDS.test(raw.trim()) ? "?" : ".";
+    }
 
     return text;
   }
@@ -3874,7 +4714,13 @@ Appropriate loot, XP, and story rewards.
       });
 
       if (!resp.ok) {
-        console.warn(`${MODULE_ID} | ElevenLabs error ${resp.status}`);
+        const errBody = await resp.text().catch(() => "");
+        console.warn(`${MODULE_ID} | ElevenLabs error ${resp.status}: ${errBody}`);
+        const hint = resp.status === 401 ? "Invalid API key — check Module Settings."
+                   : resp.status === 403 ? "API key forbidden — check your ElevenLabs subscription."
+                   : resp.status === 429 ? "Rate limit exceeded — too many requests."
+                   : `ElevenLabs returned ${resp.status} — falling back to browser voice.`;
+        ui.notifications?.warn(`ACE TTS: ${hint}`);
         await this._speakBrowser(text, gender, broadcast);
         return;
       }
@@ -4257,6 +5103,137 @@ Appropriate loot, XP, and story rewards.
     if (convoKnowledge) parts.push(convoKnowledge);
 
     return parts.join("\n\n");
+  }
+
+  // ── Learning Cache ────────────────────────────────────────
+
+  /**
+   * Decide whether an AI response is worth learning from, then fire
+   * the extraction in the background (non-blocking).
+   */
+  _maybeLearnFromResponse(responseText) {
+    // Must have a World Bible
+    if (!this._worldBible?.hasData) return;
+
+    // Check setting
+    const autoLearn = game.settings.get(MODULE_ID, "autoLearnToBible") ?? false;
+    if (!autoLearn) return;
+
+    // Smart filter: skip short, generic, or rules-heavy responses
+    if (responseText.length < 120) return; // too short to contain lore
+
+    // Count capitalized proper nouns (rough heuristic for named entities)
+    const properNouns = responseText.match(/\b[A-Z][a-z]{2,}(?:\s[A-Z][a-z]{2,})*/g) ?? [];
+    if (properNouns.length < 2) return; // no named entities worth extracting
+
+    // Skip if it looks like pure rules/mechanics
+    const rulesSignals = ["DC ", "saving throw", "hit points", "damage roll", "spell slot",
+      "ability check", "proficiency bonus", "attack roll", "initiative"];
+    const rulesCount = rulesSignals.reduce((n, s) => n + (responseText.includes(s) ? 1 : 0), 0);
+    if (rulesCount >= 3) return; // too mechanical
+
+    // Skip error messages
+    if (responseText.startsWith("**Error") || responseText.startsWith("**Invalid")
+     || responseText.startsWith("**Connection") || responseText.startsWith("**Rate")) return;
+
+    // Fire in background — non-blocking, don't await
+    this._learnFromResponseAsync(responseText);
+  }
+
+  async _learnFromResponseAsync(responseText) {
+    try {
+      const api = game.modules.get(MODULE_ID)?.api;
+      if (!api?.learnFromText) return;
+      const result = await api.learnFromText(responseText);
+      if (result.learned > 0) {
+        console.log(`${MODULE_ID} | Auto-learn: +${result.learned} new entries from chat response.`);
+      }
+    } catch (err) {
+      console.warn(`${MODULE_ID} | Auto-learn background error:`, err);
+    }
+  }
+
+  /**
+   * Manual "Learn" — triggered by the learn button on a specific chat message.
+   * Always runs regardless of the auto-learn setting.
+   */
+  async _learnFromMessage(messageIndex) {
+    const msg = this._chatHistory[messageIndex];
+    if (!msg || msg.role !== "assistant" || !msg.content) return;
+    if (!this._worldBible?.hasData) {
+      ui.notifications.warn("ACE | World Bible must be generated before learning.");
+      return;
+    }
+
+    const api = game.modules.get(MODULE_ID)?.api;
+    if (!api?.learnFromText) return;
+
+    try {
+      const result = await api.learnFromText(msg.content);
+      if (result.learned > 0) {
+        ui.notifications.info(`ACE | Learned ${result.learned} new entries from this response.`);
+      } else {
+        ui.notifications.info("ACE | No new world knowledge found in this response.");
+      }
+      return result;
+    } catch (err) {
+      console.error(`${MODULE_ID} | Manual learn failed:`, err);
+      ui.notifications.error("ACE | Learn failed — check console.");
+    }
+  }
+
+  /**
+   * Build World Bible context for AI prompt injection.
+   * Extracts key terms from the user message + scene and searches the Bible.
+   * @param {string} userMessage - The user's current message/query
+   * @param {string} sceneCtx   - Scene context string
+   * @returns {string} Formatted World Bible block, or ""
+   */
+  _buildWorldBibleContext(userMessage = "", sceneCtx = "") {
+    if (!this._worldBible?.hasData) return "";
+    try {
+      const parts = [];
+
+      // Extract search terms: split on common words and punctuation
+      const stopWords = new Set(["the","a","an","is","are","was","were","be","been","being",
+        "have","has","had","do","does","did","will","would","could","should","shall","may","might",
+        "can","about","tell","me","what","where","who","how","why","when","which","this","that",
+        "with","from","into","for","and","but","or","not","of","in","on","at","to","by","it","its","i"]);
+      const words = userMessage.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
+
+      // Search for multi-word phrases first (2-3 word combos), then individual words
+      const searched = new Set();
+      const allTerms = [];
+
+      // Try the full message as a search (catches proper nouns like "Vallaki")
+      const cleaned = userMessage.replace(/[?!.,;:]/g, "").trim();
+      if (cleaned.length > 2 && cleaned.length < 60) allTerms.push(cleaned);
+
+      // Try significant words individually
+      for (const w of words) allTerms.push(w);
+
+      // Also search for the current scene name
+      const sceneName = canvas?.scene?.name ?? "";
+      if (sceneName) allTerms.push(sceneName);
+
+      for (const term of allTerms) {
+        const key = term.toLowerCase();
+        if (searched.has(key)) continue;
+        searched.add(key);
+
+        const result = this._worldBible.search(term, 3);
+        if (result) {
+          parts.push(result);
+          // Limit total Bible context to avoid prompt bloat
+          if (parts.join("\n").length > 3000) break;
+        }
+      }
+
+      return parts.length ? parts.join("\n") : "";
+    } catch (err) {
+      console.warn(`${MODULE_ID} | World Bible context error:`, err);
+      return "";
+    }
   }
 
   /**
@@ -4819,8 +5796,8 @@ Appropriate loot, XP, and story rewards.
     const weapon   = weaponName || "their weapon";
     const target   = targetName ? ` against ${targetName}` : "";
     const aiPrompt = type === "crit"
-      ? `[D&D narrator — ONE sentence only, max 15 words, no preamble]\n${actorName} scores a critical hit with ${weapon}${target}. Describe the strike — visceral, dramatic, specific.`
-      : `[D&D narrator — ONE sentence only, max 15 words, no preamble]\n${actorName} fumbles with ${weapon}. Describe the mishap — comedic, specific, punchy.`;
+      ? `[D&D narrator — ONE sentence only, max 15 words, no preamble. SECOND PERSON for the acting character ("You..."), THIRD PERSON for NPCs ("The guard...", "He..."). NEVER use first person ("I", "my", "me").]\n${actorName} scores a critical hit with ${weapon}${target}. Describe the strike — visceral, dramatic, specific.`
+      : `[D&D narrator — ONE sentence only, max 15 words, no preamble. SECOND PERSON for the acting character ("You..."), THIRD PERSON for NPCs ("The guard...", "He..."). NEVER use first person ("I", "my", "me").]\n${actorName} fumbles with ${weapon}. Describe the mishap — comedic, specific, punchy.`;
 
     let narrative = "";
     try {
@@ -5448,6 +6425,50 @@ Appropriate loot, XP, and story rewards.
   /* ──────────────────────────────────────────────────────────────────────────── */
 
   /**
+   * Wire the draggable gold divider between Scene Description and Encounter panes.
+   * Stores the split ratio so it persists within the session.
+   */
+  _wireEncounterDivider() {
+    const divider = this.element?.querySelector("#ace-enc-divider");
+    const topPane = this.element?.querySelector("#ace-enc-pane-top");
+    const botPane = this.element?.querySelector("#ace-enc-pane-bottom");
+    const split   = this.element?.querySelector(".ace-encounter-split");
+    if (!divider || !topPane || !botPane || !split) return;
+
+    // Restore previous ratio if set
+    if (this._encSplitRatio) {
+      topPane.style.flex = `0 0 ${this._encSplitRatio * 100}%`;
+      botPane.style.flex = `1 1 auto`;
+    }
+
+    let startY = 0, startTopH = 0, totalH = 0;
+
+    const onMove = (e) => {
+      const dy = e.clientY - startY;
+      const newTopH = Math.max(60, Math.min(totalH - 100, startTopH + dy));
+      const ratio = newTopH / totalH;
+      topPane.style.flex = `0 0 ${ratio * 100}%`;
+      this._encSplitRatio = ratio;
+    };
+
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      split.classList.remove("ace-resizing");
+    };
+
+    divider.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      startY = e.clientY;
+      startTopH = topPane.getBoundingClientRect().height;
+      totalH = split.getBoundingClientRect().height;
+      split.classList.add("ace-resizing");
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  }
+
+  /**
    * Wire drag events on creature cards after rendering.
    * Must be called after the interactive encounter HTML is injected into the DOM.
    */
@@ -5950,36 +6971,31 @@ MAGNITUDE: [local/regional/major/legendary]`;
   _buildLibraryPanel() {
     const store = this._documentEngine?._mm?.documents;
     const docs = store?.getAll() ?? [];
-    const stats = store?.getStats() ?? { totalDocuments: 0, enabledDocuments: 0, totalChunks: 0, totalImages: 0 };
+
+    // Find orphan digests (no matching document card)
+    const allDigests = this._digestEngine?.getAllDigests() ?? [];
+    const docFileNames = new Set(docs.map(d => d.fileName));
+    const orphanDigests = allDigests.filter(d => !docFileNames.has(d.sourceFile));
 
     return `
       <div class="ace-library">
 
-        <!-- Upload dropzone -->
-        <div class="ace-library-dropzone" id="ace-library-dropzone"
+        <!-- Compact upload bar -->
+        <div class="ace-library-dropzone-slim" id="ace-library-dropzone"
              data-action="libUploadClick" title="Drop files here or click to upload">
           <i class="fas fa-cloud-upload-alt"></i>
-          <span class="ace-library-drop-label">Drop files here or click to upload</span>
-          <span class="ace-library-formats">PDF, TXT, MD, PNG, JPG, WEBP</span>
+          <span>Drop files or click to upload</span>
+          <span class="ace-library-formats-slim">PDF, TXT, MD, PNG, JPG, WEBP</span>
           <input type="file" id="ace-library-file-input"
                  accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp"
                  multiple style="display:none">
         </div>
 
-        <!-- Stats bar -->
-        <div class="ace-library-stats">
-          <span title="Total documents"><i class="fas fa-file-alt" style="opacity:0.5;margin-right:3px"></i>${stats.totalDocuments} doc${stats.totalDocuments !== 1 ? "s" : ""}</span>
-          <span class="ace-library-stats-sep">\u00B7</span>
-          <span title="Active documents"><i class="fas fa-check-circle" style="opacity:0.5;margin-right:3px;color:#50c878"></i>${stats.enabledDocuments} active</span>
-          <span class="ace-library-stats-sep">\u00B7</span>
-          <span title="Text chunks extracted"><i class="fas fa-puzzle-piece" style="opacity:0.5;margin-right:3px"></i>${stats.totalChunks} chunks</span>
-          ${stats.totalImages > 0 ? `<span class="ace-library-stats-sep">\u00B7</span><span title="Image references"><i class="fas fa-image" style="opacity:0.5;margin-right:3px"></i>${stats.totalImages} image${stats.totalImages !== 1 ? "s" : ""}</span>` : ""}
-        </div>
-
-        <!-- Document list -->
+        <!-- Source cards -->
         <div class="ace-library-list" id="ace-library-list">
-          ${docs.length
+          ${docs.length || orphanDigests.length
             ? docs.map(d => this._buildDocumentCard(d)).join("")
+              + orphanDigests.map(d => this._buildOrphanDigestCard(d)).join("")
             : `<div class="ace-library-empty">
                  <i class="fas fa-book-open"></i>
                  <p>No documents uploaded yet</p>
@@ -5987,65 +7003,151 @@ MAGNITUDE: [local/regional/major/legendary]`;
                </div>`}
         </div>
 
-        <!-- AI Digests (global, cross-world) -->
-        ${this._buildDigestSection()}
+        <!-- World Bible -->
+        ${this._buildWorldBibleSection()}
       </div>
     `;
   }
 
-  _buildDigestSection() {
-    if (!this._digestEngine) return "";
-    const allDigests = this._digestEngine.getAllDigests();
-    if (!allDigests.length) return "";
-
+  /**
+   * Build a card for an "orphan" digest — one that exists in Extracted Knowledge
+   * but has no matching document card (e.g. the PDF was removed but digest remains).
+   */
+  _buildOrphanDigestCard(d) {
     const store = this._documentEngine?._mm?.documents;
     const activeIds = new Set(store?.getActiveDigests() ?? []);
+    const active = activeIds.has(d.id);
+    const cats = d.categories ?? {};
+
+    const catTags = [];
+    if (cats.npcs) catTags.push(`${cats.npcs} NPCs`);
+    if (cats.locations) catTags.push(`${cats.locations} locations`);
+    if (cats.items) catTags.push(`${cats.items} items`);
+    if (cats.encounters) catTags.push(`${cats.encounters} encounters`);
+    if (cats.plotHooks) catTags.push(`${cats.plotHooks} hooks`);
+    if (cats.factions) catTags.push(`${cats.factions} factions`);
+    if (cats.lore) catTags.push(`${cats.lore} lore`);
+    const catTagsHtml = catTags.length ? `<div class="ace-library-card-tags">${catTags.map(t => `<span class="ace-library-tag">${t}</span>`).join("")}</div>` : "";
+
+    // Merge status
+    const wb = this._worldBible;
+    const regionKey = `digest_${(d.sourceFile ?? "").replace(/[^a-z0-9]/gi, "_").toLowerCase()}`;
+    const hasMerged = wb?.data?.regions?.[regionKey]?.cities?.length > 0
+                   || wb?.data?.regions?.[regionKey]?.factions?.length > 0;
+
+    // Pipeline
+    let pipelineHtml = `<div class="ace-pipeline">
+      <span class="ace-pipeline-dot ace-pipeline-done"><i class="fas fa-check"></i> Uploaded</span>
+      <span class="ace-pipeline-arrow"><i class="fas fa-chevron-right"></i></span>
+      <span class="ace-pipeline-dot ace-pipeline-done"><i class="fas fa-check"></i> Digested</span>
+      <span class="ace-pipeline-arrow"><i class="fas fa-chevron-right"></i></span>`;
+
+    if (hasMerged) {
+      pipelineHtml += `<span class="ace-pipeline-dot ace-pipeline-done"><i class="fas fa-check"></i> Merged</span>`;
+    } else if (wb?.hasData) {
+      pipelineHtml += `<span class="ace-pipeline-dot ace-pipeline-action ace-pipeline-merge" data-action="libMergeDigestIntoBible" data-digest-id="${d.id}" title="Merge into World Bible (~$0.50\u20131.00)"><i class="fas fa-book-atlas"></i> Merge</span>`;
+    } else {
+      pipelineHtml += `<span class="ace-pipeline-dot ace-pipeline-pending"><i class="fas fa-book-atlas"></i> Merge</span>`;
+    }
+    pipelineHtml += `</div>`;
+
+    const isExpanded = this._expandedLibCards?.has(d.id);
+
+    // Inline pipeline for collapsed bar
+    let pipInline = `<span class="ace-pip-inline ace-pip-done"><i class="fas fa-check"></i> Uploaded</span>`;
+    pipInline += `<span class="ace-pip-inline ace-pip-done"><i class="fas fa-check"></i> Digested</span>`;
+    if (hasMerged) pipInline += `<span class="ace-pip-inline ace-pip-done"><i class="fas fa-check"></i> Merged</span>`;
 
     return `
-      <div class="ace-digest-section">
-        <div class="ace-digest-header">
-          <i class="fas fa-brain"></i> Extracted Knowledge <span class="ace-digest-count">${allDigests.length}</span>
+      <div class="ace-library-card ${active ? "ace-digest-active" : ""} ${isExpanded ? "" : "ace-lib-collapsed"}" data-digest-id="${d.id}">
+        <!-- Collapsed bar -->
+        <div class="ace-lib-collapsed-bar" data-action="libToggleCollapse" data-digest-id="${d.id}" title="Click to expand">
+          <span class="ace-lib-collapsed-title">${d.displayName ?? d.sourceFile ?? "Unknown"}</span>
+          <span class="ace-lib-collapsed-pipeline">${pipInline}</span>
+          <i class="fas fa-chevron-down ace-lib-collapse-chevron"></i>
         </div>
-        <div class="ace-digest-hint">AI-extracted NPCs, locations, items &amp; lore from your documents. Shared across all worlds \u2014 toggle per campaign.</div>
-        <div class="ace-digest-list">
-          ${allDigests.map(d => {
-            const active = activeIds.has(d.id);
-            const cats = d.categories ?? {};
-            const totalEntries = Object.values(cats).reduce((n, v) => n + (v ?? 0), 0);
-            // Build a quick category breakdown
-            const catParts = [];
-            if (cats.npcs) catParts.push(`${cats.npcs} NPCs`);
-            if (cats.locations) catParts.push(`${cats.locations} locations`);
-            if (cats.items) catParts.push(`${cats.items} items`);
-            if (cats.encounters) catParts.push(`${cats.encounters} encounters`);
-            if (cats.plotHooks) catParts.push(`${cats.plotHooks} hooks`);
-            if (cats.factions) catParts.push(`${cats.factions} factions`);
-            if (cats.lore) catParts.push(`${cats.lore} lore`);
-            const catSummary = catParts.length ? catParts.join(", ") : `${totalEntries} entries`;
-            return `
-              <div class="ace-digest-card ${active ? "ace-digest-active" : ""}" data-digest-id="${d.id}">
-                <div class="ace-digest-card-info">
-                  <div class="ace-digest-card-name">${d.displayName ?? d.sourceFile ?? "Unknown"}</div>
-                  <div class="ace-digest-card-meta">${catSummary} \u00B7 ${d.pageCount ?? "?"} pages</div>
-                </div>
-                <div class="ace-digest-card-actions">
-                  <button class="ace-lib-action" data-action="libToggleDigest" data-digest-id="${d.id}"
-                          title="${active ? "Disable" : "Enable"} digest for this world">
-                    <i class="fas ${active ? "fa-toggle-on" : "fa-toggle-off"}"></i>
-                  </button>
-                  <button class="ace-lib-action ace-lib-action-delete" data-action="libDeleteDigest" data-digest-id="${d.id}"
-                          title="Delete digest permanently">
-                    <i class="fas fa-trash-alt"></i>
-                  </button>
-                </div>
-              </div>`;
-          }).join("")}
+        <!-- Expanded card -->
+        <div class="ace-lib-expanded">
+          <div class="ace-library-card-top">
+            <div class="ace-library-card-icon">
+              <div class="ace-library-card-icon-fallback"><i class="fas fa-brain"></i></div>
+            </div>
+            <div class="ace-library-card-info">
+              <div class="ace-library-card-title">${d.displayName ?? d.sourceFile ?? "Unknown"}</div>
+              <div class="ace-library-card-meta">DIGEST \u00B7 ${d.pageCount ?? "?"} pages</div>
+              ${catTagsHtml}
+            </div>
+            <button type="button" class="ace-lib-collapse-toggle" data-action="libToggleCollapse" data-digest-id="${d.id}" title="Collapse">
+              <i class="fas fa-chevron-up"></i>
+            </button>
+          </div>
+          ${pipelineHtml}
+          <div class="ace-library-card-actions">
+            <button class="ace-lib-action" data-action="libToggleDigest" data-digest-id="${d.id}"
+                    title="${active ? "Disable" : "Enable"} digest for this world">
+              <i class="fas ${active ? "fa-eye" : "fa-eye-slash"}"></i> ${active ? "On" : "Off"}
+            </button>
+            <button class="ace-lib-action ace-lib-action-delete" data-action="libDeleteDigest" data-digest-id="${d.id}"
+                    title="Delete digest permanently">
+              <i class="fas fa-trash-alt"></i> Remove
+            </button>
+          </div>
         </div>
       </div>`;
   }
 
+  _buildWorldBibleSection() {
+    const wb = this._worldBible;
+    const stats = wb?.getStats();
+    const hasData = wb?.hasData;
+    const isRunning = wb?.isRunning;
+
+    if (hasData && stats) {
+      return `
+        <div class="ace-bible-section" id="ace-world-bible-section">
+          <div class="ace-bible-header">
+            <i class="fas fa-globe"></i> World Bible
+            <span class="ace-bible-setting">${stats.setting}</span>
+          </div>
+          <div class="ace-bible-era">${stats.era}</div>
+          <div class="ace-bible-stats">
+            <span class="ace-bible-badge"><strong>${stats.nationCount}</strong> Nations</span>
+            <span class="ace-bible-badge"><strong>${stats.cityCount}</strong> Cities</span>
+            <span class="ace-bible-badge"><strong>${stats.factionCount}</strong> Factions</span>
+            <span class="ace-bible-badge"><strong>${stats.deityCount}</strong> Deities</span>
+            <span class="ace-bible-badge"><strong>${stats.geoCount}</strong> Geography</span>
+          </div>
+          <button class="ace-lib-action ace-bible-regen" data-action="worldBibleRegenerate"
+                  title="Regenerate the World Bible (costs API credits)">
+            <i class="fas fa-sync-alt"></i> Regenerate Bible
+          </button>
+        </div>`;
+    }
+
+    // No bible yet
+    return `
+      <div class="ace-bible-section" id="ace-world-bible-section">
+        <div class="ace-bible-header">
+          <i class="fas fa-globe"></i> World Bible
+        </div>
+        <div class="ace-bible-era" style="margin-bottom:6px;">Generate a world reference with nations, cities, factions, religions, and geography.</div>
+        <select id="ace-world-bible-setting" class="ace-bible-select">
+          <option value="faerun">Forgotten Realms \u2014 Faer\u00FBn (5e)</option>
+          <option value="eberron">Eberron (5e)</option>
+          <option value="greyhawk">Greyhawk (5e)</option>
+          <option value="custom">Custom (describe below)</option>
+        </select>
+        <button class="ace-lib-action ace-bible-generate" data-action="worldBibleGenerate"
+                ${isRunning ? "disabled" : ""}>
+          <i class="fas ${isRunning ? "fa-spinner fa-spin" : "fa-globe"}"></i>
+          ${isRunning ? "Generating World Bible..." : "Generate World Bible"}
+        </button>
+        <div id="ace-world-bible-progress" class="ace-bible-progress" style="display:none;"></div>
+      </div>`;
+  }
+
   _buildDocumentCard(doc) {
-    const statusClass = doc.status === "ready" ? "ace-lib-ready"
+    const statusClass = doc.status === "ready" ? ""
                       : doc.status === "processing" ? "ace-lib-processing"
                       : doc.status === "error" ? "ace-lib-error"
                       : doc.status === "no_text" ? "ace-lib-no-text" : "";
@@ -6057,18 +7159,18 @@ MAGNITUDE: [local/regional/major/legendary]`;
     const chunkCount = doc.chunks?.length ?? 0;
     const tags = doc.tags ?? [];
 
-    // Compact meta line — just type + page count + size
+    // Meta line
     let meta = doc.type.toUpperCase();
     if (doc.pageCount) meta += ` \u00B7 ${doc.pageCount} pg`;
     const sizeKB = doc.fileSize ? Math.round(doc.fileSize / 1024) : 0;
     if (sizeKB) meta += ` \u00B7 ${sizeKB >= 1024 ? (sizeKB / 1024).toFixed(1) + " MB" : sizeKB + " KB"}`;
 
-    // Publication year badge (clickable to edit)
+    // Publication year badge
     const pubYear = doc.publishedYear;
     const yearHtml = `<span class="ace-lib-year-badge" data-action="libEditYear" data-doc-id="${doc.id}"
                             title="Click to ${pubYear ? "edit" : "set"} publication year">${pubYear ? `\u00A9${pubYear}` : "Set year"}</span>`;
 
-    // Icon / thumbnail: use cover image if available, else type-based icon
+    // Icon / thumbnail
     const coverImg = doc.images?.[0]?.src ?? doc.coverImage ?? null;
     const typeIcons = { pdf: "fa-book", txt: "fa-file-alt", md: "fa-file-code", image: "fa-scroll" };
     const fallbackIcon = typeIcons[doc.type] ?? "fa-file";
@@ -6083,50 +7185,110 @@ MAGNITUDE: [local/regional/major/legendary]`;
            <div class="ace-library-card-icon-fallback" style="display:none"><i class="fas ${fallbackIcon}"></i></div>`
         : `<div class="ace-library-card-icon-fallback"><i class="fas ${fallbackIcon}"></i></div>`;
 
-    // Check if a digest already exists for this document
-    let digestBtnHtml = "";
-    if (doc.status === "ready" && chunkCount > 0) {
-      const allDigests = this._digestEngine?.getAllDigests() ?? [];
-      const hasDigest = allDigests.some(d => d.sourceFile === doc.fileName);
+    // Digest category tags (if digested)
+    const allDigests = this._digestEngine?.getAllDigests() ?? [];
+    const digestMeta = allDigests.find(d => d.sourceFile === doc.fileName);
+    let catTagsHtml = "";
+    if (digestMeta) {
+      const cats = digestMeta.categories ?? {};
+      const catTags = [];
+      if (cats.npcs) catTags.push(`${cats.npcs} NPCs`);
+      if (cats.locations) catTags.push(`${cats.locations} locations`);
+      if (cats.items) catTags.push(`${cats.items} items`);
+      if (cats.encounters) catTags.push(`${cats.encounters} encounters`);
+      if (cats.plotHooks) catTags.push(`${cats.plotHooks} hooks`);
+      if (cats.factions) catTags.push(`${cats.factions} factions`);
+      if (cats.lore) catTags.push(`${cats.lore} lore`);
+      if (catTags.length) catTagsHtml = `<div class="ace-library-card-tags">${catTags.map(t => `<span class="ace-library-tag">${t}</span>`).join("")}</div>`;
+    }
+
+    // Pipeline status dots: Uploaded → Digested → Merged
+    const isReady = doc.status === "ready" && chunkCount > 0;
+    const hasDigest = !!digestMeta;
+    const wb = this._worldBible;
+    const regionKey = `digest_${(doc.fileName || "").replace(/[^a-z0-9]/gi, "_").toLowerCase()}`;
+    const hasMerged = wb?.data?.regions?.[regionKey]?.cities?.length > 0
+                   || wb?.data?.regions?.[regionKey]?.factions?.length > 0;
+
+    // Build pipeline HTML
+    let pipelineHtml = "";
+    if (isReady) {
+      pipelineHtml = `<div class="ace-pipeline">`;
+
+      // Step 1: Uploaded (always green if ready)
+      pipelineHtml += `<span class="ace-pipeline-dot ace-pipeline-done"><i class="fas fa-check"></i> Uploaded</span>`;
+      pipelineHtml += `<span class="ace-pipeline-arrow"><i class="fas fa-chevron-right"></i></span>`;
+
+      // Step 2: Digested
       if (hasDigest) {
-        digestBtnHtml = `
-          <button class="ace-lib-action ace-lib-action-digested" data-action="libGenerateDigest" data-doc-id="${doc.id}"
-                  title="Digest exists \u2014 click to regenerate">
-            <i class="fas fa-check-circle"></i> Digested
-          </button>`;
+        pipelineHtml += `<span class="ace-pipeline-dot ace-pipeline-done" data-action="libGenerateDigest" data-doc-id="${doc.id}" title="Click to re-digest"><i class="fas fa-check"></i> Digested</span>`;
       } else {
-        digestBtnHtml = `
-          <button class="ace-lib-action ace-lib-action-digest" data-action="libGenerateDigest" data-doc-id="${doc.id}"
-                  title="Generate AI Digest \u2014 extracts NPCs, locations, items, etc.">
-            <i class="fas fa-brain"></i> Digest
-          </button>`;
+        pipelineHtml += `<span class="ace-pipeline-dot ace-pipeline-action" data-action="libGenerateDigest" data-doc-id="${doc.id}" title="Extract NPCs, locations, items (~$0.30\u20130.60)"><i class="fas fa-brain"></i> Digest</span>`;
       }
+      pipelineHtml += `<span class="ace-pipeline-arrow"><i class="fas fa-chevron-right"></i></span>`;
+
+      // Step 3: Merged
+      if (hasMerged) {
+        pipelineHtml += `<span class="ace-pipeline-dot ace-pipeline-done"><i class="fas fa-check"></i> Merged</span>`;
+      } else if (hasDigest && wb?.hasData) {
+        pipelineHtml += `<span class="ace-pipeline-dot ace-pipeline-action ace-pipeline-merge" data-action="libMergeIntoBible" data-doc-id="${doc.id}" title="Merge into World Bible (~$0.50\u20131.00)"><i class="fas fa-book-atlas"></i> Merge</span>`;
+      } else {
+        pipelineHtml += `<span class="ace-pipeline-dot ace-pipeline-pending"><i class="fas fa-book-atlas"></i> Merge</span>`;
+      }
+
+      pipelineHtml += `</div>`;
+    }
+
+    // Default collapsed unless user has explicitly expanded this card
+    const isExpanded = this._expandedLibCards?.has(doc.id);
+
+    // Compact pipeline for collapsed bar (inline text)
+    let pipelineInline = "";
+    if (isReady) {
+      const steps = [];
+      steps.push(`<span class="ace-pip-inline ace-pip-done"><i class="fas fa-check"></i> Uploaded</span>`);
+      if (hasDigest) steps.push(`<span class="ace-pip-inline ace-pip-done"><i class="fas fa-check"></i> Digested</span>`);
+      if (hasMerged) steps.push(`<span class="ace-pip-inline ace-pip-done"><i class="fas fa-check"></i> Merged</span>`);
+      pipelineInline = steps.join("");
     }
 
     return `
-      <div class="ace-library-card ${statusClass} ${!doc.enabled ? "ace-lib-disabled" : ""}" data-doc-id="${doc.id}">
-        <div class="ace-library-card-top">
-          <div class="ace-library-card-icon">
-            ${iconHtml}
-          </div>
-          <div class="ace-library-card-info">
-            <div class="ace-library-card-title" data-action="libEditName" data-doc-id="${doc.id}"
-                 title="Click to rename">${doc.displayName}</div>
-            <div class="ace-library-card-meta">${meta} ${yearHtml}</div>
-            ${statusLabel ? `<div class="ace-library-card-status">${statusLabel}</div>` : ""}
-            ${tags.length ? `<div class="ace-library-card-tags">${tags.map(t => `<span class="ace-library-tag">${t}</span>`).join("")}</div>` : ""}
-          </div>
+      <div class="ace-library-card ${statusClass} ${!doc.enabled ? "ace-lib-disabled" : ""} ${isExpanded ? "" : "ace-lib-collapsed"}" data-doc-id="${doc.id}">
+        <!-- Collapsed bar — click anywhere to expand -->
+        <div class="ace-lib-collapsed-bar" data-action="libToggleCollapse" data-doc-id="${doc.id}" title="Click to expand">
+          <span class="ace-lib-collapsed-title">${doc.displayName}</span>
+          <span class="ace-lib-collapsed-pipeline">${pipelineInline}</span>
+          <i class="fas fa-chevron-down ace-lib-collapse-chevron"></i>
         </div>
-        <div class="ace-library-card-actions">
-          ${digestBtnHtml}
-          <button class="ace-lib-action" data-action="libToggleDoc" data-doc-id="${doc.id}"
-                  title="${doc.enabled ? "Disable" : "Enable"} for AI context">
-            <i class="fas ${doc.enabled ? "fa-eye" : "fa-eye-slash"}"></i> ${doc.enabled ? "On" : "Off"}
-          </button>
-          <button class="ace-lib-action ace-lib-action-delete" data-action="libDeleteDoc" data-doc-id="${doc.id}"
-                  title="Remove from library (cached on disk for re-import)">
-            <i class="fas fa-box-archive"></i> Remove
-          </button>
+        <!-- Full expanded card -->
+        <div class="ace-lib-expanded">
+          <div class="ace-library-card-top">
+            <div class="ace-library-card-icon">
+              ${iconHtml}
+            </div>
+            <div class="ace-library-card-info">
+              <div class="ace-library-card-title" data-action="libEditName" data-doc-id="${doc.id}"
+                   title="Click to rename">${doc.displayName}</div>
+              <div class="ace-library-card-meta">${meta} ${yearHtml}</div>
+              ${statusLabel ? `<div class="ace-library-card-status">${statusLabel}</div>` : ""}
+              ${tags.length && !catTagsHtml ? `<div class="ace-library-card-tags">${tags.map(t => `<span class="ace-library-tag">${t}</span>`).join("")}</div>` : ""}
+              ${catTagsHtml}
+            </div>
+            <button type="button" class="ace-lib-collapse-toggle" data-action="libToggleCollapse" data-doc-id="${doc.id}" title="Collapse">
+              <i class="fas fa-chevron-up"></i>
+            </button>
+          </div>
+          ${pipelineHtml}
+          <div class="ace-library-card-actions">
+            <button class="ace-lib-action" data-action="libToggleDoc" data-doc-id="${doc.id}"
+                    title="${doc.enabled ? "Disable" : "Enable"} for AI context">
+              <i class="fas ${doc.enabled ? "fa-eye" : "fa-eye-slash"}"></i> ${doc.enabled ? "On" : "Off"}
+            </button>
+            <button class="ace-lib-action ace-lib-action-delete" data-action="libDeleteDoc" data-doc-id="${doc.id}"
+                    title="Remove from library">
+              <i class="fas fa-box-archive"></i> Remove
+            </button>
+          </div>
         </div>
       </div>
     `;
@@ -6245,6 +7407,22 @@ MAGNITUDE: [local/regional/major/legendary]`;
     fileInput?.click();
   }
 
+  static _onLibToggleCollapse(event, target) {
+    const docId = target.closest("[data-doc-id]")?.dataset.docId
+                ?? target.closest("[data-digest-id]")?.dataset.digestId;
+    if (!docId) return;
+    const card = target.closest(".ace-library-card");
+    if (!card) return;
+    if (this._expandedLibCards.has(docId)) {
+      this._expandedLibCards.delete(docId);
+      card.classList.add("ace-lib-collapsed");
+    } else {
+      this._expandedLibCards.add(docId);
+      card.classList.remove("ace-lib-collapsed");
+      requestAnimationFrame(() => card.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+    }
+  }
+
   static _onLibToggleDoc(event, target) {
     const docId = target.closest("[data-doc-id]")?.dataset.docId;
     const store = this._documentEngine?._mm?.documents;
@@ -6350,6 +7528,156 @@ MAGNITUDE: [local/regional/major/legendary]`;
     const docId = target.closest("[data-doc-id]")?.dataset.docId;
     if (!docId) return;
     await this._generateDigest(docId);
+  }
+
+  /**
+   * Merge a digested document's data into the World Bible.
+   */
+  static async _onLibMergeIntoBible(event, target) {
+    const docId = target.closest("[data-doc-id]")?.dataset.docId;
+    if (!docId) return;
+
+    const doc = this._documentEngine?._mm?.documents?.getDocument(docId);
+    if (!doc) { ui.notifications.warn("ACE | Document not found."); return; }
+
+    const allDigests = this._digestEngine?.getAllDigests() ?? [];
+    const digestMeta = allDigests.find(d => d.sourceFile === doc.fileName);
+    if (!digestMeta) { ui.notifications.warn("ACE | No digest found for this document. Generate a digest first."); return; }
+
+    if (!this._worldBible?.hasData) {
+      ui.notifications.warn("ACE | World Bible must be generated before merging digests.");
+      return;
+    }
+
+    const confirmed = await _aceConfirmDialog(
+      "Merge Digest into World Bible",
+      `<p>Merge <strong>${doc.displayName}</strong> into the World Bible?</p>
+       <p>This will extract locations, factions, NPCs, religions, and geography from the digest and add them as canonical Bible entries.</p>
+       <p style="color:#d4af37;font-weight:600;margin-top:8px;">&#9888; This costs ~5 AI API calls (~$0.50\u20131.00 depending on your provider).</p>
+       <p>Existing Bible entries will be enriched, not duplicated.</p>`,
+      { yesLabel: "Merge", yesIcon: "fas fa-book-atlas" }
+    ).catch(() => false);
+    if (!confirmed) return;
+
+    const digestData = await this._digestEngine.loadDigest(digestMeta.id);
+    if (!digestData?.digest) { ui.notifications.error("ACE | Failed to load digest data."); return; }
+
+    const cardEl = target.closest(".ace-library-card");
+    if (!cardEl) return;
+    await AcePanel._executeBibleMerge.call(this, cardEl, doc.displayName, doc.fileName, digestData, doc.publishedYear ?? null);
+  }
+
+  /**
+   * Merge a digest into the World Bible — triggered from the Extracted Knowledge section.
+   * Works directly from digest ID (no document card needed).
+   */
+  static async _onLibMergeDigestIntoBible(event, target) {
+    const digestId = target.closest("[data-digest-id]")?.dataset.digestId;
+    if (!digestId) return;
+
+    const digestMeta = this._digestEngine?.getDigestMeta(digestId);
+    if (!digestMeta) { ui.notifications.warn("ACE | Digest not found."); return; }
+
+    if (!this._worldBible?.hasData) {
+      ui.notifications.warn("ACE | World Bible must be generated before merging digests.");
+      return;
+    }
+
+    const displayName = digestMeta.displayName ?? digestMeta.sourceFile ?? "Unknown";
+
+    const confirmed = await _aceConfirmDialog(
+      "Merge Digest into World Bible",
+      `<p>Merge <strong>${displayName}</strong> into the World Bible?</p>
+       <p>This will extract locations, factions, NPCs, religions, and geography from the digest and add them as canonical Bible entries.</p>
+       <p style="color:#d4af37;font-weight:600;margin-top:8px;">&#9888; This costs ~5 AI API calls (~$0.50–1.00 depending on your provider).</p>
+       <p>Existing Bible entries will be enriched, not duplicated.</p>`,
+      { yesLabel: "Merge", yesIcon: "fas fa-book-atlas" }
+    ).catch(() => false);
+    if (!confirmed) return;
+
+    const digestData = await this._digestEngine.loadDigest(digestId);
+    if (!digestData?.digest) { ui.notifications.error("ACE | Failed to load digest data."); return; }
+
+    const cardEl = target.closest(".ace-library-card");
+    if (!cardEl) return;
+    await AcePanel._executeBibleMerge.call(this, cardEl, displayName, digestMeta.sourceFile ?? digestId, digestData, digestMeta.publishedYear ?? null);
+  }
+
+  /**
+   * Shared merge execution — takes over the card with a progress bar UI.
+   */
+  static async _executeBibleMerge(cardEl, displayName, sourceFile, digestData, publishedYear) {
+    const totalSteps = 5;
+
+    // Save original card HTML for restore on error
+    const origHtml = cardEl.innerHTML;
+
+    // Replace card content with progress bar UI
+    cardEl.innerHTML = `
+      <div class="ace-merge-progress">
+        <div class="ace-merge-progress-title">
+          <i class="fas fa-book-atlas"></i> Merging into World Bible
+        </div>
+        <div class="ace-merge-progress-source">${displayName}</div>
+        <div class="ace-merge-progress-step">Preparing...</div>
+        <div class="ace-merge-progress-bar-track">
+          <div class="ace-merge-progress-bar-fill" style="width: 0%"></div>
+        </div>
+        <div class="ace-merge-progress-counter">0 / ${totalSteps}</div>
+      </div>`;
+
+    // Block interaction on the entire library scroll area
+    const libScroll = cardEl.closest(".ace-tab-body");
+    if (libScroll) libScroll.style.pointerEvents = "none";
+
+    const stepEl = cardEl.querySelector(".ace-merge-progress-step");
+    const fillEl = cardEl.querySelector(".ace-merge-progress-bar-fill");
+    const counterEl = cardEl.querySelector(".ace-merge-progress-counter");
+
+    try {
+      const results = await game.modules.get("ace-engine")?.api?.mergeDigestIntoBible(
+        digestData.digest,
+        displayName,
+        sourceFile,
+        (step, total, category) => {
+          const pct = Math.round((step / totalSteps) * 100);
+          if (stepEl) stepEl.textContent = category;
+          if (fillEl) fillEl.style.width = `${pct}%`;
+          if (counterEl) counterEl.textContent = `${step} / ${totalSteps}`;
+        },
+        publishedYear
+      );
+
+      // Show completion state
+      if (stepEl) stepEl.textContent = "Complete!";
+      if (fillEl) fillEl.style.width = "100%";
+      if (counterEl) counterEl.textContent = `${totalSteps} / ${totalSteps}`;
+
+      const summaryEl = cardEl.querySelector(".ace-merge-progress-source");
+      if (summaryEl) summaryEl.textContent = `${results.merged} new entries, ${results.updated} updated${results.skipped ? `, ${results.skipped} skipped` : ""}`;
+
+      // Add done class for green glow
+      const progressEl = cardEl.querySelector(".ace-merge-progress");
+      if (progressEl) progressEl.classList.add("ace-merge-done");
+
+      const msg = `Merged "${displayName}" into World Bible: ${results.merged} new, ${results.updated} updated${results.skipped ? `, ${results.skipped} skipped (older source)` : ""}.`;
+      if (results.errors?.length) {
+        ui.notifications.warn(`${msg} (${results.errors.length} errors — check console)`);
+      } else {
+        ui.notifications.info(`ACE | ${msg}`);
+      }
+
+      // Hold the completion state for 2.5s then refresh
+      await new Promise(r => setTimeout(r, 2500));
+      if (libScroll) libScroll.style.pointerEvents = "";
+      this._refreshLibraryUI();
+
+    } catch (err) {
+      console.error(`${MODULE_ID} | Bible merge failed:`, err);
+      ui.notifications.error(`ACE | Bible merge failed: ${err.message}`);
+      if (libScroll) libScroll.style.pointerEvents = "";
+      cardEl.innerHTML = origHtml;
+    }
   }
 
   /**
@@ -6512,6 +7840,27 @@ MAGNITUDE: [local/regional/major/legendary]`;
       this._updateLibraryCardStatus(docId, "");
       this._refreshLibraryUI();
       ui.notifications.info(`ACE | Digest created for "${doc.displayName}" — ${Object.values(categories).reduce((a, b) => a + b, 0)} entries extracted`);
+
+      // ── Auto-merge into World Bible (if enabled) ──
+      try {
+        const autoMerge = game.settings.get(MODULE_ID, "autoMergeDigests");
+        if (autoMerge && this._worldBible?.hasData) {
+          console.log(`${MODULE_ID} | Auto-merging digest "${doc.displayName}" into World Bible...`);
+          ui.notifications.info(`ACE | Auto-merging "${doc.displayName}" into World Bible...`);
+          const mergeResults = await game.modules.get(MODULE_ID)?.api?.mergeDigestIntoBible(
+            digestResult, doc.displayName, doc.fileName,
+            (step, total, category) => {
+              this._updateLibraryCardStatus(docId, `📖 Merging: ${category}…`);
+            },
+            doc.publishedYear ?? null
+          );
+          this._updateLibraryCardStatus(docId, "");
+          this._refreshLibraryUI();
+          ui.notifications.info(`ACE | Auto-merged "${doc.displayName}": ${mergeResults.merged} new, ${mergeResults.updated} updated.`);
+        }
+      } catch (mergeErr) {
+        console.warn(`${MODULE_ID} | Auto-merge failed (non-fatal):`, mergeErr);
+      }
 
     } catch (err) {
       console.error(`${MODULE_ID} | Digest generation failed:`, err);

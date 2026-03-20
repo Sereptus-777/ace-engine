@@ -1,12 +1,15 @@
 // ============================================================
 // ACE — AI Campaign Engine — Canvas Highlight System
 // Applies a glow/outline to canvas objects when hovered
-// in the Select Scene Elements panel
+// in the Select Scene Elements panel.
+// Also provides a persistent subtle glow on PC tokens so
+// the GM can quickly spot them on complex maps.
 // ============================================================
 
 export class CanvasHighlight {
 
   static #activeHighlights = new Map();
+  static #pcGlowFilters    = new Map();   // tokenId → filter
 
   static highlight(id, type) {
     const obj = this._getCanvasObject(id, type);
@@ -39,17 +42,31 @@ export class CanvasHighlight {
     const entry = this.#activeHighlights.get(id);
     if (!entry) return;
 
-    const { obj } = entry;
-    if (obj._aceOrigFilters) {
+    const { obj, filter } = entry;
+    try {
       const target = obj.mesh ?? obj;
-      target.filters = obj._aceOrigFilters;
+
+      // Remove the specific ACE filter if it's still in the array
+      if (filter && target.filters) {
+        const idx = target.filters.indexOf(filter);
+        if (idx >= 0) {
+          const cleaned = [...target.filters];
+          cleaned.splice(idx, 1);
+          target.filters = cleaned.length ? cleaned : null;
+        }
+      } else if (obj._aceOrigFilters) {
+        target.filters = obj._aceOrigFilters;
+      }
       delete obj._aceOrigFilters;
-    }
-    if (obj._aceAnim) {
-      cancelAnimationFrame(obj._aceAnim);
-      delete obj._aceAnim;
-      const target = obj.mesh ?? obj;
-      target.alpha = 1;
+
+      // Stop fallback animation
+      if (obj._aceAnim) {
+        cancelAnimationFrame(obj._aceAnim);
+        delete obj._aceAnim;
+        target.alpha = 1;
+      }
+    } catch (e) {
+      // Object may have been destroyed — just clean up tracking
     }
     this.#activeHighlights.delete(id);
   }
@@ -77,5 +94,134 @@ export class CanvasHighlight {
     };
     obj._aceAnim = requestAnimationFrame(animate);
     this.#activeHighlights.set(id, { obj, type });
+  }
+
+  // ── Persistent PC Glow ─────────────────────────────────────
+  // Soft colored drop shadow beneath PC tokens so the GM can
+  // spot them easily on busy maps. Uses the owning player's
+  // chosen color. Called from refreshToken hook.
+
+  /**
+   * Apply or refresh a soft colored drop-shadow glow beneath a token
+   * if it belongs to a PC. Safe to call on every refreshToken — skips
+   * non-PC tokens and avoids duplicate shadows.
+   */
+  static applyPcGlow(token) {
+    if (!token?.actor?.hasPlayerOwner || token.actor.type !== "character") return;
+
+    // Already glowing — skip unless the shadow was lost to a re-render
+    if (this.#pcGlowFilters.has(token.id)) {
+      const entry = this.#pcGlowFilters.get(token.id);
+      if (entry?.shadow && token.children?.includes(entry.shadow)) return;
+      // Shadow was lost (re-render) — clean up and re-apply
+      this.removePcGlow(token);
+    }
+
+    // Find the owning player's color
+    const owner = game.users?.find(u => !u.isGM && token.actor.testUserPermission(u, "OWNER"));
+    const hexColor = owner?.color?.toString?.() ?? owner?.color ?? "#e51c1c";
+    const hexInt = parseInt(hexColor.replace("#", ""), 16);
+
+    const size = Math.max(token.w ?? 100, token.h ?? 100);
+
+    // Create a soft radial glow underneath the token art
+    const shadow = new PIXI.Graphics();
+    shadow.beginFill(hexInt, 0.45);
+    shadow.drawCircle(size / 2, size / 2, size * 0.52);
+    shadow.endFill();
+
+    // Blur it for a soft drop-shadow look
+    try {
+      const blur = new PIXI.filters.BlurFilter(12, 4);
+      shadow.filters = [blur];
+    } catch (_) {
+      // If blur not available, the solid fill still works as a visible marker
+    }
+
+    // Insert at index 0 so it renders BEHIND the token art
+    try {
+      token.addChildAt(shadow, 0);
+    } catch (_) {
+      token.addChild(shadow);
+    }
+
+    // Gentle breathing animation — pulse alpha between 0.25 and 0.55
+    let t = Math.random() * Math.PI * 2;  // offset so tokens don't sync
+    const breathe = () => {
+      t += 0.025;
+      try {
+        shadow.alpha = 0.4 + 0.2 * Math.sin(t);
+      } catch (_) {
+        cancelAnimationFrame(token._acePcGlowAnim);
+        return;
+      }
+      token._acePcGlowAnim = requestAnimationFrame(breathe);
+    };
+    token._acePcGlowAnim = requestAnimationFrame(breathe);
+
+    this.#pcGlowFilters.set(token.id, { shadow });
+  }
+
+  /** Convert hex color string to [r, g, b] floats (0–1). */
+  static _hexToRgb(hex) {
+    const h = hex.replace("#", "");
+    const bigint = parseInt(h.length === 3
+      ? h.split("").map(c => c + c).join("")
+      : h, 16);
+    return [(bigint >> 16 & 255) / 255, (bigint >> 8 & 255) / 255, (bigint & 255) / 255];
+  }
+
+  /** Remove the PC glow from a specific token. */
+  static removePcGlow(token) {
+    if (!token) return;
+
+    // Stop breathing animation
+    if (token._acePcGlowAnim) {
+      cancelAnimationFrame(token._acePcGlowAnim);
+      delete token._acePcGlowAnim;
+    }
+
+    const entry = this.#pcGlowFilters.get(token.id);
+    // Remove shadow sprite
+    if (entry?.shadow) {
+      try {
+        token.removeChild(entry.shadow);
+        entry.shadow.destroy({ children: true });
+      } catch (_) {}
+    }
+    // Legacy: remove filter-based glow if present (from old code)
+    if (entry?.filter) {
+      const target = token.mesh ?? token;
+      if (target?.filters) {
+        target.filters = target.filters.filter(f => f !== entry.filter);
+        if (!target.filters.length) target.filters = null;
+      }
+    }
+    // Legacy: remove ring if present (from old code)
+    if (token._acePcRing) {
+      try {
+        token.removeChild(token._acePcRing);
+        token._acePcRing.destroy();
+      } catch (_) {}
+      delete token._acePcRing;
+    }
+    this.#pcGlowFilters.delete(token.id);
+  }
+
+  /** Refresh PC glow on all tokens in the current scene. */
+  static refreshAllPcGlows() {
+    if (!canvas?.tokens?.placeables) return;
+    for (const token of canvas.tokens.placeables) {
+      this.applyPcGlow(token);
+    }
+  }
+
+  /** Remove all PC glows (e.g. when setting is toggled off). */
+  static clearAllPcGlows() {
+    for (const [tokenId] of this.#pcGlowFilters) {
+      const token = canvas.tokens?.get(tokenId);
+      if (token) this.removePcGlow(token);
+    }
+    this.#pcGlowFilters.clear();
   }
 }

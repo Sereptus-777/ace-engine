@@ -33,7 +33,13 @@ Everything outside the [NARRATION] tags is your GM-only advice: tactical suggest
 
 Not every response needs a [NARRATION] block — only include one when the GM's question naturally calls for read-aloud text (scene descriptions, transitions, NPC dialogue, atmosphere). For pure rules questions, tactical advice, or meta-discussion, skip the tags entirely.
 
-Format responses with light markdown for readability. Use bold for key terms, names, and rules. Keep responses focused — a few paragraphs max unless the GM asks for detail.`;
+Format responses with light markdown for readability. Use bold for key terms, names, and rules. Keep responses focused — a few paragraphs max unless the GM asks for detail.
+
+## FORMATTING RULES
+- Use COMPACT spacing — no extra blank lines between headers, bullets, or paragraphs.
+- One blank line before a heading, zero blank lines between a heading and its first bullet/paragraph.
+- Bullet lists should have NO blank lines between items.
+- Keep the response dense and readable — screen space is precious in a game panel.`;
 
 export class AceSettings {
   static register() {
@@ -71,6 +77,13 @@ export class AceSettings {
       name: "ACE.Settings.ApiUrl.Name",
       hint: "ACE.Settings.ApiUrl.Hint",
       type: String,
+      choices: {
+        "https://api.openai.com":      "OpenAI (api.openai.com)",
+        "https://api.anthropic.com":   "Anthropic (api.anthropic.com)",
+        "https://openrouter.ai/api":   "OpenRouter (openrouter.ai)",
+        "http://localhost:11434":      "Ollama Local (localhost:11434)",
+        "http://localhost:1234":       "LM Studio Local (localhost:1234)",
+      },
       default: "https://api.openai.com",
     });
 
@@ -78,6 +91,36 @@ export class AceSettings {
       name: "ACE.Settings.ModelName.Name",
       hint: "ACE.Settings.ModelName.Hint",
       type: String,
+      choices: {
+        // ── Cloud: OpenAI ──
+        "gpt-4o":                "GPT-4o (best quality, $$)",
+        "gpt-4o-mini":           "⭐ GPT-4o Mini (fast + great quality, $) — Recommended",
+        "gpt-4.1":              "GPT-4.1 (latest, $$)",
+        "gpt-4.1-mini":         "GPT-4.1 Mini (latest mini, $)",
+        "gpt-4.1-nano":         "GPT-4.1 Nano (blazing fast, cheapest)",
+        // ── Cloud: Anthropic ──
+        "claude-sonnet-4-20250514":  "Claude Sonnet 4 (excellent RP, $$)",
+        "claude-3-5-haiku-20241022": "Claude 3.5 Haiku (blazing fast, $)",
+        // ── Local: Ollama / LM Studio ──
+        "llama3.2":              "Llama 3.2 (8B — blazing fast)",
+        "llama3.1":              "Llama 3.1 (8B — balanced)",
+        "llama3.1:70b":          "Llama 3.1 (70B — best local, slow)",
+        "mistral":               "Mistral (7B — blazing fast)",
+        "mixtral":               "Mixtral (8x7B — great quality)",
+        "qwen2.5-coder:32b":    "⭐ Qwen 2.5 Coder (32B — best local RP) — Recommended",
+        "qwen2.5:14b":           "Qwen 2.5 (14B — good balance)",
+        "qwen2.5:32b":           "Qwen 2.5 (32B — excellent)",
+        "deepseek-r1:14b":       "DeepSeek R1 (14B — reasoning)",
+        "deepseek-r1:32b":       "DeepSeek R1 (32B — strong reasoning)",
+        "gemma2":                "Gemma 2 (9B — blazing fast)",
+        "nous-hermes2":          "Nous Hermes 2 (great RP)",
+        // ── OpenRouter ──
+        "openai/gpt-4o":         "OpenRouter → GPT-4o",
+        "openai/gpt-4o-mini":    "OpenRouter → GPT-4o Mini",
+        "anthropic/claude-sonnet-4-20250514": "OpenRouter → Claude Sonnet 4",
+        "google/gemini-2.0-flash-001": "OpenRouter → Gemini 2.0 Flash (blazing fast)",
+        "meta-llama/llama-3.1-70b-instruct": "OpenRouter → Llama 3.1 70B",
+      },
       default: "gpt-4o-mini",
     });
 
@@ -216,6 +259,20 @@ export class AceSettings {
       default: false,
     });
 
+    s("autoMergeDigests", {
+      name: "Auto-Merge Digests into World Bible",
+      hint: "When enabled, digests automatically merge into the World Bible after generation. When disabled, use the manual 'Merge into Bible' button on digested documents. Costs ~$0.50–1.00 per digest in API credits.",
+      type: Boolean,
+      default: false,
+    });
+
+    s("autoLearnToBible", {
+      name: "Auto-Learn to World Bible",
+      hint: "When enabled, the AI silently extracts locations, NPCs, and factions from every chat response and adds them to the World Bible. This roughly doubles per-message API cost (~$0.01–0.03 extra per message, ~$1–2 per 3-hour session). Disable to save credits and use the manual 'Learn' button on individual messages instead.",
+      type: Boolean,
+      default: false,
+    });
+
     // ── ElevenLabs Narration (client-scoped) ────────────────
     s("elevenLabsApiKey", {
       scope: "client",
@@ -227,17 +284,34 @@ export class AceSettings {
 
     s("elevenLabsVoiceId", {
       scope: "client",
-      name: "ElevenLabs Voice ID",
-      hint: "The voice ID from your ElevenLabs account. Find it at elevenlabs.io → Voices.",
+      name: "Narrator Voice (Male)",
+      hint: "ElevenLabs voice for narration and male NPC speech. Pick a recommended voice or paste a custom Voice ID from elevenlabs.io.",
       type: String,
+      choices: {
+        "o3hzbFqcuIw2MRzP8rQf": "⭐ Default Narrator (deep, dramatic) — Recommended",
+        "j9jfwdrw7BRfcR43Qohk": "Narrator Alt (warm, authoritative)",
+        "pNInz6obpgDQGcFmaJgB": "Adam (clear, neutral male)",
+        "nPczCjzI2devNBz1zQrb": "Brian (British male)",
+        "IKne3meq5aSn9XLyUdCD": "Charlie (casual Australian)",
+        "onwK4e9ZLuTAKqWW03F9": "Daniel (deep British)",
+        "TX3LPaxmHKxFdv7VOQHJ": "Liam (young American)",
+        "JBFqnCBsd6RMkjVDRZzb": "George (warm British)",
+      },
       default: "o3hzbFqcuIw2MRzP8rQf",
     });
 
     s("elevenLabsFemaleVoiceId", {
       scope: "client",
-      name: "ElevenLabs Female Voice ID",
-      hint: "Voice ID for female NPCs. Find it at elevenlabs.io → Voices. Leave blank to always use the default (male) voice.",
+      name: "Narrator Voice (Female)",
+      hint: "ElevenLabs voice for female NPC speech. Leave blank to always use the male narrator voice.",
       type: String,
+      choices: {
+        "":                          "— Use Male Narrator Voice —",
+        "EXAVITQu4vr4xnSDxMaL":    "⭐ Sarah (warm, expressive) — Recommended",
+        "Xb7hH8MSUJpSbSDYk0k2":    "Alice (British, gentle)",
+        "cgSgspJ2msm6clMCkdW9":    "Jessica (American, confident)",
+        "pFZP5JQG7iQjIQuC4Bku":    "Lily (British, young)",
+      },
       default: "",
     });
 
@@ -343,7 +417,15 @@ export class AceSettings {
       name: "ACE.Settings.SubtleRollAutoDetect.Name",
       hint: "ACE.Settings.SubtleRollAutoDetect.Hint",
       type: Boolean,
-      default: true,
+      default: false,
+    });
+
+    s("subtleNarrationLength", {
+      name: "Subtle Roll Narration Length",
+      hint: "How verbose the AI narration is for subtle roll results. Short = 1 sentence, Medium = 2 sentences, Long = 3-5 sentences.",
+      type: String,
+      choices: { short: "Short (1 sentence)", medium: "Medium (2 sentences)", long: "Long (3-5 sentences)" },
+      default: "short",
     });
 
     // ── Internal (hidden) ───────────────────────────────────
@@ -367,6 +449,15 @@ export class AceSettings {
       config: false,
       type: Object,
       default: {},
+    });
+
+    // ── Visual Aids ──────────────────────────────────────────
+    s("pcGlow", {
+      scope: "client",
+      name: "PC Token Glow",
+      hint: "Add a subtle colored glow around player character tokens using each player's chosen color. Personal setting — each user controls their own.",
+      type: Boolean,
+      default: true,
     });
   }
 
@@ -626,7 +717,8 @@ export class AceSettings {
         }
 
         case "anthropic": {
-          const anthropicUrl = apiUrl || "https://api.anthropic.com";
+          // Always use Anthropic's URL — don't inherit apiUrl which may be set to another provider
+          const anthropicUrl = "https://api.anthropic.com";
           const resp = await fetch(`${anthropicUrl}/v1/messages`, {
             method: "POST",
             headers: {

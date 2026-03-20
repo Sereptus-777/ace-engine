@@ -61,7 +61,11 @@ export class SceneContext {
     this._cache = null;
     this._cacheTime = 0;
     this._cacheTTL = 5000;
+    this._worldBible = null;
   }
+
+  /** @param {WorldBibleEngine} bible */
+  setWorldBible(bible) { this._worldBible = bible; }
 
   refresh() { this._cache = null; this._cacheTime = 0; }
   refreshCombat() { this._cache = null; }
@@ -94,7 +98,10 @@ export class SceneContext {
     const scene = canvas?.scene;
     if (scene) {
       parts.push(`Scene: ${scene.name}`);
-      if (scene.description) parts.push(`Description: ${this._stripHtml(scene.description).slice(0, 200)}`);
+      const aceDesc = scene.flags?.["ace-engine"]?.sceneDescription;
+      const nativeDesc = scene.description ? this._stripHtml(scene.description) : "";
+      const desc = aceDesc || nativeDesc;
+      if (desc) parts.push(`Description: ${desc.slice(0, 300)}`);
     }
 
     const tokenDocs = (canvas?.scene?.tokens ?? []).filter(td => !td.hidden || td.actor?.hasPlayerOwner);
@@ -102,10 +109,14 @@ export class SceneContext {
       const summary = tokenDocs.map((td) => {
         const actor = td.actor;
         let s = td.name;
+        // Race/Class
+        const race = actor?.system?.details?.race?.name ?? actor?.system?.details?.race ?? "";
+        const cls  = actor?.system?.details?.class ?? actor?.items?.find(i => i.type === "class")?.name ?? "";
+        if (race || cls) s += ` [${[race, cls].filter(Boolean).join(" ")}]`;
         const hp = actor ? this._extractHP(actor) : null;
         if (hp) s += ` (HP: ${hp.current}/${hp.max})`;
         const conditions = actor ? this._getActorConditions(actor) : [];
-        if (conditions.length) s += ` [${conditions.join(", ")}]`;
+        if (conditions.length) s += ` {${conditions.join(", ")}}`;
         return s;
       });
       parts.push(`Tokens: ${summary.join("; ")}`);
@@ -133,10 +144,11 @@ export class SceneContext {
 
     const lines = [`### Scene: ${scene.name}`];
 
-    if (scene.description) {
-      const desc = this._stripHtml(scene.description);
-      if (desc) lines.push(`**Description:** ${desc}`);
-    }
+    // Check ACE custom flag first, then Foundry native description
+    const aceDesc = scene.flags?.["ace-engine"]?.sceneDescription;
+    const nativeDesc = scene.description ? this._stripHtml(scene.description) : "";
+    const desc = aceDesc || nativeDesc;
+    if (desc) lines.push(`**Description:** ${desc}`);
 
     const darknessLevel = scene.environment?.darknessLevel ?? scene.environment?.darkness ?? null;
     if (darknessLevel !== null && darknessLevel !== undefined) {
@@ -148,7 +160,50 @@ export class SceneContext {
     const weatherDesc = this._detectWeather(scene);
     if (weatherDesc) lines.push(`**Weather:** ${weatherDesc}`);
 
+    // ── World Bible auto-lookup — match scene name to known locations ──
+    const bibleContext = this._lookupSceneInBible(scene.name);
+    if (bibleContext) lines.push(bibleContext);
+
     return lines.join("\n");
+  }
+
+  /**
+   * Search the World Bible for the current scene name and return matching
+   * location data. Tries the full name first, then strips common prefixes
+   * like "BM:" or "Chapter 4 -" to find the core location name.
+   * @param {string} sceneName
+   * @returns {string} Formatted Bible context or ""
+   */
+  _lookupSceneInBible(sceneName) {
+    if (!this._worldBible?.hasData || !sceneName) return "";
+
+    // Try full scene name first
+    let result = this._worldBible.search(sceneName, 3);
+    if (result) return `**Location (World Bible):**\n${result}`;
+
+    // Strip common scene naming prefixes: "BM: Entry - Amber Temple" → "Amber Temple"
+    // Patterns: "XX:", "XX: Name -", "Chapter N -", "Area N -", "Room N -"
+    const stripped = sceneName
+      .replace(/^[A-Z]{1,4}:\s*/i, "")           // "BM: " prefix
+      .replace(/^(?:chapter|area|room|level)\s*\d+\s*[-–:]\s*/i, "")  // "Chapter 4 - "
+      .replace(/^[^-–]+[-–]\s*/, "")              // "Entry - " prefix (anything before first dash)
+      .trim();
+
+    if (stripped && stripped !== sceneName) {
+      result = this._worldBible.search(stripped, 3);
+      if (result) return `**Location (World Bible):**\n${result}`;
+    }
+
+    // Last try: split on common separators and search each part
+    const parts = sceneName.split(/[-–:,]/);
+    for (const part of parts) {
+      const clean = part.trim();
+      if (clean.length < 4) continue; // skip short fragments like "BM"
+      result = this._worldBible.search(clean, 2);
+      if (result) return `**Location (World Bible):**\n${result}`;
+    }
+
+    return "";
   }
 
   /**
@@ -274,7 +329,7 @@ export class SceneContext {
   }
 
   _gatherTokens() {
-    const tokenDocs = canvas?.scene?.tokens ?? [];
+    const tokenDocs = [...(canvas?.scene?.tokens ?? [])];
     if (!tokenDocs.length) return "";
 
     const lines = ["### Tokens on Scene"];
