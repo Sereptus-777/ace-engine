@@ -5,6 +5,7 @@
 
 import { MODULE_ID, localCredentials } from "./ace-engine.mjs";
 import { CanvasHighlight } from "./canvas-highlight.mjs";
+import { filterProfanity, buildProfanityPrompt } from "./profanity-filter.mjs";
 
 // v13-safe FilePicker access (for document library uploads)
 const _FP = () =>
@@ -122,7 +123,7 @@ async function _aceCloseDialog(eventCount, eventLines = []) {
 }
 
 export class AcePanel extends foundry.applications.api.ApplicationV2 {
-  constructor({ aiProvider, sceneCtx, npcMemory, lkMemory, suggestionEngine, reputationEngine, subtleRolls, documentEngine, digestEngine, worldBible, triggerSfx, stopSfx } = {}) {
+  constructor({ aiProvider, sceneCtx, npcMemory, lkMemory, suggestionEngine, reputationEngine, subtleRolls, documentEngine, digestEngine, worldBible, vaultEngine, vaultSearch, triggerSfx, stopSfx } = {}) {
     super();
     this.ai          = aiProvider;
     this.scene       = sceneCtx;
@@ -133,6 +134,8 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this._documentEngine = documentEngine ?? null; // DocumentEngine — reference library
     this._digestEngine   = digestEngine   ?? null; // DigestEngine — AI-powered structured digests
     this._worldBible     = worldBible     ?? null; // WorldBibleEngine — world reference bible
+    this._vaultEngine    = vaultEngine    ?? null; // VaultEngine — cross-campaign archival
+    this._vaultSearch    = vaultSearch    ?? null; // VaultSearch — cross-campaign queries
     this.suggestions = suggestionEngine;
     this.triggerSfx  = triggerSfx ?? (() => {});   // broadcasts SFX to all clients
     this.stopSfx     = stopSfx   ?? (() => {});   // stops SFX audio (thunder etc.)
@@ -217,10 +220,10 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       minimizable: true,
     },
     position: {
-      width:  555,   // +25px per side from previous 505
-      height: 740,   // +25px from previous 715
+      width:  590,
+      height: 740,
       top:    80,
-      left:   200,  // Safe default — _onRender moves it to the right side
+      left:   200,   // Safe default — _onRender moves it to the right side
     },
     actions: {
       // ── Chat tab ───────────────────────────────────────
@@ -313,6 +316,8 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       libEditYear:         AcePanel._onLibEditYear,
       libEditTags:         AcePanel._onLibEditTags,
       libDeleteDoc:        AcePanel._onLibDeleteDoc,
+      libHardDeleteDoc:    AcePanel._onLibHardDeleteDoc,
+      libNukeAll:          AcePanel._onLibNukeAll,
       libGenerateDigest:   AcePanel._onLibGenerateDigest,
       libToggleDigest:     AcePanel._onLibToggleDigest,
       libDeleteDigest:     AcePanel._onLibDeleteDigest,
@@ -440,10 +445,6 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         </div>
         <!-- ── Gold Divider Bar with quick actions ── -->
         <div class="ace-gold-divider">
-          <button class="ace-divider-action" data-action="analyzeNpcTactics"
-                  title="Get a specific tactic suggestion for the current NPC's turn">
-            <i class="fas fa-chess-knight"></i> NPC Tactics
-          </button>
           <div class="ace-input-spacer"></div>
           <button class="ace-divider-action" data-action="clearChat"
                   title="Clear AI conversation">
@@ -713,7 +714,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         id:       t.id,
         actorId:  t.actor?.id,
         name:     t.document.name,
-        img:      t.document.texture?.src || t.actor?.img,
+        img:      t.document.texture?.src || t.actor?.prototypeToken?.texture?.src || t.actor?.img,
         type:     "npc",
         selected: this._selectedTokens.has(t.id),
         hp:       t.actor?.system?.attributes?.hp?.value ?? null,
@@ -749,7 +750,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         id:       t.id,
         actorId:  t.actor?.id,
         name:     t.document.name,
-        img:      t.document.texture?.src || t.actor?.img,
+        img:      t.document.texture?.src || t.actor?.prototypeToken?.texture?.src || t.actor?.img,
         type:     "item",
         selected: this._selectedItems.has(t.id),
       }));
@@ -771,6 +772,10 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         <div class="ace-select-header">
           <span class="ace-select-title"><i class="fas fa-crosshairs"></i> Scene Elements</span>
           <span class="ace-select-count" title="Total selected">${total} selected</span>
+          <button class="ace-btn ace-btn-sm" data-action="analyzeNpcTactics"
+                  title="Get a specific tactic suggestion for the current NPC's turn">
+            <i class="fas fa-chess-knight"></i> NPC Tactics
+          </button>
           <button class="ace-btn ace-btn-sm" data-action="clearSelection" title="Clear all selections">
             <i class="fas fa-times-circle"></i> Clear
           </button>
@@ -979,8 +984,11 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
            data-actor-id="${el.actorId ?? ""}"
            title="${el.name}${isLinked ? " (ACE Linked — memory persists)" : ""}${isDead ? " [DEAD]" : ""}">
         <div class="ace-el-img-wrap">
-          <img class="ace-el-img" src="${el.img}" alt="${el.name}" loading="lazy"
-               onerror="this.src='icons/svg/mystery-man.svg'"/>
+          ${/\.(webm|mp4)$/i.test(el.img)
+            ? `<video class="ace-el-img" src="${el.img}" autoplay loop muted playsinline
+                   onerror="this.outerHTML='<img class=\\'ace-el-img\\' src=\\'icons/svg/mystery-man.svg\\'/>'"></video>`
+            : `<img class="ace-el-img" src="${el.img}" alt="${el.name}" loading="lazy"
+                   onerror="this.src='icons/svg/mystery-man.svg'"/>`}
           <div class="ace-el-check"><i class="fas fa-check"></i></div>
         </div>
         <span class="ace-el-name">${el.name}</span>
@@ -1048,6 +1056,17 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     } else if (type === "player" || type === "npc" || type === "item") {
       const tok = canvas?.tokens?.placeables?.find(t => t.id === id || t.actor?.id === id);
       if (tok) selected ? tok.control({ releaseOthers: false }) : tok.release();
+    }
+
+    // Pan canvas to token if exactly ONE element is selected total
+    if (selected && type !== "tile") {
+      const totalSelected = this._selectedTokens.size + this._selectedTiles.size + this._selectedItems.size;
+      if (totalSelected === 1) {
+        const tok = canvas?.tokens?.placeables?.find(t => t.id === id || t.actor?.id === id);
+        if (tok) {
+          canvas.animatePan({ x: tok.center.x, y: tok.center.y, duration: 500 });
+        }
+      }
     }
 
     // Refresh Quick Stats if expanded
@@ -1324,27 +1343,50 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     const textarea = this.element?.querySelector("#ace-npc-speech-input");
     if (!textarea) return;
 
-    let finalTranscript = textarea.value;
+    // ── Edit-Aware Committed Baseline (same pattern as chat/narration) ──
+    this._npcVoiceBaseline    = textarea.value;
+    this._npcVoiceLastInterim = "";
+
+    // Detect manual edits while voice is active
+    this._npcVoiceInputHandler = () => {
+      if (!this._npcSpeechListening) return;
+      const el = this.element?.querySelector("#ace-npc-speech-input");
+      if (!el) return;
+      let val = el.value;
+      if (this._npcVoiceLastInterim && val.endsWith(this._npcVoiceLastInterim)) {
+        val = val.slice(0, -this._npcVoiceLastInterim.length);
+      }
+      this._npcVoiceBaseline    = val;
+      this._npcVoiceLastInterim = "";
+    };
+    textarea.addEventListener("input", this._npcVoiceInputHandler);
 
     recognition.onresult = (e) => {
-      let interim = "";
+      let newFinal = "";
+      let interim  = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) {
-          finalTranscript += e.results[i][0].transcript;
+          newFinal += e.results[i][0].transcript;
         } else {
           interim += e.results[i][0].transcript;
         }
       }
-      textarea.value = finalTranscript + interim;
+
+      if (newFinal) this._npcVoiceBaseline += newFinal;
+      this._npcVoiceLastInterim = interim;
+
+      const freshTA = this.element?.querySelector("#ace-npc-speech-input");
+      if (freshTA) freshTA.value = this._npcVoiceBaseline + interim;
     };
 
     recognition.onerror = (e) => {
       console.warn(`${MODULE_ID} | NPC speech recognition error:`, e.error);
-      this._stopNpcSpeechVoice();
+      if (e.error !== "no-speech" && e.error !== "aborted") {
+        this._stopNpcSpeechVoice();
+      }
     };
 
     recognition.onend = () => {
-      // Auto-restart if still in listening mode (browser may stop after silence)
       if (this._npcSpeechListening) {
         try { recognition.start(); } catch (_) { this._stopNpcSpeechVoice(); }
       }
@@ -1364,11 +1406,23 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
 
   _stopNpcSpeechVoice() {
     if (this._npcSpeechRecognition) {
+      this._npcSpeechRecognition.onresult = null;
+      this._npcSpeechRecognition.onend    = null;
+      this._npcSpeechRecognition.onerror  = null;
       this._npcSpeechListening = false;
       try { this._npcSpeechRecognition.stop(); } catch (_) {}
       this._npcSpeechRecognition = null;
     }
     this._npcSpeechListening = false;
+
+    // Remove manual-edit listener
+    const textarea = this.element?.querySelector("#ace-npc-speech-input");
+    if (textarea && this._npcVoiceInputHandler) {
+      textarea.removeEventListener("input", this._npcVoiceInputHandler);
+    }
+    this._npcVoiceInputHandler = null;
+    this._npcVoiceBaseline     = "";
+    this._npcVoiceLastInterim  = "";
 
     // Update mic button visual
     const micBtn = this.element?.querySelector('[data-action="npcSpeechVoice"]');
@@ -2612,8 +2666,24 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     // Panel mode: ensure header is visible
     this.element.classList.remove("ace-splash-mode");
 
-    // ── Inject minimize "-" button into header (next to close X) ──
+    // ── Inject TTS controls + minimize button into header ──
     const header = this.element.querySelector(".window-header, header");
+
+    // Move TTS controls from tab bar to header (after title, before window controls)
+    if (header && !header.querySelector("#ace-header-tts")) {
+      const ttsSource = this.element.querySelector("#ace-tts-controls");
+      if (ttsSource) {
+        const ttsWrap = document.createElement("div");
+        ttsWrap.id = "ace-header-tts";
+        ttsWrap.className = "ace-header-tts";
+        ttsWrap.innerHTML = ttsSource.innerHTML;
+        // Copy action handlers by re-using the same data-action attributes
+        const titleEl = header.querySelector(".window-title, .application-title");
+        if (titleEl) titleEl.after(ttsWrap);
+        else header.prepend(ttsWrap);
+      }
+    }
+
     if (header && !header.querySelector(".ace-btn-minimize")) {
       const minBtn = document.createElement("button");
       minBtn.className = "header-control ace-btn-minimize";
@@ -2639,16 +2709,28 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       if (this._activeTab === "chat") input.focus();
     }
 
-    // Narration textarea — Enter adds newline (send via button only)
+    // Narration textarea — Enter sends to players, Shift+Enter for newline
     const narInput = this.element.querySelector("#ace-narration-input");
     if (narInput) {
-      // Auto-stop mic when user starts typing manually
-      narInput.addEventListener("input", () => {
-        if (this._narrationListening) {
-          this._stopNarrationVoice();
+      narInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          this._narrateSendMessage();
         }
       });
       if (this._activeTab === "narration") narInput.focus();
+    }
+
+    // Encounter prompt — Enter generates encounter, Shift+Enter for newline
+    const encounterInput = this.element.querySelector("#ace-encounter-prompt");
+    if (encounterInput) {
+      encounterInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          const genBtn = this.element.querySelector('[data-action="generateEncounter"]');
+          if (genBtn && !genBtn.disabled) genBtn.click();
+        }
+      });
     }
 
     // Quick note bar — Enter saves to memory
@@ -3896,8 +3978,11 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     if (this._isListening) this._stopVoice();
 
     const input = this.element.querySelector("#ace-input");
-    const text  = input?.value?.trim();
-    if (!text || this._isStreaming) return;
+    const rawText = input?.value?.trim();
+    if (!rawText || this._isStreaming) return;
+
+    // Apply profanity filter — player sees and AI receives the filtered version
+    const text = filterProfanity(rawText);
 
     this._chatHistory.push({ role: "user", content: text, timestamp: Date.now() });
     input.value = "";
@@ -3905,17 +3990,44 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
 
     const history  = this._chatHistory.slice(0, -1).map(({ role, content }) => ({ role, content }));
     const sceneCtx = this.scene?.gather() ?? "";
-    const npcMem   = this._buildNpcContext();
 
-    // Document Library: inject relevant reference chunks based on the user's message
-    const docCtx   = this._buildDocumentContext(text);
+    // Document Library FIRST — search PDFs before other stores so we can
+    // use discovered entities for cross-store linking (NPC/reputation/fame)
+    const docCtx   = await this._buildDocumentContext(text);
+
+    // Cross-store linking: extract entities found in document results
+    // (NPC names, locations) and feed them into NPC/reputation lookups
+    const docEntities = this._documentEngine?.getLastSearchEntities?.() ?? {};
+
+    // Standard NPC context (scene NPCs + journals + reputation + fame)
+    const npcMem   = await this._buildNpcContext();
+
+    // Supplemental NPC/reputation context for entities found in PDFs
+    // that aren't on the current scene (e.g., Rahadin mentioned in a
+    // room description but not on the current map)
+    const crossStoreCtx = this._buildCrossStoreContext(docEntities);
 
     // World Bible: search for relevant lore entries matching the user's query
     const bibleCtx = this._buildWorldBibleContext(text, sceneCtx);
 
+    // Cross-campaign vault search — detect if user is asking about past campaigns
+    const vaultCtx = await this._buildVaultContext(text);
+
     let fullMem = npcMem;
-    if (bibleCtx) fullMem += `\n\n${bibleCtx}`;
-    if (docCtx)   fullMem += `\n\n${docCtx}`;
+    if (crossStoreCtx) fullMem += `\n\n${crossStoreCtx}`;
+    if (bibleCtx)  fullMem += `\n\n${bibleCtx}`;
+    if (docCtx)    fullMem += `\n\n${docCtx}`;
+    if (vaultCtx)  fullMem += `\n\n${vaultCtx}`;
+
+    // Profanity flavor prompt — teaches AI to use fantasy swearing
+    try {
+      const profanityEnabled = game.settings.get(MODULE_ID, "profanityFilter") ?? true;
+      if (profanityEnabled) {
+        const bibleData = this._worldBible?.getData?.() ?? null;
+        const regionName = this.scene?.currentScene?.name ?? "";
+        fullMem += `\n\n${buildProfanityPrompt(bibleData, regionName)}`;
+      }
+    } catch { /* setting not registered yet */ }
 
     // Vision images — if enabled, find relevant map/image references
     let visionImages = [];
@@ -4109,6 +4221,16 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
         } catch (bkErr) {
           console.warn(`${MODULE_ID} | Session end backup failed:`, bkErr);
         }
+
+        // Auto-snapshot to vault on session end
+        if (this._vaultEngine) {
+          try {
+            await this._vaultEngine.createSnapshot();
+            console.log(`${MODULE_ID} | Session end: vault snapshot created.`);
+          } catch (vErr) {
+            console.warn(`${MODULE_ID} | Session end vault snapshot failed:`, vErr);
+          }
+        }
       }
     } catch (err) {
       console.error(`${MODULE_ID} | End session error:`, err);
@@ -4182,8 +4304,8 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
    */
   async _generateReadAloudToNarration(direction) {
     const sceneCtx = this.scene?.gather() ?? "";
-    const npcMem   = this._buildNpcContext();
-    const docCtx   = this._buildDocumentContext(direction.title);
+    const npcMem   = await this._buildNpcContext();
+    const docCtx   = await this._buildDocumentContext(direction.title);
     const bibleCtx = this._buildWorldBibleContext(direction.title, sceneCtx);
     let fullMem = npcMem;
     if (bibleCtx) fullMem += `\n\n${bibleCtx}`;
@@ -4237,9 +4359,9 @@ Write a short read-aloud passage (2-4 sentences) the GM speaks to players RIGHT 
   async suggestNpcTactic(combat, combatant) {
     if (!combatant) return;
     const sceneCtx = this.scene?.gather() ?? "";
-    const npcMem   = this._buildNpcContext();
+    const npcMem   = await this._buildNpcContext();
     const npcName  = combatant.name;
-    const docCtx   = this._buildDocumentContext(npcName);
+    const docCtx   = await this._buildDocumentContext(npcName);
     const bibleCtx = this._buildWorldBibleContext(npcName, sceneCtx);
     let fullTacticMem = npcMem;
     if (bibleCtx) fullTacticMem += `\n\n${bibleCtx}`;
@@ -4288,9 +4410,9 @@ Style examples:
 
   async _generateEncounter(userPrompt) {
     const sceneCtx  = this.scene?.gather() ?? "";
-    const npcMem    = this._buildNpcContext();
+    const npcMem    = await this._buildNpcContext();
     const sceneName = canvas?.scene?.name ?? "";
-    const docCtx    = this._buildDocumentContext(userPrompt || sceneName);
+    const docCtx    = await this._buildDocumentContext(userPrompt || sceneName);
     const bibleCtx  = this._buildWorldBibleContext(userPrompt || sceneName, sceneCtx);
     let encMem = npcMem;
     if (bibleCtx) encMem += `\n\n${bibleCtx}`;
@@ -4454,8 +4576,10 @@ Appropriate loot, XP, and story rewards.
     const micBtn  = this.element?.querySelector('[data-action="narrationVoice"]');
     this._narOrigPlaceholder = input?.placeholder ?? "";
 
-    // Track confirmed (final) text separately from in-progress interim text
-    this._narFinalTranscript = input?.value ?? "";   // preserve any existing text
+    // ── Edit-Aware Committed Baseline (same pattern as chat voice) ──
+    this._narVoiceBaseline    = input?.value ?? "";   // preserve any existing text
+    this._narVoiceLastInterim = "";
+    this._narFinalTranscript  = this._narVoiceBaseline;
 
     this._narrationListening = true;
 
@@ -4466,27 +4590,45 @@ Appropriate loot, XP, and story rewards.
     }
     if (input) {
       input.placeholder = "🎙 Recording… click mic or Send to finish";
+
+      // Detect manual edits while voice is active — re-snapshot baseline
+      this._narVoiceInputHandler = () => {
+        if (!this._narrationListening) return;
+        const el = this.element?.querySelector("#ace-narration-input");
+        if (!el) return;
+        let val = el.value;
+        if (this._narVoiceLastInterim && val.endsWith(this._narVoiceLastInterim)) {
+          val = val.slice(0, -this._narVoiceLastInterim.length);
+        }
+        this._narVoiceBaseline    = val;
+        this._narFinalTranscript  = val;
+        this._narVoiceLastInterim = "";
+      };
+      input.addEventListener("input", this._narVoiceInputHandler);
     }
 
     this._narrationRecognition.onresult = (event) => {
-      // Build transcript from finalized + interim segments
-      let interim = "";
+      let newFinal = "";
+      let interim  = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const segment = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          this._narFinalTranscript += segment;
+          newFinal += segment;
         } else {
           interim += segment;
         }
       }
-      // Query fresh — ApplicationV2 may have re-rendered since voice started
+
+      if (newFinal) this._narVoiceBaseline += newFinal;
+      this._narVoiceLastInterim = interim;
+      this._narFinalTranscript  = this._narVoiceBaseline;
+
       const freshInput = this.element?.querySelector("#ace-narration-input");
-      if (freshInput) freshInput.value = this._narFinalTranscript + interim;
+      if (freshInput) freshInput.value = this._narVoiceBaseline + interim;
     };
 
     this._narrationRecognition.onerror = (event) => {
       console.warn(`${MODULE_ID} | Narration voice error:`, event.error);
-      // "no-speech" and "aborted" are non-fatal — let continuous mode restart
       if (event.error !== "no-speech" && event.error !== "aborted") {
         this._stopNarrationVoice();
         ui.notifications.warn(`Narration voice: ${event.error}. Check microphone permissions.`);
@@ -4494,13 +4636,10 @@ Appropriate loot, XP, and story rewards.
     };
 
     this._narrationRecognition.onend = () => {
-      // In continuous mode, the browser may still fire onend (e.g. long silence).
-      // Auto-restart if we're still supposed to be listening.
       if (this._narrationListening) {
         try {
           this._narrationRecognition.start();
         } catch (_) {
-          // Can't restart — stop gracefully
           this._stopNarrationVoice();
         }
       }
@@ -4518,7 +4657,6 @@ Appropriate loot, XP, and story rewards.
     this._narrationListening = false;
 
     // Kill recognition FIRST — null handlers to prevent any late onresult
-    // from overwriting the textarea after we stop.
     if (this._narrationRecognition) {
       this._narrationRecognition.onresult = null;
       this._narrationRecognition.onend    = null;
@@ -4526,6 +4664,13 @@ Appropriate loot, XP, and story rewards.
       try { this._narrationRecognition.stop(); } catch (_) { /* already stopped */ }
     }
     this._narrationRecognition = null;
+
+    // Remove manual-edit listener to prevent leaks
+    const input = this.element?.querySelector("#ace-narration-input");
+    if (input && this._narVoiceInputHandler) {
+      input.removeEventListener("input", this._narVoiceInputHandler);
+    }
+    this._narVoiceInputHandler = null;
 
     // Update mic button visual
     const micBtn = this.element?.querySelector('[data-action="narrationVoice"]');
@@ -4536,17 +4681,15 @@ Appropriate loot, XP, and story rewards.
     }
 
     // Restore placeholder
-    const input = this.element?.querySelector("#ace-narration-input");
     if (input && this._narOrigPlaceholder) {
       input.placeholder = this._narOrigPlaceholder;
     }
 
     // NEVER overwrite the textarea — whatever is in there is the user's text.
-    // The onresult handler already kept it updated during recording.
-    // If the user edited it manually, their edits are preserved.
-
-    this._narFinalTranscript = "";
-    this._narOrigPlaceholder = "";
+    this._narVoiceBaseline    = "";
+    this._narVoiceLastInterim = "";
+    this._narFinalTranscript  = "";
+    this._narOrigPlaceholder  = "";
   }
 
   /**
@@ -4592,7 +4735,16 @@ Appropriate loot, XP, and story rewards.
     const input   = this.element?.querySelector("#ace-input");
     const micBtn  = this.element?.querySelector('[data-action="voiceInput"]');
     this._chatVoiceOrigPh = input?.placeholder ?? "";
-    this._chatVoiceCommitted = "";  // finalized text so far
+
+    // ── Edit-Aware Committed Baseline ─────────────────────────
+    // _chatVoiceBaseline: the "truth" — everything the user has approved
+    //   (finalized speech + any manual edits they've made).
+    // _chatVoiceLastInterim: the ghost text we appended from interim results.
+    // When the user manually edits the textarea, we re-snapshot baseline
+    // from whatever's in there (minus interim ghost), so their edit sticks.
+    this._chatVoiceBaseline    = input?.value ?? "";
+    this._chatVoiceLastInterim = "";
+    this._chatVoiceCommitted   = "";
 
     this._isListening = true;
     if (micBtn) {
@@ -4601,28 +4753,51 @@ Appropriate loot, XP, and story rewards.
       micBtn.title = "Listening — click to stop, then press ASK AI";
     }
     if (input) {
-      input.value       = "";
       input.placeholder = "🎙 Listening… click mic to stop, then ASK AI";
       input.disabled    = false;
+
+      // Detect manual edits (keyboard typing, paste, delete) while voice is active.
+      // When the user fixes a word, we re-snapshot the textarea as the new baseline.
+      this._chatVoiceInputHandler = () => {
+        if (!this._isListening) return;
+        const el = this.element?.querySelector("#ace-input");
+        if (!el) return;
+        let val = el.value;
+        // Strip our interim ghost from the end (it may still be there)
+        if (this._chatVoiceLastInterim && val.endsWith(this._chatVoiceLastInterim)) {
+          val = val.slice(0, -this._chatVoiceLastInterim.length);
+        }
+        // Whatever remains IS the user's approved text
+        this._chatVoiceBaseline    = val;
+        this._chatVoiceLastInterim = "";
+      };
+      input.addEventListener("input", this._chatVoiceInputHandler);
     }
 
     this._recognition.onresult = (event) => {
-      // Rebuild: all finalized segments + current interim
-      let committed = "";
-      let interim   = "";
-      for (let i = 0; i < event.results.length; i++) {
+      // Only process NEW results (from event.resultIndex onward).
+      // This way we never re-scan old finalized segments.
+      let newFinal = "";
+      let interim  = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
         const text = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          committed += text;
+          newFinal += text;
         } else {
           interim += text;
         }
       }
-      this._chatVoiceCommitted = committed;
-      // Query the input element fresh — ApplicationV2 may have re-rendered
-      // since voice started, making the original reference stale.
+
+      // Append new finalized speech to the baseline
+      if (newFinal) this._chatVoiceBaseline += newFinal;
+      this._chatVoiceLastInterim = interim;
+      this._chatVoiceCommitted   = this._chatVoiceBaseline;
+
+      // Write baseline + interim ghost to textarea
       const freshInput = this.element?.querySelector("#ace-input");
-      if (freshInput) freshInput.value = (committed + interim).trim();
+      if (freshInput) {
+        freshInput.value = (this._chatVoiceBaseline + interim).trim();
+      }
     };
 
     this._recognition.onerror = (event) => {
@@ -4634,7 +4809,8 @@ Appropriate loot, XP, and story rewards.
     };
 
     this._recognition.onend = () => {
-      // Continuous mode can fire onend unexpectedly (browser quirk) — restart if still listening
+      // Continuous mode can fire onend unexpectedly (browser quirk) — restart if still listening.
+      // On restart, resultIndex resets but our baseline persists, so edits are safe.
       if (this._isListening) {
         try { this._recognition?.start(); } catch (_) { this._stopVoice(); }
       }
@@ -4642,6 +4818,9 @@ Appropriate loot, XP, and story rewards.
 
     try {
       this._recognition.start();
+      // Move focus to the textarea so Enter sends the message
+      // instead of re-triggering the mic button
+      if (input) requestAnimationFrame(() => input.focus());
     } catch (e) {
       console.error(`${MODULE_ID} | Voice start failed:`, e);
       this._stopVoice();
@@ -4660,21 +4839,30 @@ Appropriate loot, XP, and story rewards.
     try { this._recognition?.stop(); } catch (_) { /* already stopped */ }
     this._recognition = null;
 
-    const micBtn = this.element?.querySelector('[data-action="voiceInput"]');
+    // Remove the manual-edit listener to prevent leaks
     const input  = this.element?.querySelector("#ace-input");
+    if (input && this._chatVoiceInputHandler) {
+      input.removeEventListener("input", this._chatVoiceInputHandler);
+    }
+    this._chatVoiceInputHandler = null;
 
+    const micBtn = this.element?.querySelector('[data-action="voiceInput"]');
     if (micBtn) {
       micBtn.innerHTML = '<i class="fas fa-microphone"></i>';
       micBtn.classList.remove("ace-btn-mic-active");
       micBtn.title = "Voice input — click to speak";
     }
-    // Apply cleanup to finalized text
-    if (input && this._chatVoiceCommitted) {
-      input.value = this._cleanupTranscript(this._chatVoiceCommitted);
+    // Apply cleanup — use whatever is currently in the input (includes interim text)
+    // rather than only the committed portion, so nothing the user saw gets lost.
+    if (input) {
+      const raw = input.value?.trim() || this._chatVoiceCommitted || "";
+      if (raw) input.value = this._cleanupTranscript(raw);
     }
     if (input) {
       input.placeholder = this._chatVoiceOrigPh ?? "Ask ACE anything...";
     }
+    this._chatVoiceBaseline    = "";
+    this._chatVoiceLastInterim = "";
   }
 
   // ── TTS ────────────────────────────────────────────────────
@@ -5123,13 +5311,38 @@ Appropriate loot, XP, and story rewards.
     this._updateTtsUI();
   }
 
-  /** Targeted DOM update for TTS stop button — toggles pulse when audio is active. */
+  /** Targeted DOM update for TTS button — updates both tab-bar (hidden) and header copies. */
   _updateTtsUI() {
-    const btn = this.element?.querySelector("#ace-tts-controls .ace-btn-tts-main");
-    if (!btn) return;
-    const isActive = this._ttsPlaying || !!this._ttsAbort || !!this._ttsAudio
-      || window.speechSynthesis?.speaking;
-    btn.classList.toggle("ace-tts-active", isActive);
+    const isPlaying = this._ttsPlaying && !this._ttsPaused;
+    const isPaused = this._ttsPaused;
+    const isBusy = !isPlaying && !isPaused && (!!this._ttsAbort || !!this._ttsAudio || window.speechSynthesis?.speaking);
+
+    // Update header TTS controls
+    const headerWrap = this.element?.querySelector("#ace-header-tts");
+    if (headerWrap) {
+      if (isPlaying) {
+        headerWrap.innerHTML = `<button class="ace-btn-tts-main ace-tts-playing" data-action="pauseAudio"
+          title="Pause narration"><i class="fas fa-pause"></i></button>`;
+      } else if (isPaused) {
+        headerWrap.innerHTML = `
+          <button class="ace-btn-tts-main ace-tts-paused" data-action="resumeAudio"
+            title="Resume narration"><i class="fas fa-play"></i></button>
+          <button class="ace-btn-tts-stop" data-action="stopAudio"
+            title="Stop and clear audio"><i class="fas fa-stop"></i></button>`;
+      } else if (isBusy) {
+        headerWrap.innerHTML = `<button class="ace-btn-tts-main ace-tts-active" data-action="stopAudio"
+          title="Stop all audio"><i class="fas fa-stop"></i></button>`;
+      } else {
+        headerWrap.innerHTML = "";
+      }
+    }
+
+    // Also update tab-bar copy (hidden but keeps internal state)
+    const tabBtn = this.element?.querySelector("#ace-tts-controls .ace-btn-tts-main");
+    if (tabBtn) {
+      const isActive = isPlaying || isBusy;
+      tabBtn.classList.toggle("ace-tts-active", isActive);
+    }
   }
 
   // ── Context stub ────────────────────────────────────────────
@@ -5181,7 +5394,7 @@ Appropriate loot, XP, and story rewards.
    *   2. ACE persistent memory context (recent events, known NPCs, last session)
    * @returns {string}
    */
-  _buildNpcContext() {
+  async _buildNpcContext() {
     const parts = [];
 
     // NPCLink scene memories (real-time journal content)
@@ -5202,7 +5415,104 @@ Appropriate loot, XP, and story rewards.
     const convoKnowledge = this._buildConversationKnowledgeContext();
     if (convoKnowledge) parts.push(convoKnowledge);
 
+    // Legacy Ledger — compact summaries from past campaigns
+    if (this._vaultEngine) {
+      try {
+        const ledgerCtx = await this._vaultEngine.getLedgerContext(800);
+        if (ledgerCtx) parts.push(ledgerCtx);
+      } catch { /* non-critical */ }
+    }
+
     return parts.join("\n\n");
+  }
+
+  // ── Cross-Store Entity Linking ──────────────────────────────
+
+  /**
+   * Build supplemental context for entities discovered in document search
+   * results that might have matching records in the NPC/reputation/deed stores.
+   *
+   * Example: A PDF room description mentions "Rahadin" — if the party has
+   * met Rahadin before, this pulls in his NPC record (killed status, notes,
+   * combat stats, relationships) and reputation context so the AI knows
+   * the party's history with this NPC even though he's not on the scene.
+   *
+   * @param {{ npcs: string[], locations: string[], headingNames: string[] }} docEntities
+   * @returns {string} Formatted cross-store context, or ""
+   * @private
+   */
+  _buildCrossStoreContext(docEntities) {
+    if (!docEntities || !this.lkMemory) return "";
+
+    const parts = [];
+    const checked = new Set();
+
+    // Combine NPC names, location names, and heading names as potential NPC lookups
+    const candidateNames = [
+      ...(docEntities.npcs ?? []),
+      ...(docEntities.headingNames ?? []),
+    ];
+
+    for (const name of candidateNames) {
+      if (!name || name.length < 3) continue;
+      const key = name.toLowerCase().trim();
+      if (checked.has(key)) continue;
+      checked.add(key);
+
+      // Look up in NPC store
+      const npcRec = this.lkMemory.npcs?.getRecord(name);
+      if (!npcRec) continue;
+
+      // Build a compact summary of what the party knows about this NPC
+      const lines = [];
+      lines.push(`**${npcRec.displayName}**`);
+
+      if (npcRec.killed) {
+        lines.push(`  - STATUS: KILLED${npcRec.killedBy ? ` by ${npcRec.killedBy}` : ""}`);
+      }
+      if (npcRec.met > 0) {
+        lines.push(`  - Met ${npcRec.met} time(s), last seen: ${new Date(npcRec.lastSeen * 1000).toLocaleDateString()}`);
+      }
+      if (npcRec.scenes?.length) {
+        lines.push(`  - Seen in: ${npcRec.scenes.slice(-3).join(", ")}`);
+      }
+      if (npcRec.relationships && Object.keys(npcRec.relationships).length > 0) {
+        const relStr = Object.entries(npcRec.relationships)
+          .slice(0, 5)
+          .map(([who, rel]) => `${who}: ${rel}`)
+          .join("; ");
+        lines.push(`  - Relationships: ${relStr}`);
+      }
+      if (npcRec.notes?.length) {
+        const recentNotes = npcRec.notes.slice(-3).map(n => n.txt).join(" | ");
+        lines.push(`  - Notes: ${recentNotes}`);
+      }
+      if (npcRec.combatStats?.encounterCount > 0) {
+        lines.push(`  - Combat: ${npcRec.combatStats.encounterCount} encounter(s)${npcRec.combatStats.wasDefeated ? " (was defeated)" : ""}`);
+      }
+
+      if (lines.length > 1) { // has more than just the name
+        parts.push(lines.join("\n"));
+      }
+
+      // Also check reputation context for this NPC
+      if (this.reputation) {
+        try {
+          const repCtx = this.reputation.buildReputationContext(name);
+          if (repCtx) parts.push(repCtx);
+        } catch { /* non-critical */ }
+      }
+
+      // Cap to avoid bloating the prompt
+      if (parts.length >= 4) break;
+    }
+
+    if (parts.length === 0) return "";
+
+    return "## CROSS-REFERENCED NPC RECORDS\n" +
+      "The following NPCs are mentioned in the reference documents above. " +
+      "The party has interacted with them before:\n\n" +
+      parts.join("\n\n");
   }
 
   // ── Learning Cache ────────────────────────────────────────
@@ -5338,11 +5648,11 @@ Appropriate loot, XP, and story rewards.
 
   /**
    * Build document library context for AI prompt injection.
-   * Uses the user's message + scene context for relevance matching.
+   * Uses the user's message + scene context + conversation history for relevance matching.
    * @param {string} userMessage - The user's current message/query
    * @returns {string} Formatted reference library block, or ""
    */
-  _buildDocumentContext(userMessage = "") {
+  async _buildDocumentContext(userMessage = "") {
     if (!this._documentEngine) return "";
     try {
       const enableLib = game.settings.get(MODULE_ID, "enableDocumentLibrary") ?? true;
@@ -5350,9 +5660,94 @@ Appropriate loot, XP, and story rewards.
       const sceneCtx = this.scene?.gather() ?? "";
       const sceneName = canvas?.scene?.name ?? "";
       const budget = game.settings.get(MODULE_ID, "docContextBudget") ?? 2000;
-      return this._documentEngine.buildDocumentContext(sceneCtx, userMessage, sceneName, budget);
+
+      // Conversation-aware search: extract the last AI response so the
+      // search pipeline can pull entities (rooms, NPCs, locations) from it
+      // and use them to enrich follow-up queries like "what about that NPC?"
+      const lastAssistant = this._getLastAssistantMessage();
+
+      return await this._documentEngine.buildDocumentContext(
+        sceneCtx, userMessage, sceneName, budget, lastAssistant
+      );
     } catch (err) {
       console.warn(`${MODULE_ID} | Document context error:`, err);
+      return "";
+    }
+  }
+
+  /**
+   * Get the most recent assistant message from chat history.
+   * Used for conversation-aware search — entities in the last AI response
+   * are injected as supplemental search terms for follow-up queries.
+   * @returns {string} The last assistant message content, or ""
+   * @private
+   */
+  _getLastAssistantMessage() {
+    if (!this._chatHistory?.length) return "";
+    for (let i = this._chatHistory.length - 1; i >= 0; i--) {
+      if (this._chatHistory[i].role === "assistant") {
+        return this._chatHistory[i].content ?? "";
+      }
+    }
+    return "";
+  }
+
+  /**
+   * Build cross-campaign vault context when the user's message suggests
+   * they're asking about events from a past campaign.
+   *
+   * Auto-detects cross-campaign intent via keyword patterns, then searches
+   * the vault snapshots and returns formatted context for AI injection.
+   *
+   * @param {string} userMessage
+   * @returns {Promise<string>}
+   */
+  async _buildVaultContext(userMessage = "") {
+    if (!this._vaultSearch) return "";
+    if (!userMessage?.trim()) return "";
+
+    try {
+      const lower = userMessage.toLowerCase();
+
+      // ── Intent Detection ─────────────────────────────────────
+      // Check for explicit cross-campaign language
+      const crossCampaignPhrases = [
+        "other campaign", "different campaign", "last campaign", "previous campaign",
+        "old campaign", "past campaign", "another campaign", "another world",
+        "different world", "years ago", "long ago", "ever fought", "ever talk",
+        "ever met", "ever encounter", "ever killed", "ever faced", "ever seen",
+        "remember when", "back when", "in the past", "from before",
+        "cross campaign", "cross-campaign", "other adventure", "previous adventure",
+      ];
+
+      const hasCrossCampaignIntent = crossCampaignPhrases.some(phrase => lower.includes(phrase));
+
+      // If no explicit cross-campaign language, also check if the query
+      // mentions character names that exist in the vault but NOT in the current world
+      let hasVaultOnlyName = false;
+      if (!hasCrossCampaignIntent) {
+        // Quick check: does the vault have ANY archived worlds?
+        const worlds = await this._vaultSearch.discoverWorlds();
+        if (!worlds.length) return "";
+
+        // Do a speculative search — if it returns results, the name exists in vault
+        const specHits = await this._vaultSearch.search(userMessage, { maxResults: 3 });
+        if (specHits.length > 0) {
+          // Check if ANY hit scores well enough to warrant cross-campaign context
+          hasVaultOnlyName = specHits[0].score >= 0.5;
+        }
+      }
+
+      if (!hasCrossCampaignIntent && !hasVaultOnlyName) return "";
+
+      // ── Search vault snapshots ────────────────────────────────
+      const ctx = await this._vaultSearch.buildCrossWorldContext(userMessage, 800);
+      if (ctx) {
+        console.log(`${MODULE_ID} | Vault Search: cross-campaign context injected (${ctx.length} chars)`);
+      }
+      return ctx;
+    } catch (err) {
+      console.warn(`${MODULE_ID} | Vault context error:`, err);
       return "";
     }
   }
@@ -5671,11 +6066,43 @@ Appropriate loot, XP, and story rewards.
   _scrollChatToBottom() {
     const log = this.element?.querySelector("#ace-chat-log");
     if (log) requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+    this._autoGrowPanel();
+  }
+
+  /**
+   * Auto-expand panel height as content fills in, up to a max.
+   * Detects when the chat/narration log is scrolling (content overflows)
+   * and grows the panel to reduce or eliminate the need to scroll.
+   * Capped at 85% of the viewport height or 900px.
+   */
+  _autoGrowPanel() {
+    const el = this.element;
+    if (!el) return;
+
+    const MAX_HEIGHT = Math.min(900, Math.floor(window.innerHeight * 0.85));
+    const currentH   = this.position?.height ?? 740;
+
+    if (currentH >= MAX_HEIGHT) return; // already maxed out
+
+    // Find the active scrollable log (chat or narration)
+    const log = el.querySelector("#ace-chat-log") || el.querySelector("#ace-narration-log");
+    if (!log) return;
+
+    // How much content is hidden (overflowing)?
+    const overflow = log.scrollHeight - log.clientHeight;
+    if (overflow <= 10) return; // no meaningful overflow
+
+    // Grow by the overflow amount (but don't exceed max)
+    const targetH = Math.min(MAX_HEIGHT, currentH + overflow);
+    if (targetH > currentH + 20) { // only resize if meaningful (>20px)
+      try { this.setPosition({ height: targetH }); } catch (_) {}
+    }
   }
 
   _scrollNarrationToBottom() {
     const log = this.element?.querySelector("#ace-narration-log");
     if (log) requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+    this._autoGrowPanel();
   }
 
   _setInputState(enabled) {
@@ -7077,6 +7504,8 @@ MAGNITUDE: [local/regional/major/legendary]`;
     const docFileNames = new Set(docs.map(d => d.fileName));
     const orphanDigests = allDigests.filter(d => !docFileNames.has(d.sourceFile));
 
+    const totalDocs = docs.length + orphanDigests.length;
+
     return `
       <div class="ace-library">
 
@@ -7090,6 +7519,15 @@ MAGNITUDE: [local/regional/major/legendary]`;
                  accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp"
                  multiple style="display:none">
         </div>
+
+        ${totalDocs > 0 ? `
+        <!-- Clear All button — nuclear reset -->
+        <div class="ace-library-nuke-bar">
+          <button class="ace-lib-action ace-lib-nuke-btn" data-action="libNukeAll"
+                  title="Permanently delete ALL documents and digests for a fresh start">
+            <i class="fas fa-radiation"></i> Clear All Library
+          </button>
+        </div>` : ""}
 
         <!-- Source cards -->
         <div class="ace-library-list" id="ace-library-list">
@@ -7385,8 +7823,12 @@ MAGNITUDE: [local/regional/major/legendary]`;
               <i class="fas ${doc.enabled ? "fa-eye" : "fa-eye-slash"}"></i> ${doc.enabled ? "On" : "Off"}
             </button>
             <button class="ace-lib-action ace-lib-action-delete" data-action="libDeleteDoc" data-doc-id="${doc.id}"
-                    title="Remove from library">
+                    title="Remove from library (keeps cached data)">
               <i class="fas fa-box-archive"></i> Remove
+            </button>
+            <button class="ace-lib-action ace-lib-action-nuke" data-action="libHardDeleteDoc" data-doc-id="${doc.id}"
+                    title="Permanently delete — removes document AND digest">
+              <i class="fas fa-trash-alt"></i> Delete
             </button>
           </div>
         </div>
@@ -7479,7 +7921,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
    * Live-update just the status line on a library card without re-rendering the
    * entire library panel (avoids flicker during long PDF extraction).
    */
-  _updateLibraryCardStatus(docId, statusText) {
+  _updateLibraryCardStatus(docId, statusText, progress = null) {
     const card = this.element?.querySelector(`.ace-library-card[data-doc-id="${docId}"]`);
     if (!card) return;
     let statusEl = card.querySelector(".ace-library-card-status");
@@ -7489,6 +7931,23 @@ MAGNITUDE: [local/regional/major/legendary]`;
       card.querySelector(".ace-library-card-info")?.appendChild(statusEl);
     }
     statusEl.textContent = statusText;
+
+    // Progress bar — show/hide based on whether progress is provided
+    let barWrap = card.querySelector(".ace-progress-bar-wrap");
+    if (progress !== null && progress >= 0) {
+      if (!barWrap) {
+        barWrap = document.createElement("div");
+        barWrap.classList.add("ace-progress-bar-wrap");
+        barWrap.innerHTML = `<div class="ace-progress-bar-fill"></div><span class="ace-progress-bar-pct"></span>`;
+        statusEl.after(barWrap);
+      }
+      const pct = Math.min(100, Math.round(progress * 100));
+      barWrap.querySelector(".ace-progress-bar-fill").style.width = `${pct}%`;
+      barWrap.querySelector(".ace-progress-bar-pct").textContent = `${pct}%`;
+      barWrap.style.display = "";
+    } else if (barWrap) {
+      barWrap.style.display = "none";
+    }
   }
 
   /** Trigger a debounced save of the documents store via MemoryManager. */
@@ -7616,6 +8075,83 @@ MAGNITUDE: [local/regional/major/legendary]`;
     this._saveDocuments();
     this._refreshLibraryUI();
     ui.notifications.info(`ACE | Removed from library: ${doc.displayName} (cached on disk for re-import)`);
+  }
+
+  /**
+   * Hard-delete a single document — removes from store AND deletes its digest.
+   * No cache is saved. The document is gone.
+   */
+  static async _onLibHardDeleteDoc(event, target) {
+    const docId = target.closest("[data-doc-id]")?.dataset.docId;
+    const store = this._documentEngine?._mm?.documents;
+    if (!docId || !store) return;
+    const doc = store.getDocument(docId);
+    if (!doc) return;
+
+    const confirmed = await _aceConfirmDialog(
+      "Permanently Delete",
+      `<p>Permanently delete <strong>${doc.displayName}</strong>?</p>` +
+      `<p style="color:#ff6b6b;">This removes the document from the library AND deletes any associated digest. ` +
+      `Cached extraction data on disk will be orphaned and ignored. This cannot be undone.</p>`,
+      { yesLabel: "Delete Forever", yesIcon: "fas fa-skull-crossbones", noLabel: "Cancel", noIcon: "fas fa-times" }
+    ).catch(() => false);
+    if (!confirmed) return;
+
+    // Delete associated digest if one exists
+    if (this._digestEngine) {
+      const allDigests = this._digestEngine.getAllDigests();
+      const matchingDigest = allDigests.find(d => d.sourceFile === doc.fileName);
+      if (matchingDigest) {
+        store.toggleDigest(matchingDigest.id, false);
+        await this._digestEngine.deleteDigest(matchingDigest.id);
+        console.log(`${MODULE_ID} | Hard delete: removed digest ${matchingDigest.id} for ${doc.displayName}`);
+      }
+    }
+
+    store.removeDocument(docId);
+    this._saveDocuments();
+    this._refreshLibraryUI();
+    ui.notifications.info(`ACE | Permanently deleted: ${doc.displayName}`);
+  }
+
+  /**
+   * Nuclear option — wipe the ENTIRE library (all documents + all digests).
+   * For when the user wants a completely fresh start.
+   */
+  static async _onLibNukeAll(event, target) {
+    const store = this._documentEngine?._mm?.documents;
+    if (!store) return;
+
+    const docCount = store.recordCount;
+    const digestCount = Object.keys(this._digestEngine?.getAllDigests() ?? []).length;
+
+    const confirmed = await _aceConfirmDialog(
+      "⚠ Clear ALL Library Data",
+      `<p style="color:#ff6b6b;font-weight:bold;">This will permanently destroy:</p>` +
+      `<ul style="color:#ff6b6b;">` +
+      `<li>${docCount} document(s) — all chunks, indexes, and metadata</li>` +
+      `<li>${digestCount} digest(s) — all AI-extracted knowledge</li>` +
+      `<li>All active digest selections for this world</li>` +
+      `</ul>` +
+      `<p>Orphaned cache files on disk will be ignored. <strong>This cannot be undone.</strong></p>` +
+      `<p>Are you absolutely sure you want a fresh start?</p>`,
+      { yesLabel: "Nuke Everything", yesIcon: "fas fa-radiation", noLabel: "Cancel", noIcon: "fas fa-times" }
+    ).catch(() => false);
+    if (!confirmed) return;
+
+    // Nuke the document store
+    const nukedDocs = store.nukeLibrary();
+    this._saveDocuments();
+
+    // Nuke all digests
+    let nukedDigests = 0;
+    if (this._digestEngine) {
+      nukedDigests = await this._digestEngine.nukeAllDigests();
+    }
+
+    this._refreshLibraryUI();
+    ui.notifications.info(`ACE | Library cleared: ${nukedDocs} documents and ${nukedDigests} digests removed. Fresh start!`);
+    console.log(`${MODULE_ID} | NUKE ALL: removed ${nukedDocs} documents and ${nukedDigests} digests`);
   }
 
   // ── Digest Action Handlers ─────────────────────────────────
@@ -7875,14 +8411,18 @@ MAGNITUDE: [local/regional/major/legendary]`;
       // Progress callback updates the library card status line
       const onProgress = (batchNum, totalBatches, phase) => {
         let statusText;
+        let progress = null;
         if (phase === "extracting") {
           statusText = `🧠 Digesting batch ${batchNum}/${totalBatches}…`;
+          progress = batchNum / totalBatches;
         } else if (phase === "merging") {
           statusText = `🧠 Merging extracted data…`;
+          progress = 0.95;
         } else if (phase === "summary") {
           statusText = `🧠 Generating summary…`;
+          progress = 0.98;
         }
-        this._updateLibraryCardStatus(docId, statusText);
+        this._updateLibraryCardStatus(docId, statusText, progress);
       };
 
       // Run the AI digest pipeline
@@ -7936,6 +8476,11 @@ MAGNITUDE: [local/regional/major/legendary]`;
           console.warn(`${MODULE_ID} | World graph rebuild failed:`, wgErr);
         }
       }
+
+      // Auto-backup digests after generation (protects API token investment)
+      this._digestEngine.backupDigests(5).catch(err =>
+        console.warn(`${MODULE_ID} | Post-digest backup failed (non-fatal):`, err)
+      );
 
       this._updateLibraryCardStatus(docId, "");
       this._refreshLibraryUI();
@@ -8050,7 +8595,16 @@ MAGNITUDE: [local/regional/major/legendary]`;
         continue;
       }
 
+      const CURRENT_CHUNK_VERSION = 4; // Must match document-store.mjs setChunks()
+
       if (cached && cached.chunks?.length) {
+        // Auto-reject outdated cache versions — force re-extraction
+        const cacheVersion = cached.chunkVersion ?? 1;
+        if (cacheVersion < CURRENT_CHUNK_VERSION) {
+          console.log(`${MODULE_ID} | Cache for "${file.name}" is v${cacheVersion}, current is v${CURRENT_CHUNK_VERSION} — forcing re-extraction`);
+          // Fall through to re-extract below
+        } else {
+
         const useCached = await _aceConfirmDialog(
           "Cached Extraction Found",
           `<p>A cached extraction for <strong>${cached.displayName}</strong> was found on disk.</p>` +
@@ -8061,18 +8615,25 @@ MAGNITUDE: [local/regional/major/legendary]`;
 
         if (useCached) {
           // Restore from cache — skip heavy extraction entirely
-          store.setChunks(docRecord.id, cached.chunks);
+          // If cache has parents (v2), pass as {chunks, parents} object
+          if (cached.parents?.length) {
+            store.setChunks(docRecord.id, { chunks: cached.chunks, parents: cached.parents });
+          } else {
+            store.setChunks(docRecord.id, cached.chunks);
+          }
           if (cached.images?.length) {
             for (const img of cached.images) store.addImage(docRecord.id, img);
           }
           if (cached.tags?.length)      store.setTags(docRecord.id, cached.tags);
           if (cached.pageCount)          store.setPageCount(docRecord.id, cached.pageCount);
+          if (cached.embeddings)         store.setEmbeddings(docRecord.id, cached.embeddings);
           store.setStatus(docRecord.id, "ready");
           this._saveDocuments();
           this._refreshLibraryUI();
           ui.notifications.info(`ACE | Restored from cache: ${cached.displayName} (${cached.chunks.length} chunks)`);
           continue; // skip to next file
         }
+        } // close version check else
       }
 
       // 3. Process in background (extract text, chunk, tag)
@@ -8105,19 +8666,20 @@ MAGNITUDE: [local/regional/major/legendary]`;
         console.log(`${MODULE_ID} | Extracting PDF: page ${current}/${total}`);
         // Live progress update in the library card
         store.setStatus(docId, "processing", `Extracting page ${current} of ${total}…`);
-        this._updateLibraryCardStatus(docId, `⏳ Extracting page ${current}/${total}…`);
+        this._updateLibraryCardStatus(docId, `⏳ Extracting page ${current}/${total}…`, current / total);
       });
 
       store.setPageCount(docId, pages.length);
       this._updateLibraryCardStatus(docId, `⏳ Chunking ${pages.length} pages…`);
 
-      const chunks = this._documentEngine.chunkPages(pages);
-      store.setChunks(docId, chunks);
+      const chunkResult = this._documentEngine.chunkPages(pages);
+      store.setChunks(docId, chunkResult);
 
       // ── Scanned-PDF detection ─────────────────────────────────
       // If we got pages but zero chunks, the PDF is almost certainly
       // a scanned document (images only, no embedded text layer).
-      if (chunks.length === 0 && pages.length > 0) {
+      const chunkCount = chunkResult?.chunks?.length ?? chunkResult?.length ?? 0;
+      if (chunkCount === 0 && pages.length > 0) {
         store.setStatus(docId, "no_text");
         this._saveDocuments();
         this._refreshLibraryUI();
@@ -8138,7 +8700,9 @@ MAGNITUDE: [local/regional/major/legendary]`;
       }
 
       // Auto-extract document-level tags from first few chunks
-      const sample = chunks.slice(0, 5).map(c => c.text).join(" ");
+      const chunksArray = chunkResult?.chunks ?? chunkResult ?? [];
+      const parentCount = chunkResult?.parents?.length ?? 0;
+      const sample = chunksArray.slice(0, 5).map(c => c.text).join(" ");
       const { extractKeywords } = await import("./document-store.mjs");
       const autoTags = extractKeywords(sample, 6);
       store.setTags(docId, autoTags);
@@ -8146,12 +8710,28 @@ MAGNITUDE: [local/regional/major/legendary]`;
       // Auto-detect publication year from copyright text
       try {
         const { detectPublishedYear } = await import("./document-engine.mjs");
-        const year = detectPublishedYear(chunks);
+        const year = detectPublishedYear(chunksArray);
         if (year) {
           store.setPublishedYear(docId, year);
           console.log(`${MODULE_ID} | Auto-detected publication year: ${year}`);
         }
       } catch (e) { /* non-critical */ }
+
+      // ── Generate semantic embeddings (Phase 5 — optional, requires Ollama) ──
+      try {
+        const embOk = await this._documentEngine.generateEmbeddings(docId, (cur, tot) => {
+          if (cur % 50 === 0 || cur === tot) {
+            console.log(`${MODULE_ID} | Embedding chunk ${cur}/${tot}`);
+          }
+        });
+        if (embOk) {
+          console.log(`${MODULE_ID} | Embeddings complete for ${file.name}`);
+        } else {
+          console.log(`${MODULE_ID} | Embeddings skipped (Ollama unavailable)`);
+        }
+      } catch (embErr) {
+        console.warn(`${MODULE_ID} | Embedding generation failed (non-fatal):`, embErr);
+      }
 
       store.setStatus(docId, "ready");
       this._saveDocuments();
@@ -8159,7 +8739,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
 
       const finishedDoc = store.getDocument(docId);
       const docName = finishedDoc?.displayName;
-      ui.notifications.info(`ACE | Processed: ${docName} (${pages.length} pages, ${chunks.length} chunks)`);
+      ui.notifications.info(`ACE | Processed: ${docName} (${pages.length} pages, ${chunksArray.length} chunks, ${parentCount} sections)`);
 
       // Cache extraction globally for cross-world reuse
       if (finishedDoc) {
@@ -8171,11 +8751,12 @@ MAGNITUDE: [local/regional/major/legendary]`;
     } else if (type === "txt" || type === "md") {
       // ── Text / Markdown: chunk by paragraphs or headings ──
       const text = await file.text();
-      const chunks = this._documentEngine.chunkTextFile(text, type);
-      store.setChunks(docId, chunks);
+      const txtResult = this._documentEngine.chunkTextFile(text, type);
+      store.setChunks(docId, txtResult);
 
       // Auto-extract tags
-      const sample = chunks.slice(0, 5).map(c => c.text).join(" ");
+      const txtChunks = txtResult?.chunks ?? txtResult ?? [];
+      const sample = txtChunks.slice(0, 5).map(c => c.text).join(" ");
       const { extractKeywords } = await import("./document-store.mjs");
       const autoTags = extractKeywords(sample, 6);
       store.setTags(docId, autoTags);
@@ -8183,12 +8764,19 @@ MAGNITUDE: [local/regional/major/legendary]`;
       // Auto-detect publication year from copyright text
       try {
         const { detectPublishedYear } = await import("./document-engine.mjs");
-        const year = detectPublishedYear(chunks);
+        const year = detectPublishedYear(txtChunks);
         if (year) {
           store.setPublishedYear(docId, year);
           console.log(`${MODULE_ID} | Auto-detected publication year: ${year}`);
         }
       } catch (e) { /* non-critical */ }
+
+      // Generate semantic embeddings (Phase 5)
+      try {
+        await this._documentEngine.generateEmbeddings(docId, (cur, tot) => {
+          if (cur % 50 === 0 || cur === tot) console.log(`${MODULE_ID} | Embedding chunk ${cur}/${tot}`);
+        });
+      } catch (_) { /* non-fatal */ }
 
       store.setStatus(docId, "ready");
       this._saveDocuments();

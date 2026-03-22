@@ -5,12 +5,17 @@
 // ============================================================
 
 import { CategoryStore } from "./category-store.mjs";
+import { BM25, tokenize, countTerms } from "./search/bm25.mjs";
+import { cosineSimilarity, deserializeVector } from "./search/embeddings.mjs";
 
 const MAX_DOCUMENTS      = 50;   // per world
-const MAX_CHUNKS_PER_DOC = 500;  // text chunks per document
+const MAX_CHUNKS_PER_DOC = 8000; // text chunks per document (raised for large adventure books)
 const MAX_IMAGES_PER_DOC = 20;   // image refs per document
 
-// ── Stop Words for Keyword Extraction ────────────────────────
+// ── Stop Words for Legacy Keyword Extraction ─────────────────
+// NOTE: D&D-critical terms (floor, room, area, level, etc.) are
+// deliberately EXCLUDED from this list. The BM25 tokenizer in
+// search/bm25.mjs has its own improved stop word + keep word lists.
 const STOP_WORDS = new Set([
   "the","a","an","is","are","was","were","be","been","being",
   "have","has","had","do","does","did","will","would","could",
@@ -22,8 +27,9 @@ const STOP_WORDS = new Set([
   "about","after","before","between","into","through","during",
   "above","below","then","once","here","there","when","where",
   "why","how","what","which","who","whom","they","them","their",
-  "your","you","our","his","her","she","him","her","its","we",
-  "been","being","over","under","again","further","same","own",
+  "your","you","our","his","her","she","him","we",
+  "over","under","again","further","same","own",
+  // Removed: "floor", "room", "area", "level", "chapter" — D&D critical terms
 ]);
 
 /**
@@ -149,14 +155,238 @@ export class DocumentStore extends CategoryStore {
 
   /**
    * Replace all text chunks for a document.
+   * Accepts either a flat chunk array (legacy) or {chunks, parents} object (v2).
    * @param {string} docId
-   * @param {Array} chunks - [{idx, page, heading, text, tags}]
+   * @param {Array|{chunks: Array, parents: Array}} chunksOrResult
    */
-  setChunks(docId, chunks) {
+  setChunks(docId, chunksOrResult) {
     const doc = this._data.documents[docId];
     if (!doc) return;
-    doc.chunks = (chunks ?? []).slice(0, MAX_CHUNKS_PER_DOC);
+
+    // Handle both legacy flat array and new {chunks, parents} format
+    if (chunksOrResult && !Array.isArray(chunksOrResult) && chunksOrResult.chunks) {
+      // V2 format: { chunks: [...], parents: [...] }
+      doc.chunks  = (chunksOrResult.chunks ?? []).slice(0, MAX_CHUNKS_PER_DOC);
+      doc.parents = chunksOrResult.parents ?? [];
+      doc.chunkVersion = 4;  // v4: cross-references for multi-hop retrieval
+    } else {
+      // Legacy flat array
+      doc.chunks  = (chunksOrResult ?? []).slice(0, MAX_CHUNKS_PER_DOC);
+      doc.parents = [];
+      doc.chunkVersion = 1;
+    }
+
+    // Invalidate BM25 corpus (will rebuild on next search)
+    if (this._bm25) this._bm25 = null;
+
     this.markDirty();
+  }
+
+  /**
+   * Get parent sections for a document.
+   * @param {string} docId
+   * @returns {Array}
+   */
+  getParents(docId) {
+    const doc = this._data.documents[docId];
+    return doc?.parents ?? [];
+  }
+
+  /**
+   * Get a specific parent section by its parentIdx.
+   * @param {string} docId
+   * @param {number} parentIdx
+   * @returns {Object|null}
+   */
+  getParent(docId, parentIdx) {
+    const doc = this._data.documents[docId];
+    return doc?.parents?.find(p => p.parentIdx === parentIdx) ?? null;
+  }
+
+  // ── Cross-Reference Lookups (Multi-Hop Retrieval) ────────────
+
+  /**
+   * Find parent sections across all enabled documents that match a room ID.
+   * Returns the first match per room ID (rooms are typically unique).
+   * @param {string} roomId - e.g., "K15", "23b"
+   * @returns {Array<{docId: string, docName: string, parent: Object}>}
+   */
+  findParentsByRoomId(roomId) {
+    if (!roomId) return [];
+    const target = roomId.toLowerCase().replace(/\s+/g, "");
+    const results = [];
+
+    for (const doc of this.getEnabled()) {
+      for (const parent of (doc.parents ?? [])) {
+        const pid = (parent.roomId || "").toLowerCase().replace(/\s+/g, "");
+        if (pid === target) {
+          results.push({ docId: doc.id, docName: doc.name, parent });
+          break; // one match per doc is enough
+        }
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Find parent sections that appear on a specific page number.
+   * @param {number} pageNum
+   * @returns {Array<{docId: string, docName: string, parent: Object}>}
+   */
+  findParentsByPage(pageNum) {
+    if (!pageNum || pageNum < 1) return [];
+    const results = [];
+
+    for (const doc of this.getEnabled()) {
+      for (const parent of (doc.parents ?? [])) {
+        if (parent.page === pageNum || parent.pageEnd === pageNum) {
+          results.push({ docId: doc.id, docName: doc.name, parent });
+        }
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Get parents adjacent to a given parent (previous and next in document order).
+   * Used for neighbor expansion — when K15 is selected, also grab K14 and K16.
+   * @param {string} docId
+   * @param {number} parentIdx
+   * @returns {{ prev: Object|null, next: Object|null }}
+   */
+  getAdjacentParents(docId, parentIdx) {
+    const doc = this._data.documents[docId];
+    if (!doc?.parents?.length) return { prev: null, next: null };
+
+    // Parents are stored in document order (sequential parentIdx)
+    const idx = doc.parents.findIndex(p => p.parentIdx === parentIdx);
+    if (idx < 0) return { prev: null, next: null };
+
+    return {
+      prev: idx > 0 ? doc.parents[idx - 1] : null,
+      next: idx < doc.parents.length - 1 ? doc.parents[idx + 1] : null,
+    };
+  }
+
+  /**
+   * Find parent sections whose heading matches a named area reference.
+   * Uses substring match against heading text.
+   * @param {string} areaName - e.g., "The Village of Barovia"
+   * @returns {Array<{docId: string, docName: string, parent: Object}>}
+   */
+  findParentsByAreaName(areaName) {
+    if (!areaName || areaName.length < 3) return [];
+    const target = areaName.toLowerCase();
+    const results = [];
+
+    for (const doc of this.getEnabled()) {
+      for (const parent of (doc.parents ?? [])) {
+        const heading = (parent.heading || "").toLowerCase();
+        if (heading.includes(target) || target.includes(heading)) {
+          results.push({ docId: doc.id, docName: doc.name, parent });
+        }
+      }
+    }
+    return results;
+  }
+
+  // ── Embedding Storage (Phase 5) ──────────────────────────────
+
+  /**
+   * Store serialized embedding vectors for a document's chunks.
+   * @param {string} docId
+   * @param {Object<number, string>} embeddingsMap - { chunkIdx: base64String, ... }
+   */
+  setEmbeddings(docId, embeddingsMap) {
+    const doc = this._data.documents[docId];
+    if (!doc) return;
+    doc.embeddings = embeddingsMap;
+    // Invalidate deserialized cache
+    this._embeddingVecCache?.delete(docId);
+    this.markDirty();
+  }
+
+  /**
+   * Get raw embeddings map for a document.
+   * @param {string} docId
+   * @returns {Object<number, string>|null}
+   */
+  getEmbeddings(docId) {
+    const doc = this._data.documents[docId];
+    return doc?.embeddings ?? null;
+  }
+
+  /**
+   * Check if a document has embeddings generated.
+   * @param {string} docId
+   * @returns {boolean}
+   */
+  hasEmbeddings(docId) {
+    const doc = this._data.documents[docId];
+    return doc?.embeddings != null && Object.keys(doc.embeddings).length > 0;
+  }
+
+  /**
+   * Search chunks using cosine similarity against a query embedding vector.
+   * Only searches documents that have embeddings. Gracefully skips docs without.
+   *
+   * @param {Float32Array} queryVector - The embedded query (768-dim)
+   * @param {number} [maxResults=25]
+   * @returns {Array<{id: string, score: number, meta: Object, docId: string, docName: string, chunk: Object}>}
+   */
+  searchChunksSemantic(queryVector, maxResults = 25) {
+    if (!this._embeddingVecCache) this._embeddingVecCache = new Map();
+
+    const results = [];
+
+    for (const doc of this.getEnabled()) {
+      if (!doc.embeddings) continue;
+
+      // Lazy-deserialize vectors for this document (cached)
+      let vecMap = this._embeddingVecCache.get(doc.id);
+      if (!vecMap) {
+        vecMap = new Map();
+        for (const [idxStr, base64] of Object.entries(doc.embeddings)) {
+          try {
+            vecMap.set(Number(idxStr), deserializeVector(base64));
+          } catch (_) { /* skip corrupt vectors */ }
+        }
+        this._embeddingVecCache.set(doc.id, vecMap);
+      }
+
+      // Score each chunk
+      for (const chunk of (doc.chunks ?? [])) {
+        const vec = vecMap.get(chunk.idx);
+        if (!vec) continue;
+
+        const score = cosineSimilarity(queryVector, vec);
+        if (score >= 0.3) { // minimum similarity threshold
+          results.push({
+            id:      `${doc.id}::${chunk.idx}`,
+            score,
+            docId:   doc.id,
+            docName: doc.displayName,
+            chunk,
+            meta: {
+              docId:       doc.id,
+              docName:     doc.displayName,
+              chunkIdx:    chunk.idx,
+              page:        chunk.page,
+              heading:     chunk.heading,
+              sectionType: chunk.sectionType ?? null,
+              contentFlags: chunk.contentFlags ?? [],
+              parentIdx:   chunk.parentIdx ?? null,
+              roomId:      chunk.roomId ?? null,
+              tags:        chunk.tags ?? [],
+              source:      "semantic",
+            },
+          });
+        }
+      }
+    }
+
+    results.sort((a, b) => b.score - a.score);
+    return results.slice(0, maxResults);
   }
 
   /**
@@ -247,6 +477,19 @@ export class DocumentStore extends CategoryStore {
     delete this._data.documents[docId];
     this.markDirty();
     return doc;
+  }
+
+  /**
+   * Nuclear option — wipe ALL documents and active digests from the store.
+   * After calling this, call save to persist the empty state.
+   * @returns {number} Number of documents that were removed
+   */
+  nukeLibrary() {
+    const count = Object.keys(this._data.documents).length;
+    this._data.documents = {};
+    this._data.activeDigests = [];
+    this.markDirty();
+    return count;
   }
 
   // ── Queries ──────────────────────────────────────────────
@@ -391,6 +634,144 @@ export class DocumentStore extends CategoryStore {
     this.markDirty();
   }
 
+  // ── BM25 Search ─────────────────────────────────────────
+
+  /**
+   * Build or rebuild the BM25 corpus index from all enabled documents.
+   * Call after uploads, deletes, or enable/disable changes.
+   */
+  buildBM25Corpus() {
+    if (!this._bm25) this._bm25 = new BM25();
+
+    const documents = [];
+    for (const doc of this.getEnabled()) {
+      for (const chunk of (doc.chunks ?? [])) {
+        // Use pre-computed termFreqs if available (v2 chunks), otherwise compute on the fly
+        let termFreqs = chunk.termFreqs;
+        let length    = chunk.termCount ?? (chunk.charCount ? Math.round(chunk.charCount / 5) : 0);
+
+        if (!termFreqs) {
+          const counted = countTerms(chunk.text ?? "");
+          termFreqs = counted.terms;
+          length    = counted.length;
+        }
+
+        // Compute heading term frequencies for boosting
+        let headingTerms = null;
+        if (chunk.heading) {
+          headingTerms = countTerms(chunk.heading).terms;
+        }
+
+        documents.push({
+          id: `${doc.id}::${chunk.idx}`,
+          termFreqs,
+          length,
+          meta: {
+            docId:       doc.id,
+            docName:     doc.displayName,
+            chunkIdx:    chunk.idx,
+            page:        chunk.page,
+            heading:     chunk.heading,
+            sectionType: chunk.sectionType ?? null,
+            contentFlags: chunk.contentFlags ?? [],
+            parentIdx:   chunk.parentIdx ?? null,
+            roomId:      chunk.roomId ?? null,
+            tags:        chunk.tags ?? [],
+            headingTerms,
+          },
+        });
+      }
+    }
+
+    this._bm25.buildCorpus(documents);
+  }
+
+  /**
+   * Search chunks using BM25 scoring.
+   * Falls back to legacy keyword search if BM25 corpus isn't built.
+   *
+   * @param {string|string[]} query - Raw query string or pre-tokenized terms
+   * @param {Object} [opts]
+   * @param {number} [opts.maxResults=25]
+   * @param {Object<string,number>} [opts.sectionBoosts] - Section type → multiplier
+   * @returns {Array<{docId: string, docName: string, chunk: Object, score: number}>}
+   */
+  searchChunksBM25(query, opts = {}) {
+    const { maxResults = 25, sectionBoosts, roomIds } = opts;
+
+    // Ensure corpus is built
+    if (!this._bm25?.ready) {
+      this.buildBM25Corpus();
+    }
+
+    const results = this._bm25.search(query, {
+      maxResults,
+      boosts: sectionBoosts,
+      roomIds,
+    });
+
+    // Map back to chunk objects for backward compatibility
+    return results.map(r => {
+      const meta = r.meta;
+      const doc  = this._data.documents[meta.docId];
+      const chunk = doc?.chunks?.find(c => c.idx === meta.chunkIdx);
+      return {
+        docId:   meta.docId,
+        docName: meta.docName,
+        chunk:   chunk ?? { idx: meta.chunkIdx, text: "", heading: meta.heading, page: meta.page, tags: [] },
+        score:   r.score,
+        meta:    meta,
+      };
+    }).filter(r => r.chunk);
+  }
+
+  /**
+   * Perform regex pre-search: scan all chunks for exact pattern matches.
+   * Used for room IDs, floor references, NPC names — things regex finds better than BM25.
+   *
+   * @param {Array<{type: string, regex: RegExp, label: string}>} patterns
+   * @param {number} [maxResults=30]
+   * @returns {Array<{docId: string, docName: string, chunk: Object, score: number, matchType: string}>}
+   */
+  regexSearch(patterns, maxResults = 30) {
+    if (!patterns?.length) return [];
+    const results = [];
+
+    for (const doc of this.getEnabled()) {
+      for (const chunk of (doc.chunks ?? [])) {
+        const text = `${chunk.heading ?? ""} ${chunk.text ?? ""}`;
+        let totalMatches = 0;
+        let matchType = "";
+
+        for (const { type, regex, label } of patterns) {
+          regex.lastIndex = 0;
+          const matches = text.match(regex);
+          if (matches) {
+            totalMatches += matches.length;
+            matchType = matchType ? `${matchType}+${type}` : type;
+          }
+        }
+
+        if (totalMatches > 0) {
+          results.push({
+            docId:     doc.id,
+            docName:   doc.displayName,
+            chunk,
+            score:     totalMatches * 5,  // Regex matches get high base score
+            matchType,
+          });
+        }
+      }
+    }
+
+    return results
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxResults);
+  }
+
+  /** @returns {BM25|null} The BM25 engine instance */
+  get bm25() { return this._bm25 ?? null; }
+
   // ── Stats ────────────────────────────────────────────────
 
   /**
@@ -406,6 +787,8 @@ export class DocumentStore extends CategoryStore {
       enabledDocuments: enabled.length,
       totalChunks,
       totalImages,
+      bm25Ready: this._bm25?.ready ?? false,
+      bm25Size:  this._bm25?.size ?? 0,
     };
   }
 }

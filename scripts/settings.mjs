@@ -100,7 +100,7 @@ export class AceSettings {
         "gpt-4.1-nano":         "GPT-4.1 Nano (blazing fast, cheapest)",
         // ── Cloud: Anthropic ──
         "claude-sonnet-4-20250514":  "Claude Sonnet 4 (excellent RP, $$)",
-        "claude-3-5-haiku-20241022": "Claude 3.5 Haiku (blazing fast, $)",
+        "claude-haiku-4-5-20251001": "Claude Haiku 4.5 (blazing fast, $)",
         // ── Local: Ollama / LM Studio ──
         "llama3.2":              "Llama 3.2 (8B — blazing fast)",
         "llama3.1":              "Llama 3.1 (8B — balanced)",
@@ -122,6 +122,39 @@ export class AceSettings {
         "meta-llama/llama-3.1-70b-instruct": "OpenRouter → Llama 3.1 70B",
       },
       default: "gpt-4o-mini",
+    });
+
+    // ── Digest Model (separate, cheaper model for bulk extraction) ──
+    // ── Secondary API Key (for digest extraction on a different provider) ──
+    s("digestApiKey", {
+      name: "Digest API Key (if different provider)",
+      hint: "If your digest model uses a different provider than your main AI (e.g., main=Anthropic, digest=OpenAI), enter that provider's API key here. Leave blank to use your main API key.",
+      type: String,
+      default: "",
+    });
+
+    // Digest model: "provider:model" format so we know which API to call.
+    // Empty string = use main provider + model. Parsed by DigestEngine.
+    s("digestModel", {
+      name: "Digest Extraction Model",
+      hint: "Model used for AI digest extraction (bulk structured data). Use a cheap/fast model here — GPT-4o Mini is ideal (~$0.50 per book). Requires a valid API key for the chosen provider.",
+      type: String,
+      choices: {
+        "":                                       "— Same as main model —",
+        // ── OpenAI (cheapest for extraction) ──
+        "openai:gpt-4o-mini":                     "⭐ OpenAI: GPT-4o Mini (~$0.50/book) — Best Value",
+        "openai:gpt-4.1-nano":                    "OpenAI: GPT-4.1 Nano (cheapest)",
+        "openai:gpt-4.1-mini":                    "OpenAI: GPT-4.1 Mini",
+        "openai:gpt-4o":                          "OpenAI: GPT-4o ($$)",
+        // ── Anthropic ──
+        "anthropic:claude-haiku-4-5-20251001":    "Anthropic: Claude Haiku 4.5 (~$4/book)",
+        "anthropic:claude-sonnet-4-20250514":     "Anthropic: Claude Sonnet 4 ($$$)",
+        // ── Local (free) ──
+        "ollama:qwen2.5-coder:32b":              "Ollama: Qwen 2.5 Coder 32B (free)",
+        "ollama:qwen2.5:14b":                    "Ollama: Qwen 2.5 14B (free)",
+        "ollama:llama3.1":                       "Ollama: Llama 3.1 8B (free)",
+      },
+      default: "",
     });
 
     // "useEnvoyKeys" removed — sync direction is now Envoy → reads from Engine
@@ -175,6 +208,11 @@ export class AceSettings {
       type: Number,
       default: 120,
       range: { min: 30, max: 600, step: 10 },
+      onChange: () => {
+        // Restart subtle roll detection with new interval (no restart needed)
+        const mod = game.modules.get(MODULE_ID);
+        mod?.api?.getSubtleRolls?.()?.restartAutoDetect?.();
+      },
     });
 
     s("maxContextTokens", {
@@ -391,6 +429,14 @@ export class AceSettings {
       range: { min: 0.5, max: 1.5, step: 0.05 },
     });
 
+    // ── Profanity Filter ───────────────────────────────────
+    s("profanityFilter", {
+      name: "Fantasy Profanity Filter",
+      hint: "Replace real-world profanity with fantasy equivalents (xork, skullhole, hag, etc.) and teach the AI to use creative in-world swearing with deity/regional flavor.",
+      type: Boolean,
+      default: true,
+    });
+
     // ── Debug (client-scoped) ───────────────────────────────
     s("debugMode", {
       scope: "client",
@@ -443,6 +489,15 @@ export class AceSettings {
       type: String,
       choices: { short: "Short (1 sentence)", medium: "Medium (2 sentences)", long: "Long (3-5 sentences)" },
       default: "short",
+    });
+
+    // ── Search Engine ──────────────────────────────────────
+    s("docContextBudget", {
+      name: "Document Context Budget",
+      hint: "Maximum characters of document context sent to the AI per query. Higher = more detail but slower/costlier. Default 16000 (~4500 tokens).",
+      type: Number,
+      default: 16000,
+      range: { min: 4000, max: 64000, step: 2000 },
     });
 
     // ── Internal (hidden) ───────────────────────────────────

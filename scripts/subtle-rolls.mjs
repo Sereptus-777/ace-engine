@@ -93,7 +93,17 @@ The character gains little useful information about what the skill covers. Narra
 The character gains accurate, useful information relevant to the skill. Beating DC by 1-2 gives basic truth; beating by 5+ gives richer detail. Be specific to the current scene and NPCs.
 
 **Natural 20 (Critical Success):**
-The character gains exceptional, vivid insight about the skill's domain — sharp, specific details others would miss. Make it dramatic and rewarding.
+The character gains exceptional, vivid insight about the skill's domain — sharp, specific details others would miss. More detail, more clarity — but still grounded and believable.
+
+## CRITICAL — KEEP IT SUBTLE AND BELIEVABLE
+The ENTIRE purpose of a blind roll is that the player cannot tell what they rolled from the narration alone.
+- NEVER use absolutes like "you are certain", "without a doubt", "must be true", "every word is truthful" — players will instantly suspect a high roll.
+- NEVER use obviously vague language like "you can't tell anything" — players will instantly suspect a low roll.
+- A PASSED check should feel like a natural observation: "You notice the genuine weight of grief in his voice" — NOT "You know with absolute certainty he speaks only truth."
+- A FAILED check should feel like things are just unclear: "His expression is hard to read" — NOT "You have no idea what's going on."
+- A Nat 1 MISINFORMATION should feel like a normal, confident observation that happens to be WRONG — NOT an over-the-top declaration.
+- A Nat 20 should feel like keen, specific observation — NOT magical omniscience.
+- The tone difference between pass and fail should be SUBTLE. A player hearing either narration should think "that could be anything from a 5 to a 19."
 
 ## PERSPECTIVE RULES — CRITICAL
 - Describe the PLAYER CHARACTER's experience in SECOND PERSON: "You notice...", "You sense...", "You feel..."
@@ -401,6 +411,7 @@ export class SubtleRollManager {
           subtleDC:            dc,             // stored in flags, NOT in the HTML
           subtleTargetUser:    targetUserId,
           subtleActorId:       actorId,
+          subtleFlavor:        flavor,         // original suggestion context for narration
         },
       },
     });
@@ -418,11 +429,11 @@ export class SubtleRollManager {
     if (!requestId) return;
 
     // Retrieve request metadata (in-memory first, then message flags)
-    let dc, skill, actorName, targetUserId, skillLabel;
+    let dc, skill, actorName, targetUserId, skillLabel, flavor;
     const pending = this._pendingRequests.get(requestId);
 
     if (pending) {
-      ({ dc, skill, actorName, targetUserId, skillLabel } = pending);
+      ({ dc, skill, actorName, targetUserId, skillLabel, flavor } = pending);
     } else {
       // Fallback: find the original request ChatMessage
       const origMsg = game.messages.contents.find(m =>
@@ -438,6 +449,7 @@ export class SubtleRollManager {
       targetUserId  = f.subtleTargetUser;
       actorName     = flags.subtleActorName ?? "Unknown";
       skillLabel    = SKILL_LABELS[skill] ?? skill;
+      flavor        = f.subtleFlavor ?? "";
     }
 
     // Extract the d20 result
@@ -452,30 +464,27 @@ export class SubtleRollManager {
       `${MODULE_ID} | Subtle Roll: ${actorName} rolled ${natural} (total ${total}) vs DC ${dc} → ${resultCategory}`
     );
 
-    // ── Generate 3 AI narrations ─────────────────────────────
+    // ── Generate 1 AI narration using the suggestion's original context ──
     const narrations = await this.generateNarrations({
-      skill, skillLabel, dc, total, natural, actorName, resultCategory,
+      skill, skillLabel, dc, total, natural, actorName, resultCategory, flavor,
     });
 
-    if (!narrations.length) {
-      ui.notifications?.warn("ACE: Subtle Roll narration generation failed — check your AI connection.");
-      return;
-    }
+    const narration = narrations[0] ?? "";
 
-    // ── Post GM-only Narration Picker card ───────────────────
-    const pickerHtml = this._buildNarrationPickerCard(
-      actorName, skillLabel, dc, total, natural, narrations, requestId
+    // ── Post GM-only result card with broadcast + override buttons ─
+    const resultHtml = this._buildResultCard(
+      actorName, skillLabel, dc, total, natural, narration, requestId, targetUserId, flavor
     );
 
     await ChatMessage.create({
-      content:  pickerHtml,
+      content:  resultHtml,
       speaker:  { alias: "ACE" },
       whisper:  [game.user.id],
       flags:    {
         "ace-engine": {
           isSubtleNarrationPicker: true,
           subtleRequestId:         requestId,
-          subtleNarrations:        narrations,
+          subtleNarrations:        narration ? [narration] : [],
           subtleTargetUser:        targetUserId,
           subtleActorName:         actorName,
           subtleSkillLabel:        skillLabel,
@@ -505,7 +514,7 @@ export class SubtleRollManager {
     const actorName    = f.subtleActorName ?? "Unknown";
     const skillLabel   = f.subtleSkillLabel ?? "Skill Check";
 
-    const card = btn.closest(".ace-subtle-picker");
+    const card = btn.closest(".ace-subtle-result") ?? btn.closest(".ace-subtle-picker");
 
     // Build and deliver narration — always public (everyone hears it)
     const deliveryHtml = this._buildNarrationDeliveryCard(actorName, skillLabel, narration);
@@ -539,13 +548,19 @@ export class SubtleRollManager {
   }
 
   // ────────────────────────────────────────────────────────────
-  // AI — Generate 3 narrations for a blind roll result
+  // AI — Generate narration for a blind roll result
   // ────────────────────────────────────────────────────────────
 
-  async generateNarrations({ skill, skillLabel, dc, total, natural, actorName, actorRace, actorClass, resultCategory }) {
+  async generateNarrations({ skill, skillLabel, dc, total, natural, actorName, actorRace, actorClass, resultCategory, flavor }) {
     const sceneCtx = this.scene?.gatherCompact?.() ?? "";
     const npcMem   = this.memory?.getSceneNpcMemories?.() ?? "";
     const lengthPref = this._getNarrationLength();
+
+    // If we have the original suggestion flavor/reason, inject it as extra context
+    // so the narration is specific to WHY the check was called
+    const flavorCtx = flavor
+      ? `\n\n## WHY THIS CHECK WAS CALLED\nThe GM requested this check because: ${flavor}\nUse this context to write a narration that directly relates to this specific reason.`
+      : "";
 
     const prompt = NARRATION_PROMPT
       .replace("{actorName}",       actorName)
@@ -559,16 +574,17 @@ export class SubtleRollManager {
       .replace("{resultCategory}",  resultCategory)
       .replace("{lengthInstruction}", lengthPref)
       .replace("{sceneContext}",    sceneCtx || "No scene data available.")
-      .replace("{npcContext}",      npcMem   || "No NPC context available.");
+      .replace("{npcContext}",      npcMem   || "No NPC context available.")
+      + flavorCtx;
 
     try {
       let response = await this.ai.chat(prompt, "", "", []);
-      // New prompt returns plain text, not JSON — but handle both gracefully
+      // Strip markdown fencing
       response = response.replace(/```[a-z]*\s*/g, "").replace(/```\s*/g, "").trim();
-      // If the AI still returned a JSON array, parse it
+      // If the AI returned a JSON array, extract the first entry
       if (response.startsWith("[")) {
         const arr = this._parseNarrations(response);
-        if (arr.length) return arr;
+        if (arr.length) return [arr[0]];
       }
       // Otherwise treat as a single narration string
       response = response.replace(/^\[?"?|"?\]?$/g, "").trim();
@@ -584,17 +600,24 @@ export class SubtleRollManager {
   // ────────────────────────────────────────────────────────────
 
   startAutoDetect() {
-    if (this._detectInterval) return;
+    // Clear any existing interval first (allows setting changes without restart)
+    this.stopAutoDetect();
     const baseSec = game.settings.get(MODULE_ID, "suggestionInterval") || 120;
-    // 1.5× the suggestion interval so they don't collide
-    this._detectInterval = setInterval(() => this.detectRollOpportunities(), baseSec * 1500);
-    console.log(`${MODULE_ID} | Subtle Roll auto-detect started (every ${Math.round(baseSec * 1.5)}s)`);
+    this._detectInterval = setInterval(() => this.detectRollOpportunities(), baseSec * 1000);
+    console.log(`${MODULE_ID} | Subtle Roll auto-detect started (every ${baseSec}s)`);
   }
 
   stopAutoDetect() {
     if (this._detectInterval) {
       clearInterval(this._detectInterval);
       this._detectInterval = null;
+    }
+  }
+
+  /** Restart the interval (call after settings change). */
+  restartAutoDetect() {
+    if (this._detectInterval) {
+      this.startAutoDetect();
     }
   }
 
@@ -826,19 +849,49 @@ export class SubtleRollManager {
 
   _parseNarrations(text) {
     try {
-      const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      let cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+
+      // If the AI returned prose instead of a JSON array, try to extract it
+      if (!cleaned.startsWith("[")) {
+        const match = cleaned.match(/\[[\s\S]*\]/);
+        if (match) {
+          cleaned = match[0];
+        } else {
+          // Pure prose — treat the whole response as a single narration
+          if (cleaned.length > 20) return [cleaned];
+          return [];
+        }
+      }
+
       const arr = JSON.parse(cleaned);
       if (!Array.isArray(arr)) return [];
       return arr.filter(s => typeof s === "string" && s.length > 0).slice(0, 3);
     } catch (err) {
-      console.warn(`${MODULE_ID} | Could not parse narrations:`, err);
+      // Last resort: if JSON parse fails but we have text, use it as a single narration
+      const fallback = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      if (fallback.length > 20) return [fallback];
+      console.warn(`${MODULE_ID} | Could not parse narrations:`, err.message);
       return [];
     }
   }
 
   _parseDetections(text) {
     try {
-      const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      let cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+
+      // If the AI returned prose instead of JSON, try to extract JSON from it
+      if (!cleaned.startsWith("[")) {
+        const match = cleaned.match(/\[[\s\S]*\]/);
+        if (match) {
+          cleaned = match[0];
+        } else {
+          // Pure prose with no JSON — AI decided no rolls needed (or failed to format)
+          if (cleaned === "[]" || cleaned.toLowerCase().includes("no roll")) return [];
+          console.log(`${MODULE_ID} | Subtle Roll detection: AI returned prose, no JSON found`);
+          return [];
+        }
+      }
+
       const arr = JSON.parse(cleaned);
       if (!Array.isArray(arr)) return [];
       return arr
@@ -852,7 +905,7 @@ export class SubtleRollManager {
           flavor:    s.flavor ?? "The DM calls for a check...",
         }));
     } catch (err) {
-      console.warn(`${MODULE_ID} | Could not parse detections:`, err);
+      console.warn(`${MODULE_ID} | Could not parse detections (non-critical):`, err.message);
       return [];
     }
   }
@@ -904,7 +957,85 @@ export class SubtleRollManager {
     );
   }
 
-  /** Card 2: Narration Picker — GM-only whisper */
+  /** Card 2: Single result + narration — GM-only whisper with broadcast + override buttons */
+  _buildResultCard(actorName, skillLabel, dc, total, natural, narration, requestId, targetUserId = "", flavor = "") {
+    const isNat1  = natural === 1;
+    const isNat20 = natural === 20;
+    const passed  = total >= dc;
+
+    const bannerColor = isNat1 ? "#c43b3b" : isNat20 ? "#c9a84c" : passed ? "#5db88a" : "#e06060";
+    const bannerText  = isNat1  ? "NATURAL 1 — Misinformation"
+                      : isNat20 ? "NATURAL 20 — Perfect Insight"
+                      : passed  ? `PASSED (${total} vs DC ${dc})`
+                      :           `FAILED (${total} vs DC ${dc})`;
+
+    // Override button label — opposite of what actually happened
+    const overrideLabel = passed ? "Override: Fail" : "Override: Pass";
+    const overrideIcon  = passed ? "fa-times-circle" : "fa-check-circle";
+    const overrideColor = passed ? "#e06060" : "#5db88a";
+
+    let html =
+      `<div class="ace-subtle-result" style="background:#1c150e;border-left:4px solid #8a5bbf;` +
+      `border-radius:4px;padding:10px 12px;font-family:'IM Fell English','Palatino Linotype',serif;line-height:1.6;">` +
+      // Header
+      `<div style="color:#c4a8f0;font-weight:bold;font-size:1.05em;margin-bottom:4px;">` +
+      `<i class="fas fa-eye" style="margin-right:4px;"></i>` +
+      ` Subtle Roll — ${_escapeHtml(actorName)}</div>` +
+      // Result banner
+      `<div style="background:${bannerColor}22;border:1px solid ${bannerColor};` +
+      `border-radius:3px;padding:4px 8px;margin-bottom:10px;text-align:center;` +
+      `color:${bannerColor};font-weight:bold;font-size:0.9em;">` +
+      `${bannerText} &nbsp;|&nbsp; d20: ${natural} + ${total - natural} = ${total}</div>`;
+
+    if (narration) {
+      html +=
+        // Narration text (wrapped in a div with ID for override replacement)
+        `<div class="ace-subtle-narration-text" style="font-style:italic;color:#eddfc5;margin-bottom:10px;font-size:0.95em;` +
+        `border-left:3px solid #3a3a40;padding-left:10px;">` +
+        `"${_escapeHtml(narration)}"</div>` +
+        // Button row — Broadcast + Override side by side
+        `<div style="display:flex;gap:6px;">` +
+        // Broadcast button — sends narration + TTS to ONLY the rolling player
+        `<button class="ace-chat-btn" data-ace-btn="subtle-broadcast" ` +
+        `data-request-id="${requestId}" ` +
+        `data-actor-name="${_escapeHtml(actorName)}" ` +
+        `data-skill-label="${_escapeHtml(skillLabel)}" ` +
+        `data-target-user-id="${targetUserId}" ` +
+        `data-narration="${encodeURIComponent(narration)}" ` +
+        `style="flex:1;padding:8px 12px;` +
+        `background:#18102a;border:1px solid #c9a84c;border-radius:4px;` +
+        `color:#c9a84c;cursor:pointer;font-family:inherit;font-size:0.95em;` +
+        `text-align:center;font-weight:bold;transition:all 0.2s;">` +
+        `<i class="fas fa-bullhorn" style="margin-right:6px;"></i>` +
+        `Broadcast</button>` +
+        // Override button — generates opposite narration
+        `<button class="ace-chat-btn" data-ace-btn="subtle-override" ` +
+        `data-request-id="${requestId}" ` +
+        `data-actor-name="${_escapeHtml(actorName)}" ` +
+        `data-skill-label="${_escapeHtml(skillLabel)}" ` +
+        `data-skill="${_escapeHtml(skillLabel)}" ` +
+        `data-dc="${dc}" data-total="${total}" data-natural="${natural}" ` +
+        `data-target-user-id="${targetUserId}" ` +
+        `data-passed="${passed ? "true" : "false"}" ` +
+        `data-flavor="${encodeURIComponent(flavor)}" ` +
+        `style="flex:1;padding:8px 12px;` +
+        `background:#18102a;border:1px solid ${overrideColor};border-radius:4px;` +
+        `color:${overrideColor};cursor:pointer;font-family:inherit;font-size:0.95em;` +
+        `text-align:center;font-weight:bold;transition:all 0.2s;">` +
+        `<i class="fas ${overrideIcon}" style="margin-right:6px;"></i>` +
+        `${overrideLabel}</button>` +
+        `</div>`;
+    } else {
+      html +=
+        `<div style="font-style:italic;color:#7a6042;font-size:0.85em;">` +
+        `Narration generation failed — describe the result manually.</div>`;
+    }
+
+    html += `</div>`;
+    return html;
+  }
+
+  /** Card 2b: Legacy Narration Picker — GM-only whisper (kept for batch rolls) */
   _buildNarrationPickerCard(actorName, skillLabel, dc, total, natural, narrations, requestId) {
     const isNat1  = natural === 1;
     const isNat20 = natural === 20;

@@ -211,6 +211,20 @@ export class DigestEngine {
     // but is no longer referenced by the index.
   }
 
+  /**
+   * Nuclear option — wipe ALL digests from the index and cache.
+   * Orphan JSON files remain on disk (Foundry has no delete API)
+   * but they'll never be loaded again since the index is empty.
+   * @returns {number} Number of digests that were removed
+   */
+  async nukeAllDigests() {
+    const count = Object.keys(this._index.digests ?? {}).length;
+    this._index.digests = {};
+    this._cache.clear();
+    await this.saveIndex();
+    return count;
+  }
+
   updateIndex(digestId, meta) {
     this._index.digests[digestId] = meta;
   }
@@ -245,6 +259,30 @@ export class DigestEngine {
   async _runDigest(doc, aiProvider, onProgress) {
     const chunks = doc.chunks ?? [];
     if (!chunks.length) throw new Error("No text chunks to digest");
+
+    // Read digest-specific model override from settings (cheaper model for bulk extraction)
+    // Format: "provider:model" (e.g., "openai:gpt-4o-mini") or empty for main model
+    const aiOpts = {};
+    try {
+      const dm = game.settings.get(MODULE_ID, "digestModel");
+      if (dm && dm.length > 0) {
+        const colonIdx = dm.indexOf(":");
+        if (colonIdx > 0) {
+          // "provider:model" format — route to a different API
+          aiOpts.provider = dm.slice(0, colonIdx);
+          aiOpts.model = dm.slice(colonIdx + 1);
+        } else {
+          // Legacy: bare model name (no provider prefix)
+          aiOpts.model = dm;
+        }
+        // Use digest-specific API key if set, otherwise fall back to main key
+        const digestKey = game.settings.get(MODULE_ID, "digestApiKey");
+        if (digestKey && digestKey.length > 0) {
+          aiOpts.apiKey = digestKey;
+        }
+        console.log(`${MODULE_ID} | Digest using override: ${aiOpts.provider ?? "same provider"} → ${aiOpts.model}`);
+      }
+    } catch { /* setting not registered yet — use main model */ }
 
     const totalBatches = Math.ceil(chunks.length / DIGEST_BATCH_SIZE);
 
@@ -292,7 +330,7 @@ export class DigestEngine {
       try {
         const response = await aiProvider.chat(
           DIGEST_EXTRACTION_PROMPT + batchText,
-          "", "", []
+          "", "", [], [], aiOpts
         );
         const parsed = this._parseDigestResponse(response);
         if (parsed) {
@@ -334,7 +372,7 @@ export class DigestEngine {
     try {
       const statsText = this._digestStatsText(merged);
       const summaryPrompt = SUMMARY_PROMPT_PREFIX + `"${doc.displayName}"\n\nExtracted data:\n${statsText}`;
-      const summaryResponse = await aiProvider.chat(summaryPrompt, "", "", []);
+      const summaryResponse = await aiProvider.chat(summaryPrompt, "", "", [], [], aiOpts);
       merged.summary = summaryResponse.trim();
     } catch (err) {
       console.warn(`${MODULE_ID} | Digest summary generation failed:`, err);
@@ -507,12 +545,28 @@ export class DigestEngine {
    * @param {number} maxChars - Character budget
    * @returns {{ text: string, charsUsed: number }}
    */
-  buildDigestContext(activeDigestIds, queryKeywords, maxChars) {
+  buildDigestContext(activeDigestIds, queryKeywords, maxChars, intent = "general") {
     if (!activeDigestIds?.length || !queryKeywords?.length) return { text: "", charsUsed: 0 };
 
     const querySet = new Set(queryKeywords.map(k => k.toLowerCase()));
     const MIN_SCORE = 2;   // Require at least 2 keyword hits to include an entry
     const MAX_ENTRIES = 25; // Hard cap on total entries sent to AI
+
+    // Phase 4: Intent-aware category priorities
+    // Higher multiplier = more likely to be included for this intent
+    const categoryBoosts = {
+      room:      { Location: 2.0, Encounter: 1.5, NPC: 1.0, Item: 1.0, Lore: 0.5, Faction: 0.5, Plot: 0.3 },
+      npc:       { NPC: 2.5, Faction: 1.5, Location: 1.0, Lore: 1.0, Plot: 0.8, Encounter: 0.5, Item: 0.3 },
+      encounter: { Encounter: 2.5, NPC: 1.5, Location: 1.0, Item: 1.0, Lore: 0.5, Faction: 0.5, Plot: 0.3 },
+      tactical:  { Encounter: 2.0, NPC: 1.5, Item: 1.0, Location: 0.8, Lore: 0.3, Faction: 0.3, Plot: 0.3 },
+      treasure:  { Item: 2.5, Location: 1.0, Encounter: 1.0, NPC: 0.5, Lore: 0.5, Faction: 0.3, Plot: 0.3 },
+      lore:      { Lore: 2.5, Faction: 2.0, NPC: 1.5, Location: 1.0, Plot: 1.5, Encounter: 0.5, Item: 0.5 },
+      general:   { NPC: 1.0, Location: 1.0, Encounter: 1.0, Item: 1.0, Lore: 1.0, Faction: 1.0, Plot: 1.0 },
+      floor:     { Location: 2.0, Encounter: 1.5, NPC: 1.0, Item: 0.8, Lore: 0.5, Faction: 0.3, Plot: 0.3 },
+      rules:     { Lore: 1.5, Item: 1.0, Encounter: 1.0, NPC: 0.5, Location: 0.3, Faction: 0.3, Plot: 0.3 },
+    };
+    const boosts = categoryBoosts[intent] ?? categoryBoosts.general;
+
     let text = "";
     let charsUsed = 0;
 
@@ -596,8 +650,13 @@ export class DigestEngine {
 
       if (!matches.length) continue;
 
-      // Sort by score descending, then hard-cap to prevent context bloat
-      matches.sort((a, b) => b.score - a.score);
+      // Phase 4: Apply intent-aware category boosts to sort order
+      for (const m of matches) {
+        m.boostedScore = m.score * (boosts[m.type] ?? 1.0);
+      }
+
+      // Sort by boosted score descending, then hard-cap
+      matches.sort((a, b) => b.boostedScore - a.boostedScore);
       matches.length = Math.min(matches.length, MAX_ENTRIES);
       const header = `**From: ${source}**\n`;
       if (charsUsed + header.length > maxChars) break;
@@ -645,6 +704,128 @@ export class DigestEngine {
         await this.loadDigest(id);
       }
     }
+  }
+
+  // ── Digest Backup ──────────────────────────────────────────
+  // Creates a timestamped backup of all digest files + index.
+  // Called by the MemoryManager's autoBackup cycle to protect
+  // AI-generated digest data that costs real API tokens.
+
+  /**
+   * Back up all digest files to a timestamped backup folder.
+   * Keeps a rotating set of backups (default 5) to avoid unbounded growth.
+   * Each backup is a single combined JSON file containing the index + all digest data.
+   *
+   * @param {number} maxBackups - How many backup files to keep (default 5)
+   */
+  async backupDigests(maxBackups = 5) {
+    await this.ensureGlobalDirectory();
+
+    const BACKUP_DIR = "ace-engine-library/digest-backups";
+    try {
+      await _FP().createDirectory("data", BACKUP_DIR);
+    } catch (e) {
+      if (!e.message?.includes("EEXIST") && !e.message?.includes("already exists")) {
+        console.warn(`${MODULE_ID} | Could not create digest-backups/:`, e.message);
+        return;
+      }
+    }
+
+    // Collect all digest data into a single backup bundle
+    const digestIds = Object.keys(this._index?.digests ?? {});
+    if (digestIds.length === 0) {
+      console.log(`${MODULE_ID} | Digest backup skipped — no digests to back up.`);
+      return;
+    }
+
+    const bundle = {
+      _backup: {
+        module:     MODULE_ID,
+        type:       "digest-backup",
+        createdAt:  new Date().toISOString(),
+        digestCount: digestIds.length,
+      },
+      index: this._index,
+      digests: {},
+    };
+
+    // Load each digest and add to bundle
+    for (const id of digestIds) {
+      try {
+        const data = await this.loadDigest(id);
+        if (data) bundle.digests[id] = data;
+      } catch { /* skip corrupt digests */ }
+    }
+
+    // Save as a single timestamped file
+    const ts = new Date().toISOString().replace(/:/g, "-");
+    const fileName = `digest-backup.${ts}.json`;
+    const payload = JSON.stringify(bundle, null, 0); // compact to save space
+    const file = new File([payload], fileName, { type: "application/json" });
+
+    try {
+      await _silentUpload("data", BACKUP_DIR, file);
+      console.log(`${MODULE_ID} | Digest backup created: ${fileName} ` +
+        `(${digestIds.length} digests, ${(payload.length / 1024).toFixed(0)} KB)`);
+    } catch (err) {
+      console.error(`${MODULE_ID} | Digest backup failed:`, err);
+      return;
+    }
+
+    // Prune old backups — keep only the newest maxBackups
+    try {
+      const listing = await _FP().browse("data", BACKUP_DIR);
+      const backupFiles = (listing?.files ?? [])
+        .filter(f => f.split("/").pop().startsWith("digest-backup."))
+        .sort(); // ISO timestamps sort chronologically
+
+      if (backupFiles.length > maxBackups) {
+        const toDelete = backupFiles.slice(0, backupFiles.length - maxBackups);
+        for (const filePath of toDelete) {
+          // Foundry has no file delete API — overwrite with tiny tombstone
+          const oldName = filePath.split("/").pop();
+          const tombstone = new File(['{"pruned":true}'], oldName, { type: "application/json" });
+          await _silentUpload("data", BACKUP_DIR, tombstone);
+        }
+        console.log(`${MODULE_ID} | Pruned ${toDelete.length} old digest backup(s), keeping ${maxBackups}.`);
+      }
+    } catch (err) {
+      console.warn(`${MODULE_ID} | Digest backup pruning failed:`, err);
+    }
+  }
+
+  /**
+   * Restore digests from a backup file.
+   * Reads the bundle, writes each digest file back + updates the index.
+   * @param {Object} bundle - Parsed backup bundle JSON
+   * @returns {{ ok: boolean, restored: number, message: string }}
+   */
+  async restoreFromBackup(bundle) {
+    if (!bundle?._backup?.type || bundle._backup.type !== "digest-backup") {
+      return { ok: false, restored: 0, message: "Invalid backup format." };
+    }
+
+    await this.ensureGlobalDirectory();
+    let restored = 0;
+
+    // Restore index
+    if (bundle.index) {
+      this._index = bundle.index;
+      await this.saveIndex();
+    }
+
+    // Restore each digest
+    for (const [id, data] of Object.entries(bundle.digests ?? {})) {
+      try {
+        await this.saveDigest(id, data);
+        restored++;
+      } catch (err) {
+        console.warn(`${MODULE_ID} | Failed to restore digest ${id}:`, err);
+      }
+    }
+
+    console.log(`${MODULE_ID} | Restored ${restored} digests from backup.`);
+    return { ok: true, restored, message: `Restored ${restored} digests.` };
   }
 
   // ── World Graph ─────────────────────────────────────────────

@@ -101,7 +101,7 @@
       }
     },
     "Panel": {
-      "Title": "ACE — AI Campaign Engine",
+      "Title": "ACE",
       "Placeholder": "Ask ACE anything...",
       "Send": "Send",
       "Clear": "Clear Chat",

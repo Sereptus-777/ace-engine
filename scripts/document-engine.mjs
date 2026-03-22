@@ -6,6 +6,15 @@
 // ============================================================
 
 import { extractKeywords } from "./document-store.mjs";
+import { QueryClassifier } from "./search/query-classifier.mjs";
+import { tokenize, countTerms, reciprocalRankFusion } from "./search/bm25.mjs";
+import { EmbeddingEngine, serializeVector } from "./search/embeddings.mjs";
+import {
+  isRoomHeading, extractRoomId, detectHeadingLevel,
+  containsStatBlock, isReadAloud, containsTreasure, containsTrap,
+  detectContentFlags, SECTION_TYPES, extractCrossReferences,
+  buildRoomRegex,
+} from "./search/regex-patterns.mjs";
 
 const MODULE_ID = "ace-engine";
 const GLOBAL_CACHE_DIR = "ace-engine-library/documents";
@@ -193,79 +202,138 @@ export function extractTextFile(text, type = "txt") {
 }
 
 
-// ── Chunking ─────────────────────────────────────────────────
+// ── Chunking (V2: D&D-aware parent-child hierarchy) ──────────
 
-const TARGET_CHUNK_SIZE = 800;   // chars (~200 tokens)
-const MIN_CHUNK_SIZE    = 100;
-const OVERLAP_CHARS     = 50;
+const LEAF_CHUNK_SIZE   = 300;   // chars (~85 tokens) — small for precise search hits
+const MAX_PARENT_SIZE   = 2000;  // chars (~570 tokens) — full section sent to AI
+const MIN_CHUNK_SIZE    = 80;
+const OVERLAP_CHARS     = 40;
 
-// Heading detection patterns
-const HEADING_PATTERNS = [
+// Legacy heading patterns (fallback when D&D patterns don't match)
+const LEGACY_HEADING_PATTERNS = [
   /^(?:chapter|section|part|appendix)\s+[\divxlc]+[.:)—\s]/i,
-  /^[A-Z][A-Z\s]{4,60}$/,          // ALL CAPS lines
-  /^\d+\.\d*\s+[A-Z]/,             // "1.2 Title" pattern
-  /^#{1,3}\s+/,                     // Markdown headings
+  /^[A-Z][A-Z\s]{4,60}$/,
+  /^\d+\.\d*\s+[A-Z]/,
+  /^#{1,3}\s+/,
   /^(?:introduction|conclusion|overview|summary|appendix)\b/i,
 ];
 
 /**
- * Split text into heading-delimited sections.
+ * Detect structural sections in page text using D&D-aware patterns.
+ * Identifies rooms, stat blocks, read-aloud text, and standard headings.
  * @param {string} text
- * @returns {Array<{heading: string, body: string}>}
+ * @param {number} pageNum
+ * @returns {Array<{heading: string, body: string, page: number, sectionType: string, headingLevel: number, contentFlags: string[], roomId: string|null}>}
  */
-function splitByHeadings(text) {
+function detectSections(text, pageNum) {
   const lines = text.split(/\n/);
   const sections = [];
   let currentHeading = "";
+  let currentType = SECTION_TYPES.GENERIC;
+  let currentLevel = 0;
+  let currentRoomId = null;
   let currentBody = [];
+
+  const flushSection = () => {
+    if (currentBody.length > 0) {
+      const body = currentBody.join("\n").trim();
+      if (body.length >= MIN_CHUNK_SIZE) {
+        const flags = detectContentFlags(body);
+        sections.push({
+          heading:      currentHeading,
+          body,
+          page:         pageNum,
+          sectionType:  currentType,
+          headingLevel: currentLevel,
+          contentFlags: flags,
+          roomId:       currentRoomId,
+        });
+      }
+    }
+    currentBody = [];
+  };
 
   for (const line of lines) {
     const trimmed = line.trim();
-    const isHeading = HEADING_PATTERNS.some(p => p.test(trimmed));
+    if (!trimmed) {
+      if (currentBody.length > 0) currentBody.push("");
+      continue;
+    }
 
-    if (isHeading && currentBody.length > 0) {
-      sections.push({ heading: currentHeading, body: currentBody.join(" ").trim() });
-      currentHeading = trimmed.replace(/^#{1,3}\s*/, "");
-      currentBody = [];
-    } else if (isHeading && currentBody.length === 0) {
-      currentHeading = trimmed.replace(/^#{1,3}\s*/, "");
+    // Check D&D-aware heading detection first
+    const headingInfo = detectHeadingLevel(trimmed);
+
+    // Also check legacy patterns
+    const isLegacyHeading = !headingInfo && LEGACY_HEADING_PATTERNS.some(p => p.test(trimmed));
+
+    if (headingInfo || isLegacyHeading) {
+      flushSection();
+
+      currentHeading = trimmed.replace(/^#{1,6}\s*/, "");
+
+      if (headingInfo) {
+        currentLevel = headingInfo.level;
+        currentType  = headingInfo.type;
+      } else {
+        currentLevel = 2;
+        currentType  = SECTION_TYPES.GENERIC;
+      }
+
+      // Extract room ID if this is a room heading
+      currentRoomId = extractRoomId(trimmed);
+
+      // Don't add the heading line to the body — it's stored separately
     } else {
+      // Check if this line starts a stat block mid-section
+      if (containsStatBlock(trimmed) && currentBody.length > 3) {
+        // Stat block detected mid-section — flush current and start new
+        flushSection();
+        currentHeading = currentHeading || "(Stat Block)";
+        currentType = SECTION_TYPES.STAT_BLOCK;
+        currentRoomId = null;
+      }
+
       currentBody.push(trimmed);
     }
   }
 
-  // Last section
-  if (currentBody.length > 0) {
-    sections.push({ heading: currentHeading, body: currentBody.join(" ").trim() });
-  }
+  flushSection();
 
-  // If no headings were found, return entire text as one section
-  if (sections.length === 0 && text.trim().length > 0) {
-    sections.push({ heading: "", body: text.trim() });
+  // If nothing was detected, return entire text as one section
+  if (sections.length === 0 && text.trim().length >= MIN_CHUNK_SIZE) {
+    sections.push({
+      heading:      "",
+      body:         text.trim(),
+      page:         pageNum,
+      sectionType:  SECTION_TYPES.GENERIC,
+      headingLevel: 0,
+      contentFlags: detectContentFlags(text),
+      roomId:       null,
+    });
   }
 
   return sections;
 }
 
 /**
- * Split text at sentence boundaries to stay under maxChars.
+ * Split section body into leaf chunks at sentence boundaries.
+ * Each leaf is small (~300 chars) for precise search matching.
  * @param {string} text
- * @param {number} maxChars
- * @param {number} overlap - chars to overlap between chunks
+ * @param {number} targetSize
  * @returns {string[]}
  */
-function splitAtSentences(text, maxChars, overlap) {
-  if (text.length <= maxChars) return [text];
+function splitLeafChunks(text, targetSize = LEAF_CHUNK_SIZE) {
+  if (text.length <= targetSize) return [text];
 
+  // Split at sentence boundaries
   const sentences = text.match(/[^.!?]+[.!?]+\s*/g) ?? [text];
   const chunks = [];
   let current = "";
 
   for (const sentence of sentences) {
-    if (current.length + sentence.length > maxChars && current.length > 0) {
+    if (current.length + sentence.length > targetSize && current.length > 0) {
       chunks.push(current.trim());
-      // Start new chunk with overlap from end of previous
-      const overlapText = current.slice(-overlap);
+      const overlapText = current.slice(-OVERLAP_CHARS);
       current = overlapText + sentence;
     } else {
       current += sentence;
@@ -280,46 +348,143 @@ function splitAtSentences(text, maxChars, overlap) {
 }
 
 /**
- * Convert extracted page text into searchable chunks.
- * Uses a hybrid heading-aware + fixed-size approach.
+ * Convert extracted page text into searchable chunks with parent-child hierarchy.
+ *
+ * PARENTS: Full sections (room descriptions, stat blocks, etc.) up to 2000 chars.
+ *   These are what the AI reads — complete context for a location/entity.
+ *
+ * CHUNKS (leaves): Small fragments (~300 chars) of each parent.
+ *   These are what BM25 searches — precise matches on specific details.
+ *   Each leaf references its parent via parentIdx.
+ *
  * @param {Array<{page: number, text: string}>} pages
- * @returns {Array<{idx, page, heading, text, tags}>}
+ * @returns {{ chunks: Array, parents: Array }}
  */
 export function chunkPages(pages) {
-  const chunks = [];
-  let idx = 0;
+  const chunks  = [];
+  const parents = [];
+  let chunkIdx  = 0;
+  let parentIdx = 0;
 
   for (const { page, text } of pages) {
     if (!text || text.length < MIN_CHUNK_SIZE) continue;
 
-    const sections = splitByHeadings(text);
+    const sections = detectSections(text, page);
 
-    for (const { heading, body } of sections) {
-      if (!body || body.length < MIN_CHUNK_SIZE) continue;
+    for (const section of sections) {
+      const { heading, body, sectionType, headingLevel, contentFlags, roomId } = section;
 
-      const subChunks = splitAtSentences(body, TARGET_CHUNK_SIZE, OVERLAP_CHARS);
+      // ── Build the parent (full section) ──────────────────
+      // If section is too large, split into multiple parents at paragraph breaks
+      const parentTexts = body.length <= MAX_PARENT_SIZE
+        ? [body]
+        : splitAtParagraphs(body, MAX_PARENT_SIZE);
 
-      for (const subText of subChunks) {
-        if (subText.length < MIN_CHUNK_SIZE) continue;
-        chunks.push({
-          idx:     idx++,
+      for (const parentText of parentTexts) {
+        const fullText = heading ? `${heading}\n${parentText}` : parentText;
+        const pIdx = parentIdx++;
+
+        // ── Extract cross-references for multi-hop retrieval ──
+        const crossRefs = extractCrossReferences(fullText, roomId || null);
+
+        const parent = {
+          parentIdx:    pIdx,
           page,
-          heading: heading || "",
-          text:    subText,
-          tags:    extractKeywords(subText, 8),
-        });
+          pageEnd:      page,
+          heading:      heading || "",
+          sectionType,
+          headingLevel,
+          contentFlags,
+          roomId:       roomId || null,
+          fullText,
+          childIndices: [],
+          charCount:    fullText.length,
+          crossRefs,    // { rooms: string[], pages: number[], areas: string[] }
+        };
+
+        // ── Build leaf chunks for search ─────────────────
+        const leaves = splitLeafChunks(parentText);
+
+        for (const leafText of leaves) {
+          if (leafText.length < MIN_CHUNK_SIZE) continue;
+
+          // Include heading in searchable terms so room IDs (K15, Area 12, etc.)
+          // and heading keywords are indexed for BM25 — not just body text.
+          const searchableText = heading ? `${heading} ${leafText}` : leafText;
+          const { terms, length } = countTerms(searchableText);
+          const cIdx = chunkIdx++;
+
+          chunks.push({
+            idx:          cIdx,
+            parentIdx:    pIdx,
+            page,
+            heading:      heading || "",
+            sectionType,
+            contentFlags,
+            roomId:       roomId || null,
+            text:         leafText,
+            tags:         extractKeywords(leafText, 8),
+            termFreqs:    terms,
+            charCount:    leafText.length,
+            termCount:    length,
+          });
+
+          parent.childIndices.push(cIdx);
+        }
+
+        // Only keep parents that have at least one child chunk
+        if (parent.childIndices.length > 0) {
+          parents.push(parent);
+        }
       }
     }
   }
 
-  return chunks;
+  console.log(`ACE Chunker | ${parents.length} parents, ${chunks.length} leaf chunks from ${pages.length} pages`);
+  return { chunks, parents };
 }
 
 /**
- * Chunk a text/markdown file into searchable chunks.
+ * Split text at paragraph breaks to stay under maxChars.
+ * Used when a section exceeds MAX_PARENT_SIZE.
+ * @param {string} text
+ * @param {number} maxChars
+ * @returns {string[]}
+ */
+function splitAtParagraphs(text, maxChars) {
+  if (text.length <= maxChars) return [text];
+
+  // Try paragraph breaks first
+  const paragraphs = text.split(/\n\s*\n/);
+  const result = [];
+  let current = "";
+
+  for (const para of paragraphs) {
+    if (current.length + para.length + 2 > maxChars && current.length > 0) {
+      result.push(current.trim());
+      current = para;
+    } else {
+      current += (current ? "\n\n" : "") + para;
+    }
+  }
+
+  if (current.trim().length > 0) {
+    result.push(current.trim());
+  }
+
+  // If paragraphs didn't help (one giant paragraph), fall back to sentences
+  if (result.length === 0) {
+    return splitLeafChunks(text, maxChars);
+  }
+
+  return result;
+}
+
+/**
+ * Chunk a text/markdown file into searchable chunks with parent-child hierarchy.
  * @param {string} text
  * @param {string} type - "txt" or "md"
- * @returns {Array<{idx, page, heading, text, tags}>}
+ * @returns {{ chunks: Array, parents: Array }}
  */
 export function chunkTextFile(text, type = "txt") {
   const pages = extractTextFile(text, type);
@@ -366,6 +531,67 @@ export class DocumentEngine {
   constructor(memoryManager, digestEngine = null) {
     this._mm = memoryManager;
     this._digestEngine = digestEngine;
+    this._embeddingEngine = null; // lazy-initialized
+    this._classifier = null;
+  }
+
+  /**
+   * Lazy-initialize the embedding engine. Checks Ollama availability once.
+   * Returns the engine if available, or false if not.
+   * @returns {Promise<EmbeddingEngine|false>}
+   */
+  async _getEmbeddingEngine() {
+    if (this._embeddingEngine !== null) return this._embeddingEngine;
+
+    // Read Ollama URL from settings, fallback to default
+    let ollamaUrl = "http://localhost:11434";
+    try {
+      const provider = game.settings.get(MODULE_ID, "aiProvider");
+      if (provider === "ollama") {
+        ollamaUrl = game.settings.get(MODULE_ID, "apiUrl") || ollamaUrl;
+      }
+    } catch (_) { /* settings not available yet */ }
+
+    const engine = new EmbeddingEngine({ baseUrl: ollamaUrl });
+    const ok = await engine.checkAvailability();
+    this._embeddingEngine = ok ? engine : false;
+    return this._embeddingEngine;
+  }
+
+  /**
+   * Generate embeddings for all chunks in a document.
+   * Called after chunking during upload. Skipped if Ollama is unavailable.
+   *
+   * @param {string} docId
+   * @param {Function} [onProgress] - (current, total) => void
+   * @returns {Promise<boolean>} true if embeddings were generated
+   */
+  async generateEmbeddings(docId, onProgress = null) {
+    const engine = await this._getEmbeddingEngine();
+    if (!engine) return false;
+
+    const store = this._mm?.documents;
+    const doc = store?.getDocument?.(docId);
+    // getDocument may not exist — fall back to getEnabled search
+    const docRecord = doc ?? store?.getEnabled()?.find(d => d.id === docId);
+    if (!docRecord?.chunks?.length) return false;
+
+    // Prefix heading for better semantic representation
+    const texts = docRecord.chunks.map(c =>
+      c.heading ? `${c.heading}\n${c.text}` : (c.text || "")
+    );
+
+    const vectors = await engine.embedBatch(texts, onProgress);
+
+    // Serialize and store
+    const embeddingsMap = {};
+    for (let i = 0; i < docRecord.chunks.length; i++) {
+      embeddingsMap[docRecord.chunks[i].idx] = serializeVector(vectors[i]);
+    }
+    store.setEmbeddings(docId, embeddingsMap);
+
+    console.log(`ACE Embeddings | Generated ${vectors.length} vectors for "${docRecord.displayName}"`);
+    return true;
   }
 
   // ── Extraction Methods (delegated to module-level functions) ──
@@ -400,53 +626,481 @@ export class DocumentEngine {
    * @param {string} userMessage - The GM's current message/query
    * @param {string} currentScene - Scene name
    * @param {number} maxChars - Character budget (default from settings)
+   * @param {string} lastAssistantMsg - Last AI response (for conversation-aware search)
    * @returns {string} Formatted context block, or ""
    */
-  buildDocumentContext(sceneContext = "", userMessage = "", currentScene = "", maxChars = 8000) {
+  async buildDocumentContext(sceneContext = "", userMessage = "", currentScene = "", maxChars = 8000, lastAssistantMsg = "") {
     const store = this._mm?.documents;
     if (!store) return "";
 
-    // 1. Build query keywords from user message + scene context
-    const queryKeywords = this._extractQueryKeywords(userMessage, sceneContext, currentScene);
-    if (!queryKeywords.length) return "";
+    if (!userMessage?.trim()) return "";
 
     const contentBudget = maxChars - 300; // reserve 300 chars for headers/framing
+    return this._buildContextBM25(store, userMessage, sceneContext, currentScene, contentBudget, lastAssistantMsg);
+  }
 
+  /**
+   * New BM25 + regex search pipeline.
+   * @private
+   */
+  async _buildContextBM25(store, userMessage, sceneContext, currentScene, contentBudget, lastAssistantMsg = "") {
+    // ═══════════════════════════════════════════════════════════
+    // Phase 3-5: Smart Context Assembly + Adaptive Digest + Embeddings
+    // ═══════════════════════════════════════════════════════════
+
+    // 1. Classify the query — intent, entities, regex patterns, boosts
+    if (!this._classifier) this._classifier = new QueryClassifier();
+    const analysis = this._classifier.classify(userMessage, {
+      sceneName: currentScene,
+      sceneDescription: sceneContext,
+    });
+
+    // 1b. Conversation-aware search — extract entities from the last AI
+    //     response so follow-up queries like "what about that NPC?" or
+    //     "tell me more" pull in context from what was just discussed.
+    let conversationEntities = [];
+    if (lastAssistantMsg && lastAssistantMsg.length > 20) {
+      conversationEntities = this._extractConversationEntities(lastAssistantMsg, analysis);
+    }
+
+    // 1c. Scene-aware boosting — extract the current Foundry scene name
+    //     and add scene-matching room IDs to the search for auto-priming.
+    const sceneRoomIds = this._extractSceneRoomIds(currentScene);
+    if (sceneRoomIds.length > 0) {
+      for (const rid of sceneRoomIds) {
+        if (!analysis.entities.rooms.includes(rid)) {
+          analysis.entities.rooms.push(rid);
+        }
+      }
+    }
+
+    // 1d. Add regex pre-search patterns for rooms discovered from conversation
+    //     and scene context (the classifier only built patterns for the user's
+    //     explicit query — these are supplemental).
+    const existingRoomPatterns = new Set(
+      analysis.preSearchPatterns.filter(p => p.type === "room").map(p => p.label)
+    );
+    for (const roomId of analysis.entities.rooms) {
+      const label = `Room ${roomId}`;
+      if (!existingRoomPatterns.has(label)) {
+        analysis.preSearchPatterns.push({
+          type: "room",
+          regex: buildRoomRegex(roomId),
+          label,
+        });
+      }
+    }
+
+    console.log(`ACE Search | Query classified: intent="${analysis.intent}", ` +
+      `rooms=[${analysis.entities.rooms}], floor=${analysis.entities.floorNum}, ` +
+      `terms=[${analysis.searchTerms.slice(0, 8).join(",")}]` +
+      (conversationEntities.length ? ` | +${conversationEntities.length} conversation entities` : "") +
+      (sceneRoomIds.length ? ` | scene rooms=[${sceneRoomIds}]` : ""));
+
+    // 2. Regex pre-search — exact matches for rooms, floors, NPC names
+    const regexResults = store.regexSearch(analysis.preSearchPatterns, 30);
+
+    // 3. BM25 search — ranked by term relevance + roomId boost
+    const bm25Results = store.searchChunksBM25(analysis.expandedTerms, {
+      maxResults: 30,
+      sectionBoosts: analysis.sectionBoosts,
+      roomIds: analysis.entities?.rooms ?? [],
+    });
+
+    // 3b. Semantic search — embedding similarity (Phase 5)
+    //     Gracefully skipped if Ollama is unavailable or no embeddings exist.
+    let semanticResults = [];
+    try {
+      const engine = await this._getEmbeddingEngine();
+      if (engine) {
+        const queryVec = await engine.embed(userMessage);
+        semanticResults = store.searchChunksSemantic(queryVec, 30);
+      }
+    } catch (err) {
+      console.warn("ACE Search | Semantic search skipped:", err.message);
+    }
+
+    // 4. Fuse results with RRF — three-way merge
+    //    Weights: regex 1.5 (exact matches), BM25 1.0 (term relevance), semantic 0.8 (conceptual)
+    const regexForRRF = regexResults.map(r => ({
+      id: `${r.docId}::${r.chunk.idx}`,
+      score: r.score,
+      meta: { ...r, source: "regex" },
+    }));
+    const bm25ForRRF = bm25Results.map(r => ({
+      id: `${r.docId}::${r.chunk.idx}`,
+      score: r.score,
+      meta: { ...r, source: "bm25" },
+    }));
+
+    const rrfLists   = [regexForRRF, bm25ForRRF];
+    const rrfWeights = [1.5, 1.0];
+
+    if (semanticResults.length > 0) {
+      const semanticForRRF = semanticResults.map(r => ({
+        id: r.id,
+        score: r.score,
+        meta: { ...r, source: "semantic" },
+      }));
+      rrfLists.push(semanticForRRF);
+      rrfWeights.push(0.8);
+      console.log(`ACE Search | Semantic: ${semanticResults.length} results (top score: ${semanticResults[0]?.score?.toFixed(3)})`);
+    }
+
+    const fused = reciprocalRankFusion(rrfLists, rrfWeights);
+
+    // ── Phase 4: Adaptive Digest Budget ──────────────────────
+    // Instead of a flat 40/60 split, adapt based on query type:
+    //   - Specific queries (room, npc) → less digest, more raw chunks
+    //   - General/lore queries → more digest for big-picture context
     let digestCtx = "";
     let digestCharsUsed = 0;
-    let chunkCtx = "";
-
-    // 2. Check if digests are available
     const activeDigestIds = store.getActiveDigests();
     const hasDigests = activeDigestIds.length > 0 && this._digestEngine;
 
     if (hasDigests) {
-      // ── 100% digest when digests exist ──────────────────────
-      // Structured knowledge is denser, better organized, and more
-      // useful than raw chunks. Use the full budget for digests.
-      const result = this._digestEngine.buildDigestContext(activeDigestIds, queryKeywords, contentBudget);
+      // Adaptive split based on intent
+      const digestRatios = {
+        room: 0.15,       // Room query — mostly want raw text, minimal digest
+        npc: 0.25,        // NPC query — some digest context helps
+        encounter: 0.30,  // Encounter — digest has creature/difficulty data
+        tactical: 0.20,   // Tactical — raw stat blocks matter more
+        treasure: 0.25,   // Treasure — raw text + digest items
+        lore: 0.50,       // Lore — digest excels here (big picture)
+        general: 0.40,    // General — balanced
+        floor: 0.20,      // Floor/area — mostly raw chunks
+        rules: 0.10,      // Rules — almost entirely raw text
+      };
+      const digestRatio = digestRatios[analysis.intent] ?? 0.35;
+      const digestBudget = Math.floor(contentBudget * digestRatio);
+
+      // Phase 4: Query-aware digest — pass the classified intent so the
+      // digest engine can prioritize relevant categories
+      const result = this._digestEngine.buildDigestContext(
+        activeDigestIds,
+        analysis.expandedTerms,
+        digestBudget,
+        analysis.intent  // NEW — intent-aware digest filtering
+      );
       digestCtx = result.text;
       digestCharsUsed = result.charsUsed;
     }
 
-    if (!hasDigests) {
-      // ── 100% raw chunks when no digests exist ───────────────
-      // Fallback for documents that haven't been digested yet.
-      const enabledDocs = store.getEnabled();
-      if (enabledDocs.length) {
-        const scored = store.searchChunks(queryKeywords, 25);
-        if (scored.length) {
-          const selected = this._selectWithinBudget(scored, contentBudget);
-          if (selected.length) {
-            chunkCtx = this._formatChunks(selected);
+    // ── Phase 3: Smart Context Assembly ──────────────────────
+    const chunkBudget = contentBudget - digestCharsUsed;
+
+    // Step A: Identify "must-include" chunks — exact room/NPC/scene matches
+    //         These get guaranteed slots before ranked fill.
+    const mustInclude = [];
+    const mustIncludeKeys = new Set();
+    const requestedRooms = new Set((analysis.entities?.rooms ?? []).map(r => r.toLowerCase().replace(/\s+/g, "")));
+    const requestedNPCs  = new Set((analysis.entities?.npcs ?? []).map(n => n.toLowerCase()));
+
+    // Scene-aware boosting: extract significant words from scene name
+    // for heading-level matching (e.g., "Castle Ravenloft" → "ravenloft")
+    const sceneWords = currentScene
+      ? currentScene.split(/[\s_\-—–,.:]+/)
+          .filter(w => w.length > 3)
+          .map(w => w.toLowerCase())
+          .filter(w => !["the", "room", "area", "level", "floor", "scene", "map"].includes(w))
+      : [];
+
+    if (requestedRooms.size > 0 || requestedNPCs.size > 0 || sceneWords.length > 0) {
+      for (const item of fused) {
+        const r     = item.meta;
+        const chunk = r.chunk;
+        if (!chunk) continue;
+
+        const chunkRoom = (chunk.roomId || "").toLowerCase().replace(/\s+/g, "");
+        const isRoomMatch = chunkRoom && requestedRooms.has(chunkRoom);
+
+        // NPC match: check heading for NPC name
+        const headingLower = (chunk.heading || "").toLowerCase();
+        const isNPCMatch = requestedNPCs.size > 0 &&
+          [...requestedNPCs].some(npc => headingLower.includes(npc));
+
+        // Scene heading match: if the scene name contains a significant word
+        // that also appears in a chunk heading, boost it as a must-include
+        // (but only the first 2 scene matches to avoid flooding)
+        const sceneMatchCount = mustInclude.filter(i => i._sceneMatch).length;
+        const isSceneMatch = sceneMatchCount < 2 && sceneWords.length > 0 &&
+          sceneWords.some(w => headingLower.includes(w));
+
+        if (isRoomMatch || isNPCMatch || isSceneMatch) {
+          const key = `${r.docId}::${chunk.parentIdx ?? chunk.idx}`;
+          if (!mustIncludeKeys.has(key)) {
+            mustIncludeKeys.add(key);
+            mustInclude.push({ ...item, _sceneMatch: isSceneMatch && !isRoomMatch && !isNPCMatch });
           }
         }
       }
     }
 
-    if (!digestCtx && !chunkCtx) return "";
+    // Step B: Expand and assemble — must-includes first, then ranked fill
+    const selected = [];
+    let totalChars = 0;
+    const seenParents = new Set();
+    const seenChunks  = new Set();  // track individual chunks for dedup
+    const docCharCounts = {};       // source diversity tracking
+    const numDocs = new Set(fused.map(f => f.meta?.docId)).size;
+    // Per-doc cap: if multiple docs, no single doc gets more than 70% of budget
+    const perDocCap = numDocs > 1 ? Math.floor(chunkBudget * 0.7) : chunkBudget;
 
-    // 3. Assemble final context block
+    const expandAndAdd = (item) => {
+      const r = item.meta;
+      const docId    = r.docId;
+      const chunk    = r.chunk;
+      if (!chunk) return false;
+      const parentId = chunk.parentIdx;
+
+      // Chunk-level dedup
+      const chunkKey = `${docId}::${chunk.idx}`;
+      if (seenChunks.has(chunkKey)) return false;
+
+      // Try to expand to parent text (full section)
+      let displayText    = chunk.text ?? "";
+      let displayHeading = chunk.heading ?? "";
+      let usedParent     = false;
+
+      if (parentId != null) {
+        const parentKey = `${docId}::${parentId}`;
+        if (seenParents.has(parentKey)) return false; // already included this parent
+
+        const parent = store.getParent(docId, parentId);
+        if (parent) {
+          displayText    = parent.fullText;
+          displayHeading = parent.heading || displayHeading;
+          usedParent     = true;
+        }
+      }
+
+      const entryLen = displayText.length + displayHeading.length + 40;
+
+      // Source diversity check
+      const docChars = docCharCounts[docId] ?? 0;
+      if (docChars + entryLen > perDocCap) return false;
+
+      if (totalChars + entryLen > chunkBudget) {
+        // Parent too big — fall back to leaf chunk
+        if (usedParent && chunk.text) {
+          const leafLen = chunk.text.length + (chunk.heading?.length ?? 0) + 40;
+          if (totalChars + leafLen <= chunkBudget && docChars + leafLen <= perDocCap) {
+            selected.push({ ...r, _displayText: chunk.text, _displayHeading: chunk.heading || "", _page: chunk.page });
+            totalChars += leafLen;
+            seenChunks.add(chunkKey);
+            docCharCounts[docId] = docChars + leafLen;
+            return true;
+          }
+        }
+        return false;
+      }
+
+      selected.push({ ...r, _displayText: displayText, _displayHeading: displayHeading, _page: chunk.page });
+      totalChars += entryLen;
+      seenChunks.add(chunkKey);
+      docCharCounts[docId] = docChars + entryLen;
+      if (usedParent) seenParents.add(`${docId}::${parentId}`);
+      // Mark all leaf chunks under this parent as seen
+      if (usedParent && parentId != null) {
+        for (const f of fused) {
+          if (f.meta?.docId === docId && f.meta?.chunk?.parentIdx === parentId) {
+            seenChunks.add(`${docId}::${f.meta.chunk.idx}`);
+          }
+        }
+      }
+      return true;
+    };
+
+    // Must-includes go first (guaranteed slots)
+    for (const item of mustInclude) {
+      expandAndAdd(item);
+    }
+
+    // Ranked fill from fused results
+    for (const item of fused) {
+      if (totalChars >= chunkBudget) break;
+      if (selected.length >= 20) break;
+      expandAndAdd(item);
+    }
+
+    // ── Step B2: Multi-Hop Retrieval (Cross-Reference Following) ──
+    // Scan all selected parents for cross-references (rooms, pages, areas)
+    // that point to content NOT already in the results. Do targeted lookups
+    // for those referenced sections and add them with remaining budget.
+    const hopRefs = { rooms: new Set(), pages: new Set(), areas: new Set() };
+    const alreadyIncludedRooms = new Set();
+
+    // Collect what we already have and what's referenced
+    for (const item of selected) {
+      const docId    = item.docId;
+      const parentId = item.chunk?.parentIdx;
+      if (parentId == null) continue;
+
+      // Track rooms already in results
+      const parentRoomId = item.chunk?.roomId;
+      if (parentRoomId) alreadyIncludedRooms.add(parentRoomId.toLowerCase().replace(/\s+/g, ""));
+
+      // Look up parent's crossRefs (stored at index time)
+      const parent = store.getParent(docId, parentId);
+      if (!parent?.crossRefs) continue;
+
+      for (const r of (parent.crossRefs.rooms ?? [])) hopRefs.rooms.add(r);
+      for (const p of (parent.crossRefs.pages ?? [])) hopRefs.pages.add(p);
+      for (const a of (parent.crossRefs.areas ?? [])) hopRefs.areas.add(a);
+    }
+
+    // Remove rooms already included in first pass
+    for (const r of alreadyIncludedRooms) {
+      hopRefs.rooms.delete(r);
+      // Also try uppercase version since roomIds can be "K15" or "k15"
+      hopRefs.rooms.delete(r.toUpperCase());
+    }
+
+    // Do targeted lookups for cross-referenced content
+    let hopCount = 0;
+    const maxHops = 5; // cap to avoid runaway expansion
+
+    if (hopRefs.rooms.size > 0 || hopRefs.pages.size > 0 || hopRefs.areas.size > 0) {
+      // Room lookups — most reliable cross-references
+      for (const roomId of hopRefs.rooms) {
+        if (hopCount >= maxHops || totalChars >= chunkBudget) break;
+        const matches = store.findParentsByRoomId(roomId);
+        for (const { docId, docName, parent } of matches) {
+          const parentKey = `${docId}::${parent.parentIdx}`;
+          if (seenParents.has(parentKey)) continue;
+
+          const entryLen = parent.fullText.length + (parent.heading?.length ?? 0) + 60;
+          const docChars = docCharCounts[docId] ?? 0;
+          if (totalChars + entryLen > chunkBudget) continue;
+          if (docChars + entryLen > perDocCap) continue;
+
+          selected.push({
+            docId,
+            docName,
+            chunk: { ...parent, idx: parent.parentIdx },
+            _displayText: parent.fullText,
+            _displayHeading: parent.heading || "",
+            _page: parent.page,
+            _isHop: true,          // flag for logging/formatting
+            _hopSource: roomId,
+          });
+          totalChars += entryLen;
+          seenParents.add(parentKey);
+          docCharCounts[docId] = docChars + entryLen;
+          hopCount++;
+          break; // one parent per room ID
+        }
+      }
+
+      // Area name lookups
+      for (const areaName of hopRefs.areas) {
+        if (hopCount >= maxHops || totalChars >= chunkBudget) break;
+        const matches = store.findParentsByAreaName(areaName);
+        for (const { docId, docName, parent } of matches) {
+          const parentKey = `${docId}::${parent.parentIdx}`;
+          if (seenParents.has(parentKey)) continue;
+
+          const entryLen = parent.fullText.length + (parent.heading?.length ?? 0) + 60;
+          const docChars = docCharCounts[docId] ?? 0;
+          if (totalChars + entryLen > chunkBudget) continue;
+          if (docChars + entryLen > perDocCap) continue;
+
+          selected.push({
+            docId,
+            docName,
+            chunk: { ...parent, idx: parent.parentIdx },
+            _displayText: parent.fullText,
+            _displayHeading: parent.heading || "",
+            _page: parent.page,
+            _isHop: true,
+            _hopSource: areaName,
+          });
+          totalChars += entryLen;
+          seenParents.add(parentKey);
+          docCharCounts[docId] = docChars + entryLen;
+          hopCount++;
+          break;
+        }
+      }
+
+      if (hopCount > 0) {
+        console.log(`ACE Search | Multi-hop: followed ${hopCount} cross-references ` +
+          `(rooms: ${[...hopRefs.rooms].join(",")}, areas: ${[...hopRefs.areas].join(",")}) ` +
+          `+${selected.filter(s => s._isHop).reduce((sum, s) => sum + (s._displayText?.length ?? 0), 0)} chars`);
+      }
+    }
+
+    // ── Step B3: Neighbor Expansion ──────────────────────────────
+    // If budget remains, grab adjacent parent sections (the room before
+    // and after a selected room). D&D modules are written sequentially —
+    // K14 is usually right before K15 in the PDF. This gives the AI
+    // surrounding context without the GM having to ask about each room.
+    let neighborCount = 0;
+    const maxNeighbors = 3;
+    const remainingBudget = chunkBudget - totalChars;
+
+    if (remainingBudget > 400 && selected.length > 0) {
+      // Prioritize must-includes and high-value rooms for neighbor expansion
+      const neighborCandidates = selected
+        .filter(s => !s._isHop && !s._isNeighbor && s.chunk?.parentIdx != null)
+        .slice(0, 6); // check up to 6 candidates
+
+      for (const item of neighborCandidates) {
+        if (neighborCount >= maxNeighbors || totalChars >= chunkBudget) break;
+
+        const docId    = item.docId;
+        const docName  = item.docName;
+        const parentId = item.chunk.parentIdx;
+        const { prev, next } = store.getAdjacentParents(docId, parentId);
+
+        for (const neighbor of [next, prev]) { // prefer next (following room)
+          if (!neighbor || neighborCount >= maxNeighbors) continue;
+
+          const parentKey = `${docId}::${neighbor.parentIdx}`;
+          if (seenParents.has(parentKey)) continue;
+
+          const entryLen = neighbor.fullText.length + (neighbor.heading?.length ?? 0) + 60;
+          const docChars = docCharCounts[docId] ?? 0;
+          if (totalChars + entryLen > chunkBudget) continue;
+          if (docChars + entryLen > perDocCap) continue;
+
+          selected.push({
+            docId,
+            docName,
+            chunk: { ...neighbor, idx: neighbor.parentIdx },
+            _displayText: neighbor.fullText,
+            _displayHeading: neighbor.heading || "",
+            _page: neighbor.page,
+            _isNeighbor: true,
+            _neighborOf: item._displayHeading || item.chunk?.heading || "",
+          });
+          totalChars += entryLen;
+          seenParents.add(parentKey);
+          docCharCounts[docId] = docChars + entryLen;
+          neighborCount++;
+        }
+      }
+
+      if (neighborCount > 0) {
+        console.log(`ACE Search | Neighbors: expanded ${neighborCount} adjacent sections ` +
+          `(+${selected.filter(s => s._isNeighbor).reduce((sum, s) => sum + (s._displayText?.length ?? 0), 0)} chars)`);
+      }
+    }
+
+    if (!digestCtx && !selected.length) return "";
+
+    // ── Step C: Sort selected by page order for readability ──
+    selected.sort((a, b) => {
+      if (a.docId !== b.docId) return (a.docName || "").localeCompare(b.docName || "");
+      return (a._page ?? 0) - (b._page ?? 0);
+    });
+
+    // 7. Format the context block
+    let chunkCtx = "";
+    if (selected.length) {
+      chunkCtx = this._formatExpandedChunks(selected);
+    }
+
     let ctx = "\n\n## REFERENCE LIBRARY\n\n";
     ctx += "The following information comes from the GM's reference documents. ";
     ctx += "Use this as background knowledge — do not quote it directly to players.\n\n";
@@ -454,13 +1108,38 @@ export class DocumentEngine {
     if (digestCtx) {
       ctx += "### Structured Reference Data\n";
       ctx += digestCtx;
+      if (chunkCtx) ctx += "\n### Relevant Document Excerpts\n";
     }
     if (chunkCtx) {
       ctx += chunkCtx;
     }
 
+    const docsUsed = Object.keys(docCharCounts).length;
+    const hopItems = selected.filter(s => s._isHop).length;
+    const neighborItems = selected.filter(s => s._isNeighbor).length;
+    console.log(`ACE Search | Context built: ${selected.length} chunks (${totalChars} chars) + ` +
+      `digest (${digestCharsUsed} chars) = ${totalChars + digestCharsUsed}/${contentBudget} budget` +
+      ` | ${mustInclude.length} must-include | ${hopItems} cross-refs | ${neighborItems} neighbors | ${docsUsed} source docs`);
+
+    // ── Store discovered entities for cross-store linking ────
+    // The panel can read these after calling buildDocumentContext()
+    // to do supplemental NPC memory/reputation/fame lookups for
+    // entities discovered in PDF content.
+    this._lastSearchEntities = {
+      rooms:     [...new Set(analysis.entities.rooms)],
+      npcs:      [...new Set(analysis.entities.npcs)],
+      locations: [...new Set(analysis.entities.locations)],
+      // Also extract proper nouns from selected chunk headings
+      headingNames: [...new Set(
+        selected
+          .map(s => s._displayHeading || s.chunk?.heading || "")
+          .filter(h => h.length > 3)
+      )],
+    };
+
     return ctx;
   }
+
 
   /**
    * Get relevant images for multimodal injection.
@@ -569,7 +1248,174 @@ export class DocumentEngine {
     return ctx;
   }
 
+  /**
+   * Format expanded chunks (parent text or leaf fallback) for AI context.
+   * Groups by document and uses the pre-expanded _displayText/_displayHeading.
+   * @private
+   */
+  _formatExpandedChunks(selected) {
+    if (!selected.length) return "";
+
+    // Separate direct results from cross-reference hops and neighbors
+    const direct = selected.filter(s => !s._isHop && !s._isNeighbor);
+    const hops   = selected.filter(s => s._isHop);
+    const neighbors = selected.filter(s => s._isNeighbor);
+
+    // Group by document
+    const formatGroup = (items) => {
+      const byDoc = {};
+      for (const item of items) {
+        if (!byDoc[item.docId]) byDoc[item.docId] = { name: item.docName, entries: [] };
+        byDoc[item.docId].entries.push({
+          heading: item._displayHeading || item.chunk?.heading || "",
+          text:    item._displayText || item.chunk?.text || "",
+          page:    item._page ?? item.chunk?.page ?? 0,
+          type:    item.chunk?.sectionType || "",
+        });
+      }
+
+      let ctx = "";
+      for (const [, { name, entries }] of Object.entries(byDoc)) {
+        ctx += `**From: ${name}**\n`;
+        for (const entry of entries) {
+          if (entry.heading) ctx += `**${entry.heading}** (p.${entry.page})\n`;
+          else if (entry.page) ctx += `*(p.${entry.page})*\n`;
+          ctx += `${entry.text}\n\n`;
+        }
+      }
+      return ctx;
+    };
+
+    let ctx = formatGroup(direct);
+
+    // Add cross-referenced content with a clear label so the AI
+    // understands this was pulled because the primary results mention it
+    if (hops.length > 0) {
+      ctx += `\n**[Cross-Referenced Sections]** *(pulled automatically because the above text references these)*\n\n`;
+      ctx += formatGroup(hops);
+    }
+
+    // Add neighbor sections — adjacent rooms/sections for surrounding context
+    if (neighbors.length > 0) {
+      ctx += `\n**[Adjacent Sections]** *(nearby content from the same document for surrounding context)*\n\n`;
+      ctx += formatGroup(neighbors);
+    }
+
+    return ctx;
+  }
+
+  // ── Conversation-Aware Search ─────────────────────────────
+
+  /**
+   * Extract entities (rooms, NPCs, locations) from the last AI response
+   * and inject them as supplemental search terms. This enables follow-up
+   * queries like "what about that NPC?" or "tell me more about that room"
+   * to find relevant content even when the user's message is vague.
+   *
+   * @param {string} assistantMsg - Last AI response text
+   * @param {Object} analysis - The QueryAnalysis to enrich
+   * @returns {string[]} List of entities that were added
+   * @private
+   */
+  _extractConversationEntities(assistantMsg, analysis) {
+    const added = [];
+    if (!assistantMsg) return added;
+
+    // Truncate to last ~1500 chars to focus on recent content
+    const text = assistantMsg.length > 1500
+      ? assistantMsg.slice(-1500)
+      : assistantMsg;
+
+    // Extract room IDs from the AI's last response
+    const rxRoom = /\b([A-Z]\d{1,3}[a-z]?)\b/g;
+    let m;
+    while ((m = rxRoom.exec(text)) !== null) {
+      const id = m[1];
+      if (!analysis.entities.rooms.includes(id)) {
+        analysis.entities.rooms.push(id);
+        analysis.expandedTerms.push(id.toLowerCase());
+        added.push(`room:${id}`);
+      }
+    }
+
+    // Extract named room references: "area 12", "room 3b"
+    const rxNamedRoom = /\b(?:area|room|chamber)\s+(\d{1,3}[a-z]?)\b/gi;
+    while ((m = rxNamedRoom.exec(text)) !== null) {
+      const id = m[1];
+      if (!analysis.entities.rooms.includes(id)) {
+        analysis.entities.rooms.push(id);
+        analysis.expandedTerms.push(id.toLowerCase());
+        added.push(`room:${id}`);
+      }
+    }
+
+    // Extract proper nouns (potential NPCs/locations) — capitalized multi-word names
+    const rxNames = /\b([A-Z][a-z]{2,}(?:\s+(?:von|van|de|the|of)\s+)?(?:[A-Z][a-z]{2,})?)\b/g;
+    const skipWords = new Set([
+      "The", "This", "That", "They", "Their", "There", "These", "Those",
+      "You", "Your", "Would", "Could", "Should", "Perhaps", "However",
+      "Additionally", "Furthermore", "Meanwhile", "Although", "Within",
+    ]);
+    while ((m = rxNames.exec(text)) !== null) {
+      const name = m[1].trim();
+      if (name.length < 4 || skipWords.has(name.split(/\s/)[0])) continue;
+      // Only add if not already in entities
+      const lower = name.toLowerCase();
+      if (!analysis.expandedTerms.includes(lower)) {
+        analysis.expandedTerms.push(lower);
+        added.push(`entity:${name}`);
+      }
+    }
+
+    // Cap additions to avoid polluting the search with noise
+    if (added.length > 8) added.length = 8;
+
+    return added;
+  }
+
+  // ── Scene-Aware Boosting ────────────────────────────────────
+
+  /**
+   * Extract room IDs from the current Foundry scene name.
+   * Many GMs name scenes like "Castle Ravenloft - K15 Chapel" or
+   * "Dungeon Level 2 - Room 23". This pulls those IDs so they
+   * automatically get priority in search results.
+   *
+   * @param {string} sceneName - Current Foundry scene name
+   * @returns {string[]} Room IDs found in the scene name
+   * @private
+   */
+  _extractSceneRoomIds(sceneName) {
+    if (!sceneName || sceneName.length < 2) return [];
+    const ids = [];
+
+    // Lettered room IDs: K15, E4, T3
+    const rxLettered = /\b([A-Z]\d{1,3}[a-z]?)\b/g;
+    let m;
+    while ((m = rxLettered.exec(sceneName)) !== null) {
+      ids.push(m[1]);
+    }
+
+    // Named room references: "Room 12", "Area 3b"
+    const rxNamed = /\b(?:area|room|chamber)\s+(\d{1,3}[a-z]?)\b/gi;
+    while ((m = rxNamed.exec(sceneName)) !== null) {
+      ids.push(m[1]);
+    }
+
+    return [...new Set(ids)];
+  }
+
   // ── Summary / Stats ───────────────────────────────────────
+
+  /**
+   * Get entities discovered during the most recent document search.
+   * Used for cross-store linking — the panel reads these after
+   * buildDocumentContext() to do supplemental NPC/reputation lookups.
+   * @returns {{ rooms: string[], npcs: string[], locations: string[], headingNames: string[] }}
+   */
+  getLastSearchEntities() {
+    return this._lastSearchEntities ?? { rooms: [], npcs: [], locations: [], headingNames: [] };
+  }
 
   /**
    * Get a summary of the document library.
@@ -601,16 +1447,19 @@ export class DocumentEngine {
       try { await _FP().createDirectory("data", GLOBAL_CACHE_DIR); } catch { /* exists */ }
 
       const cacheEntry = {
-        version:   1,
-        cachedAt:  new Date().toISOString(),
-        fileName:  docRecord.fileName,
-        displayName: docRecord.displayName,
-        type:      docRecord.type,
-        fileSize:  docRecord.fileSize,
-        pageCount: docRecord.pageCount ?? 0,
-        tags:      docRecord.tags ?? [],
-        chunks:    docRecord.chunks ?? [],
-        images:    docRecord.images ?? [],
+        version:      2,
+        chunkVersion: docRecord.chunkVersion ?? 1,
+        cachedAt:     new Date().toISOString(),
+        fileName:     docRecord.fileName,
+        displayName:  docRecord.displayName,
+        type:         docRecord.type,
+        fileSize:     docRecord.fileSize,
+        pageCount:    docRecord.pageCount ?? 0,
+        tags:         docRecord.tags ?? [],
+        chunks:       docRecord.chunks ?? [],
+        parents:      docRecord.parents ?? [],
+        images:       docRecord.images ?? [],
+        embeddings:   docRecord.embeddings ?? null,
       };
 
       const safeName = this._safeCacheFileName(docRecord.fileName);

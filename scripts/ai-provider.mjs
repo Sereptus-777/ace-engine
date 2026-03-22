@@ -20,6 +20,16 @@ export class AiProvider {
     }
   }
 
+  /** Active model — returns per-call override if set, otherwise config model. */
+  get _model() {
+    return this._modelOverride || this.config.modelName;
+  }
+
+  /** Active API key — returns per-call override if set, otherwise config key. */
+  get _apiKey() {
+    return this._apiKeyOverride || this.config.apiKey;
+  }
+
   /**
    * Send a chat completion request.
    * @param {string} userMessage
@@ -31,11 +41,15 @@ export class AiProvider {
   async chat(userMessage, sceneContext = "", npcMemory = "", history = [], images = [], options = {}) {
     if (options.maxTokens) this._maxTokensOverride = options.maxTokens;
     if (options.timeout) this._timeoutOverride = options.timeout;
+    if (options.model) this._modelOverride = options.model;
+    if (options.provider) this._providerOverride = options.provider;
+    if (options.apiKey) this._apiKeyOverride = options.apiKey;
     let messages = this._buildMessages(userMessage, sceneContext, npcMemory, history);
     messages = this._applyVisionImages(messages, images);
 
     try {
-      switch (this.config.provider) {
+      const activeProvider = this._providerOverride || this.config.provider;
+      switch (activeProvider) {
         case "ollama":
           return await this._chatOllama(messages);
         case "lmstudio":
@@ -49,11 +63,14 @@ export class AiProvider {
         case "custom":
           return await this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`);
         default:
-          throw new Error(`Unknown AI provider: ${this.config.provider}`);
+          throw new Error(`Unknown AI provider: ${activeProvider}`);
       }
     } finally {
       this._maxTokensOverride = null;
       this._timeoutOverride = null;
+      this._modelOverride = null;
+      this._providerOverride = null;
+      this._apiKeyOverride = null;
     }
   }
 
@@ -268,7 +285,7 @@ When suggesting these features, be natural — weave them into your advice. For 
     const resp = await this._safeFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.config.modelName, messages, stream: false, options: { num_predict: this._maxTokens() } }),
+      body: JSON.stringify({ model: this._model, messages, stream: false, options: { num_predict: this._maxTokens() } }),
     }, "Ollama");
     await this._checkResponse(resp, "Ollama");
     const data = await resp.json();
@@ -280,7 +297,7 @@ When suggesting these features, be natural — weave them into your advice. For 
     const resp = await this._safeFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.config.modelName, messages, stream: true, options: { num_predict: this._maxTokens() } }),
+      body: JSON.stringify({ model: this._model, messages, stream: true, options: { num_predict: this._maxTokens() } }),
     }, "Ollama");
     await this._checkResponse(resp, "Ollama");
 
@@ -323,13 +340,13 @@ When suggesting these features, be natural — weave them into your advice. For 
       : this.config.provider === "openrouter" ? "OpenRouter"
       : this.config.provider === "lmstudio" ? "LM Studio" : "AI Server";
     const headers = { "Content-Type": "application/json" };
-    if (this.config.apiKey) headers["Authorization"] = `Bearer ${this.config.apiKey}`;
+    if (this._apiKey) headers["Authorization"] = `Bearer ${this._apiKey}`;
 
     const resp = await this._safeFetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: this.config.modelName, messages,
+        model: this._model, messages,
         stream: false, max_tokens: this._maxTokens(),
       }),
     }, providerName);
@@ -343,13 +360,13 @@ When suggesting these features, be natural — weave them into your advice. For 
       : this.config.provider === "openrouter" ? "OpenRouter"
       : this.config.provider === "lmstudio" ? "LM Studio" : "AI Server";
     const headers = { "Content-Type": "application/json" };
-    if (this.config.apiKey) headers["Authorization"] = `Bearer ${this.config.apiKey}`;
+    if (this._apiKey) headers["Authorization"] = `Bearer ${this._apiKey}`;
 
     const resp = await this._safeFetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: this.config.modelName, messages,
+        model: this._model, messages,
         stream: true, max_tokens: this._maxTokens(),
       }),
     }, providerName);
@@ -419,12 +436,12 @@ When suggesting these features, be natural — weave them into your advice. For 
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": this.config.apiKey,
+        "x-api-key": this._apiKey,
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true",
       },
       body: JSON.stringify({
-        model: this.config.modelName || "claude-sonnet-4-20250514",
+        model: this._model || "claude-sonnet-4-20250514",
         max_tokens: this._maxTokens(),
         system,
         messages: chatMessages,
@@ -445,12 +462,12 @@ When suggesting these features, be natural — weave them into your advice. For 
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": this.config.apiKey,
+        "x-api-key": this._apiKey,
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true",
       },
       body: JSON.stringify({
-        model: this.config.modelName || "claude-sonnet-4-20250514",
+        model: this._model || "claude-sonnet-4-20250514",
         max_tokens: this._maxTokens(),
         system,
         messages: chatMessages,
@@ -509,7 +526,7 @@ When suggesting these features, be natural — weave them into your advice. For 
       case 403:
         return `Access denied by ${provider}. Your API key may lack permissions or your account may be restricted.`;
       case 404:
-        return `Model not found — "${this.config.modelName}" doesn't exist on ${provider}. Check the model name in settings.`;
+        return `Model not found — "${this._model}" doesn't exist on ${provider}. Check the model name in settings.`;
       case 429:
         return `Rate limited by ${provider} — too many requests. Wait a moment and try again, or use a local model like Ollama.`;
       case 500:

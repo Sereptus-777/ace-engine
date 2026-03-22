@@ -18,7 +18,10 @@ import { FameEngine }        from "./fame-engine.mjs";
 import { DocumentEngine }    from "./document-engine.mjs";
 import { DigestEngine }      from "./digest-engine.mjs";
 import { SimpleCalendarBridge } from "./simple-calendar-bridge.mjs";
+import { filterProfanity, buildProfanityPrompt } from "./profanity-filter.mjs";
 import { WorldBibleEngine }    from "./world-bible-engine.mjs";
+import { VaultEngine }         from "./vault-engine.mjs";
+import { VaultSearch }         from "./vault-search.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -237,6 +240,8 @@ let digestEngine   = null;   // DigestEngine — AI-powered structured digest (g
 let worldBible     = null;   // WorldBibleEngine — comprehensive world reference bible
 let calendarBridge = null;   // SimpleCalendarBridge — optional Simple Calendar sync
 let subtleRolls    = null;   // SubtleRollManager — blind skill checks with AI narration
+let vaultEngine    = null;   // VaultEngine — cross-campaign archival snapshots + Legacy Ledger
+let vaultSearch    = null;   // VaultSearch — cross-campaign query search
 let _aceReady      = false;  // true after all subsystems (AI, memory, etc.) are initialized
 
 // ── Initialization ─────────────────────────────────────────────
@@ -483,6 +488,8 @@ Hooks.once("ready", async () => {
     if (data?.type === "narration-audio" && data.audio) {
       if (data.userId === game.user.id) return;  // sender already plays locally
       if (data.userId && !game.users.get(data.userId)?.isGM) return; // GM-only
+      // If targeted to a specific player, only that player hears it
+      if (data.targetUserId && data.targetUserId !== game.user.id) return;
       let vol = 0.8;
       try { vol = game.settings.get(MODULE_ID, "narrationVolume") ?? 0.8; } catch (_) {}
       if (vol <= 0) return;  // muted
@@ -556,7 +563,13 @@ Hooks.once("ready", async () => {
       changed = true;
     }
 
-    // Migration 3: source conflict resolution
+    // Migration 3: verbatim quoting of room/area descriptions
+    if (currentPrompt && !currentPrompt.includes("quote the relevant text directly")) {
+      currentPrompt += `\n\nWhen the GM asks about a specific room, area, location, or section from an uploaded sourcebook, quote the relevant text directly from the REFERENCE LIBRARY — include the full description, features, creatures, treasure, and any read-aloud text. Do NOT summarize or hedge with "you'd need to check the book." The text IS in your context — present it fully and confidently.`;
+      changed = true;
+    }
+
+    // Migration 4: source conflict resolution
     if (currentPrompt && !currentPrompt.includes("conflicting information")) {
       currentPrompt += `\n\nWhen multiple source documents contain conflicting information (different editions, timeline changes, retcons), prefer the most recently uploaded document. GM session notes and campaign-specific content ALWAYS take priority over published sourcebooks. If you notice a conflict, briefly mention it so the GM can decide.`;
       changed = true;
@@ -674,6 +687,16 @@ Hooks.once("ready", async () => {
           console.log(`${MODULE_ID} | Loaded ${activeIds.length} active digest(s) for this world`);
         }
       }
+
+      // Build BM25 search corpus for document retrieval
+      if (stats.totalChunks > 0) {
+        try {
+          aceMemory.documents.buildBM25Corpus();
+          console.log(`${MODULE_ID} | BM25 corpus ready`);
+        } catch (err) {
+          console.warn(`${MODULE_ID} | BM25 corpus build failed (will retry on first search):`, err);
+        }
+      }
     } catch (err) {
       console.error(`${MODULE_ID} | Document engine failed:`, err);
       documentEngine = null;
@@ -714,6 +737,21 @@ Hooks.once("ready", async () => {
     console.log(`${MODULE_ID} | Subtle Rolls disabled by settings.`);
   }
 
+  // ── Vault Engine — cross-campaign archival + Legacy Ledger ──
+  if (aceMemory) {
+    try {
+      vaultEngine = new VaultEngine(aceMemory);
+      vaultSearch = new VaultSearch();
+      const worlds = await vaultSearch.discoverWorlds();
+      const ledger = await vaultEngine.loadLedger();
+      console.log(`${MODULE_ID} | Vault initialized (${worlds.length} archived world(s), ${ledger.campaigns?.length ?? 0} ledger entries)`);
+    } catch (err) {
+      console.warn(`${MODULE_ID} | Vault init failed (non-critical):`, err);
+      vaultEngine = null;
+      vaultSearch = null;
+    }
+  }
+
   const api = {
     openPanel,
     getPanel:        () => panel,
@@ -725,6 +763,8 @@ Hooks.once("ready", async () => {
     getAceMemory:    () => aceMemory,
     logNote:         (text) => aceMemory?.logNote(text),
     backupMemory:    () => aceMemory?.backup(),
+    backupDigests:   () => digestEngine?.backupDigests(5),
+    restoreDigests:  (bundle) => digestEngine?.restoreFromBackup(bundle),
     getMemoryManager: () => aceMemory,
     triggerSfx:      (effect) => _triggerSfx(effect),
     stopSfx:         () => stopAllSfx(),
@@ -806,6 +846,64 @@ Hooks.once("ready", async () => {
         console.error(`${MODULE_ID} | retroSummary error:`, err);
         ui.notifications?.error(`ACE: ${err.message}`);
       }
+    },
+
+    // ── Vault API ──────────────────────────────────────────────
+    getVaultEngine:  () => vaultEngine,
+    getVaultSearch:  () => vaultSearch,
+
+    /**
+     * Create a vault snapshot (backup all stores).
+     * Usage: `ace.vaultSnapshot()`
+     */
+    vaultSnapshot: async () => {
+      if (!game.user.isGM) { ui.notifications?.warn("GM only."); return; }
+      if (!vaultEngine) { ui.notifications?.warn("ACE: Vault engine not available."); return; }
+      ui.notifications?.info("ACE: Creating vault snapshot…");
+      const ok = await vaultEngine.createSnapshot();
+      if (ok) ui.notifications?.info("ACE: Vault snapshot saved!");
+      else ui.notifications?.error("ACE: Vault snapshot failed — see console.");
+    },
+
+    /**
+     * Close this campaign — generate AI summary, archive to Legacy Ledger.
+     * Usage: `ace.closeCampaign()`
+     */
+    closeCampaign: async () => {
+      if (!game.user.isGM) { ui.notifications?.warn("GM only."); return; }
+      if (!vaultEngine || !aiProvider) { ui.notifications?.warn("ACE: Vault or AI not available."); return; }
+
+      const confirm = await Dialog.confirm({
+        title:   "Close Campaign",
+        content: `<p>This will generate an AI summary of your entire campaign and archive it to the <strong>Legacy Ledger</strong>.</p>` +
+                 `<p>Your vault data will be permanently saved. You can still access this world afterward.</p>` +
+                 `<p>Continue?</p>`,
+      });
+      if (!confirm) return;
+
+      ui.notifications?.info("ACE: Generating campaign summary — this may take a moment…");
+      const entry = await vaultEngine.closeCampaign(async (sys, user) => {
+        let text = "";
+        await aiProvider.chat(user, "", sys, [], (chunk) => { text += chunk; });
+        return text;
+      });
+
+      if (entry) {
+        ui.notifications?.info(`ACE: Campaign "${entry.worldName}" archived to Legacy Ledger!`);
+      } else {
+        ui.notifications?.error("ACE: Campaign close failed — see console.");
+      }
+    },
+
+    /**
+     * Search across all archived campaigns.
+     * Usage: `ace.vaultSearch("who killed the mummy")`
+     * @param {string} query
+     * @returns {Promise<Array>}
+     */
+    vaultQuery: async (query) => {
+      if (!vaultSearch) return [];
+      return vaultSearch.search(query);
     },
   };
 
@@ -903,6 +1001,32 @@ Hooks.once("ready", async () => {
         return factions;
       },
 
+      // ── Profanity Filter API (used by ACE: Envoy) ────────────────
+      /**
+       * Filter profanity from player text, replacing with fantasy equivalents.
+       * @param {string} text
+       * @returns {string} Filtered text
+       */
+      filterProfanity: (text) => {
+        try {
+          const enabled = game.settings.get(MODULE_ID, "profanityFilter") ?? true;
+          return enabled ? filterProfanity(text) : text;
+        } catch { return text; }
+      },
+
+      /**
+       * Build the AI profanity prompt for system message injection.
+       * @param {Object} [worldBible] - World Bible data
+       * @param {string} [region] - Current region name
+       * @returns {string}
+       */
+      buildProfanityPrompt: (worldBible, region) => {
+        try {
+          const enabled = game.settings.get(MODULE_ID, "profanityFilter") ?? true;
+          return enabled ? buildProfanityPrompt(worldBible, region) : "";
+        } catch { return ""; }
+      },
+
       // ── Subtle Rolls API (used by ACE: Envoy) ──────────────────
       /**
        * Request a subtle (blind) skill check from a player.
@@ -971,13 +1095,30 @@ Hooks.once("ready", async () => {
        * Get relevant document context for AI prompt injection.
        * Searches uploaded reference material (PDFs, text, images)
        * and returns formatted text chunks that match the query.
+       * Supports conversation-aware search via lastAssistantMsg.
        * @param {string} npcName - NPC name for context
        * @param {string} userMessage - The user's current message/query
+       * @param {Object} [options] - Additional options
+       * @param {string} [options.lastAssistantMsg] - Last AI/NPC response (for conversation-aware follow-up search)
+       * @param {number} [options.maxChars] - Max chars of context to return (default 8000)
        * @returns {string} Formatted reference library context, or ""
        */
-      getDocumentContext: (npcName, userMessage) => {
+      getDocumentContext: async (npcName, userMessage, options = {}) => {
         if (!documentEngine) return "";
-        return documentEngine.buildDocumentContext("", userMessage, canvas?.scene?.name ?? "") ?? "";
+        const sceneName = canvas?.scene?.name ?? "";
+        const lastMsg = options.lastAssistantMsg ?? "";
+        const maxChars = options.maxChars ?? 8000;
+        return await documentEngine.buildDocumentContext("", userMessage, sceneName, maxChars, lastMsg) ?? "";
+      },
+
+      /**
+       * Get entities discovered during the last document search.
+       * Used for cross-store linking — Envoy can look up NPCs/locations
+       * mentioned in PDF results to enrich the conversation context.
+       * @returns {Object} { rooms: string[], npcs: string[], locations: string[] }
+       */
+      getLastSearchEntities: () => {
+        return documentEngine?.getLastSearchEntities?.() ?? {};
       },
 
       /**
@@ -1150,9 +1291,16 @@ Hooks.once("ready", async () => {
   if (aceMemory) {
     aceMemory._autoBackupInterval = setInterval(() => {
       if (game.user.isGM) {
+        // Back up all memory stores (NPCs, deeds, history, documents, etc.)
         aceMemory.autoBackup().catch(err =>
           console.warn(`${MODULE_ID} | Periodic auto-backup failed:`, err)
         );
+        // Also back up AI-generated digests (separate global storage)
+        if (digestEngine) {
+          digestEngine.backupDigests(5).catch(err =>
+            console.warn(`${MODULE_ID} | Periodic digest backup failed:`, err)
+          );
+        }
       }
     }, 30 * 60 * 1000); // 30 minutes
   }
@@ -2171,29 +2319,39 @@ async function _aceHandleButton(btn) {
     case "subtle-pick":         return subtleRolls?.pickNarration(btn);
     case "subtle-send-request": return _handleSubtleSendRequest(btn);
     case "subtle-broadcast":    return _handleSubtleBroadcast(btn);
+    case "subtle-override":     return _handleSubtleOverride(btn);
     case "tcc-request-roll":    return _handleTccRequestRollClick(btn);
     default: console.warn(`${MODULE_ID} | Unknown ACE button type: "${btn.dataset.aceBtn}"`);
   }
 }
 
 /**
- * GM clicks "Broadcast to Everyone" on a subtle roll narration.
- * Sends the narration as a public chat message visible to all players + TTS.
+ * GM clicks "Broadcast" on a subtle roll narration.
+ * Sends the narration as a whispered chat message + TTS to ONLY the rolling player.
+ * Other players see/hear nothing — keeps the subtle roll truly subtle.
  */
 async function _handleSubtleBroadcast(btn) {
   if (!game.user.isGM) return;
 
-  const actorName  = btn.dataset.actorName ?? "Unknown";
-  const skillLabel = btn.dataset.skillLabel ?? "Skill Check";
-  const narration  = decodeURIComponent(btn.dataset.narration ?? "");
+  const actorName    = btn.dataset.actorName ?? "Unknown";
+  const skillLabel   = btn.dataset.skillLabel ?? "Skill Check";
+  const narration    = decodeURIComponent(btn.dataset.narration ?? "");
+  const targetUserId = btn.dataset.targetUserId ?? "";
 
   if (!narration) return;
 
-  // Disable button immediately
-  btn.disabled      = true;
+  // Disable both buttons on the card (broadcast + override)
+  const card = btn.closest(".ace-subtle-result");
+  card?.querySelectorAll(".ace-chat-btn").forEach(b => {
+    b.disabled      = true;
+    b.style.opacity = "0.35";
+    b.style.cursor  = "default";
+  });
   btn.textContent   = "Sent!";
-  btn.style.opacity = "0.5";
-  btn.style.cursor  = "default";
+  btn.style.opacity = "0.6";
+
+  // Persist the disabled state in the ChatMessage so it survives refresh
+  _persistCardState(card);
 
   // Build delivery card
   const cardHtml =
@@ -2208,15 +2366,20 @@ async function _handleSubtleBroadcast(btn) {
     `"${_escapeHtml(narration)}"</div>` +
     `</div>`;
 
-  // Public message — everyone sees it
+  // Whisper to ONLY the rolling player + GM — other players see nothing
+  const whisperIds = [game.user.id];  // GM always sees it
+  if (targetUserId && targetUserId !== game.user.id) {
+    whisperIds.push(targetUserId);
+  }
+
   await ChatMessage.create({
     content: cardHtml,
     speaker: { alias: "ACE" },
+    whisper: whisperIds,
     flags:   { "ace-engine": { isSubtleNarration: true } },
   });
 
-  // TTS — generate ElevenLabs audio on GM side, broadcast audio blob to all
-  // This avoids depending on the panel instance (which may be null/closed)
+  // TTS — generate ElevenLabs audio on GM side, send to ONLY the rolling player
   const elevenKey = _getElevenLabsKeyStandalone();
   if (elevenKey) {
     try {
@@ -2224,31 +2387,131 @@ async function _handleSubtleBroadcast(btn) {
       if (audioBase64) {
         // Play locally on GM
         _playNarrationAudio(audioBase64, 0.8);
-        // Broadcast to all players
-        game.socket.emit(`module.${MODULE_ID}`, {
-          type:  "narration-audio",
-          audio: audioBase64,
-          userId: game.user.id,
-        });
+        // Send audio to ONLY the rolling player
+        if (targetUserId && targetUserId !== game.user.id) {
+          game.socket.emit(`module.${MODULE_ID}`, {
+            type:         "narration-audio",
+            audio:        audioBase64,
+            userId:       game.user.id,
+            targetUserId: targetUserId,
+          });
+        }
       }
     } catch (err) {
       console.warn(`${MODULE_ID} | Subtle broadcast TTS error, falling back to browser:`, err.message);
-      game.socket.emit(`module.${MODULE_ID}`, {
-        type: "subtle-narration-tts",
-        text: narration,
-        targetUserId: null,
-      });
+      if (targetUserId) {
+        game.socket.emit(`module.${MODULE_ID}`, {
+          type:         "subtle-narration-tts",
+          text:         narration,
+          targetUserId: targetUserId,
+        });
+      }
     }
   } else {
-    // No ElevenLabs key — fall back to browser TTS broadcast
-    game.socket.emit(`module.${MODULE_ID}`, {
-      type: "subtle-narration-tts",
-      text: narration,
-      targetUserId: null,
-    });
+    // No ElevenLabs key — fall back to browser TTS for just the rolling player
+    if (targetUserId) {
+      game.socket.emit(`module.${MODULE_ID}`, {
+        type:         "subtle-narration-tts",
+        text:         narration,
+        targetUserId: targetUserId,
+      });
+    }
   }
 
-  console.log(`${MODULE_ID} | Subtle Roll: broadcast ${skillLabel} narration for ${actorName} to all players`);
+  console.log(`${MODULE_ID} | Subtle Roll: broadcast ${skillLabel} narration for ${actorName} to player ${targetUserId}`);
+}
+
+/**
+ * GM clicks "Override: Pass/Fail" on a subtle roll result card.
+ * Generates a new narration for the opposite outcome, replaces the
+ * narration text on the card, and swaps the broadcast button's data.
+ */
+async function _handleSubtleOverride(btn) {
+  if (!game.user.isGM) return;
+
+  const actorName    = btn.dataset.actorName ?? "Unknown";
+  const skillLabel   = btn.dataset.skillLabel ?? "Skill Check";
+  const dc           = parseInt(btn.dataset.dc) || 10;
+  const total        = parseInt(btn.dataset.total) || 0;
+  const natural      = parseInt(btn.dataset.natural) || 0;
+  const targetUserId = btn.dataset.targetUserId ?? "";
+  const actuallyPassed = btn.dataset.passed === "true";
+  const flavor       = decodeURIComponent(btn.dataset.flavor ?? "");
+
+  // The override result is the OPPOSITE of what actually happened
+  const overridePassed = !actuallyPassed;
+  const overrideCategory = overridePassed
+    ? (natural === 20 ? "nat20" : "strong_success")
+    : (natural === 1  ? "nat1"  : "strong_failure");
+
+  // Show loading state
+  btn.disabled      = true;
+  btn.innerHTML     = `<i class="fas fa-spinner fa-spin" style="margin-right:6px;"></i>Generating...`;
+  btn.style.opacity = "0.6";
+
+  try {
+    // Generate a new narration for the overridden result
+    const subtleRolls = game.modules.get(MODULE_ID)?.api?.getSubtleRolls?.();
+    if (!subtleRolls) throw new Error("SubtleRolls not available");
+
+    const narrations = await subtleRolls.generateNarrations({
+      skill: skillLabel, skillLabel, dc, total, natural,
+      actorName, resultCategory: overrideCategory, flavor,
+    });
+
+    const newNarration = narrations[0] ?? "";
+    if (!newNarration) throw new Error("No narration generated");
+
+    // Update the narration text on the card
+    const card = btn.closest(".ace-subtle-result");
+    const narrationDiv = card?.querySelector(".ace-subtle-narration-text");
+    if (narrationDiv) {
+      narrationDiv.innerHTML = `"${_escapeHtml(newNarration)}"`;
+    }
+
+    // Update the broadcast button's narration data to use the new one
+    const broadcastBtn = card?.querySelector("[data-ace-btn='subtle-broadcast']");
+    if (broadcastBtn) {
+      broadcastBtn.dataset.narration = encodeURIComponent(newNarration);
+      broadcastBtn.disabled = false;
+      broadcastBtn.style.opacity = "1";
+    }
+
+    // Update override button to show it was used
+    btn.innerHTML     = `<i class="fas fa-check" style="margin-right:6px;"></i>` +
+                        `Overridden to ${overridePassed ? "Pass" : "Fail"}`;
+    btn.style.opacity = "0.5";
+    btn.style.cursor  = "default";
+
+    // Persist updated card state so it survives refresh
+    _persistCardState(card);
+
+    console.log(`${MODULE_ID} | Subtle Roll: GM overrode ${actorName}'s result to ${overridePassed ? "PASS" : "FAIL"}`);
+  } catch (err) {
+    console.error(`${MODULE_ID} | Subtle override failed:`, err);
+    btn.innerHTML     = `<i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>Override Failed`;
+    btn.style.opacity = "0.5";
+  }
+}
+
+/**
+ * Persist a card's current DOM state into the ChatMessage database.
+ * After buttons are disabled/text changed, this saves the updated HTML
+ * so the state survives page refreshes.
+ * @param {HTMLElement|null} cardEl - The card wrapper element (.ace-subtle-result or .ace-subtle-request)
+ */
+function _persistCardState(cardEl) {
+  if (!cardEl) return;
+  // Only GMs can update chat messages they authored (player can't update GM-whispered cards)
+  if (!game.user.isGM) return;
+  // Walk up to the chat message element to get the message ID
+  const msgEl = cardEl.closest("[data-message-id]");
+  const msgId = msgEl?.dataset?.messageId;
+  if (!msgId) return;
+  const msg = game.messages.get(msgId);
+  if (!msg) return;
+  // Update stored content with current DOM (includes disabled buttons, changed text, etc.)
+  msg.update({ content: cardEl.outerHTML }).catch(() => {});
 }
 
 /** Get targeted tokens first, fall back to selected tokens. */
@@ -2483,9 +2746,17 @@ async function _aceApplyHeal(btn) {
 // ── Subtle Rolls — Player-side roll button handler ─────────────
 /**
  * Player clicks the [Roll {Skill}] button in the subtle roll request card.
- * We temporarily hook preCreateChatMessage to inject ACE flags and force
- * the roll mode to BLINDROLL, then trigger the skill roll via dnd5e API.
+ * We build a manual d20 + modifier roll to avoid Midi-QOL patching conflicts,
+ * then post it as a BLINDROLL with ACE flags for result processing.
  */
+const SKILL_LABELS_FALLBACK = {
+  acr: "Acrobatics", ani: "Animal Handling", arc: "Arcana", ath: "Athletics",
+  dec: "Deception", his: "History", ins: "Insight", itm: "Intimidation",
+  inv: "Investigation", med: "Medicine", nat: "Nature", prc: "Perception",
+  prf: "Performance", per: "Persuasion", rel: "Religion", slt: "Sleight of Hand",
+  ste: "Stealth", sur: "Survival",
+};
+
 async function _handleSubtleRollClick(btn) {
   const requestId = btn.dataset.requestId;
   const skill     = btn.dataset.skill;
@@ -2517,56 +2788,53 @@ async function _handleSubtleRollClick(btn) {
   btn.textContent   = "Rolling...";
   btn.style.opacity = "0.6";
 
-  // Temporarily hook preCreateChatMessage to inject subtle roll flags
-  const hookId = Hooks.on("preCreateChatMessage", (msg, data) => {
-    // Inject our flags into the roll message
-    foundry.utils.mergeObject(data, {
-      "flags.ace-engine": {
-        isSubtleRoll:       true,
-        subtleRollRequestId: requestId,
-        subtleSkill:        skill,
-        subtleActorId:      actor.id,
-        subtleActorName:    actor.name,
+  try {
+    // Manual d20 + skill modifier roll — avoids Midi-QOL patching conflicts
+    // with actor.rollSkill() which expects different argument formats.
+    const skillData = actor.system?.skills?.[skill];
+    const mod = skillData?.total ?? skillData?.mod ?? 0;
+    const skillLabel = CONFIG.DND5E?.skills?.[skill]?.label
+                    ?? SKILL_LABELS_FALLBACK[skill]
+                    ?? skill.toUpperCase();
+    // Advantage/disadvantage detection (same as batch rolls)
+    const subtleRolls = game.modules.get(MODULE_ID)?.api?.getSubtleRolls?.();
+    const advState = subtleRolls?._detectAdvantage?.(actor, skill) ?? "normal";
+    const diceExpr = advState === "advantage"    ? "2d20kh1"
+                   : advState === "disadvantage" ? "2d20kl1"
+                   :                              "1d20";
+
+    const roll = new Roll(`${diceExpr} + ${mod}`);
+    await roll.evaluate();
+
+    // Bypass roll.toMessage() entirely — it calls applyRollMode()
+    // which reads the player's chat dropdown and overwrites our
+    // whisper/blind flags. ChatMessage.create() with rolls[] gives
+    // us full control: player sees NOTHING, GM sees the result.
+    const gmUsers = game.users.filter(u => u.isGM).map(u => u.id);
+    await ChatMessage.create({
+      speaker: ChatMessage.getSpeaker({ actor }),
+      flavor:  `${skillLabel} Check (Blind)`,
+      rolls:   [roll],
+      whisper: gmUsers,
+      blind:   true,
+      flags: {
+        "ace-engine": {
+          isSubtleRoll:        true,
+          subtleRollRequestId: requestId,
+          subtleSkill:         skill,
+          subtleActorId:       actor.id,
+          subtleActorName:     actor.name,
+        },
       },
     });
-    // Force blind roll mode
-    data.rollMode = CONST.DICE_ROLL_MODES.BLINDROLL;
-    // Remove hook after first use
-    Hooks.off("preCreateChatMessage", hookId);
-  });
-
-  try {
-    // dnd5e skill roll API
-    if (typeof actor.rollSkill === "function") {
-      await actor.rollSkill(skill, { rollMode: CONST.DICE_ROLL_MODES.BLINDROLL });
-    } else {
-      // Fallback for non-dnd5e: manual d20 + ability modifier
-      const mod = actor.system?.skills?.[skill]?.total ?? 0;
-      const roll = new Roll(`1d20 + ${mod}`);
-      await roll.evaluate();
-      await roll.toMessage({
-        speaker: ChatMessage.getSpeaker({ actor }),
-        rollMode: CONST.DICE_ROLL_MODES.BLINDROLL,
-        flags: {
-          "ace-engine": {
-            isSubtleRoll:       true,
-            subtleRollRequestId: requestId,
-            subtleSkill:        skill,
-            subtleActorId:      actor.id,
-            subtleActorName:    actor.name,
-          },
-        },
-      });
-      // Clean up the hook since manual roll didn't go through preCreate
-      Hooks.off("preCreateChatMessage", hookId);
-    }
     btn.textContent = "Rolled (blind)";
+    // Persist so the button stays disabled after browser refresh
+    _persistCardState(btn.closest(".ace-subtle-request"));
   } catch (err) {
     console.error(`${MODULE_ID} | Subtle roll failed:`, err);
     btn.textContent = "Roll Failed";
     btn.disabled = false;
     btn.style.opacity = "1";
-    Hooks.off("preCreateChatMessage", hookId); // Clean up hook on failure
   }
 }
 
@@ -2735,8 +3003,14 @@ async function _handleSubtleSendRequest(btn) {
 // ── Open / toggle panel ────────────────────────────────────────
 function openPanel() {
   if (panel?.rendered) {
-    panel.close();
-    panel = null;
+    // If minimized (badge mode), restore it instead of closing
+    if (panel.element?.classList?.contains("ace-minimized")) {
+      AcePanel._onRestoreFromBadge.call(panel);
+      return;
+    }
+    // Already open and visible — bring to front / focus
+    panel.bringToTop?.();
+    return;
   } else {
     // Guard: all subsystems must be ready before opening
     if (!_aceReady) {
@@ -2754,6 +3028,8 @@ function openPanel() {
       documentEngine,
       digestEngine,
       worldBible,
+      vaultEngine,
+      vaultSearch,
       triggerSfx: _triggerSfx,
       stopSfx:    stopAllSfx,
     });
