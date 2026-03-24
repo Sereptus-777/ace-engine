@@ -22,6 +22,7 @@ import { filterProfanity, buildProfanityPrompt } from "./profanity-filter.mjs";
 import { WorldBibleEngine }    from "./world-bible-engine.mjs";
 import { VaultEngine }         from "./vault-engine.mjs";
 import { VaultSearch }         from "./vault-search.mjs";
+import { SceneIntelligence }   from "./scene-intelligence.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -242,6 +243,7 @@ let calendarBridge = null;   // SimpleCalendarBridge — optional Simple Calenda
 let subtleRolls    = null;   // SubtleRollManager — blind skill checks with AI narration
 let vaultEngine    = null;   // VaultEngine — cross-campaign archival snapshots + Legacy Ledger
 let vaultSearch    = null;   // VaultSearch — cross-campaign query search
+let sceneIntelligence = null; // SceneIntelligence — per-scene deep knowledge cache
 let _aceReady      = false;  // true after all subsystems (AI, memory, etc.) are initialized
 
 // ── Initialization ─────────────────────────────────────────────
@@ -569,9 +571,29 @@ Hooks.once("ready", async () => {
       changed = true;
     }
 
-    // Migration 4: source conflict resolution
-    if (currentPrompt && !currentPrompt.includes("conflicting information")) {
+    // Migration 4: source conflict resolution (legacy — replaced by Migration 5)
+    if (currentPrompt && !currentPrompt.includes("conflicting information") && !currentPrompt.includes("EDITION CONFLICTS")) {
       currentPrompt += `\n\nWhen multiple source documents contain conflicting information (different editions, timeline changes, retcons), prefer the most recently uploaded document. GM session notes and campaign-specific content ALWAYS take priority over published sourcebooks. If you notice a conflict, briefly mention it so the GM can decide.`;
+      changed = true;
+    }
+
+    // Migration 5: Fix "most recently uploaded" → edition-based priority
+    //   Old text said prefer newest UPLOAD order — wrong, should be newest EDITION.
+    //   Also replaces the old wall-of-text reference library paragraph with cleaner bullets.
+    if (currentPrompt && currentPrompt.includes("prefer the most recently uploaded document")) {
+      // Remove the old conflict resolution paragraph
+      currentPrompt = currentPrompt.replace(
+        /\n*When multiple source documents contain conflicting information[^]*?briefly mention it so the GM can decide\./,
+        ""
+      );
+      // Remove the old reference library wall-of-text if present (Migrations 1+2 added it)
+      currentPrompt = currentPrompt.replace(
+        /\n*When a REFERENCE LIBRARY section is present[^]*?say so honestly\./,
+        ""
+      );
+      // Add the new clean versions
+      currentPrompt += `\n\n## REFERENCE DATA\n- REFERENCE LIBRARY and STRUCTURED REFERENCE DATA sections contain content already extracted from the GM's documents. Use it directly — NEVER say "let me retrieve the file" or "give me a moment to access the PDF."\n- For published content (official modules, adventures), also use your training knowledge to fill gaps.\n- If neither reference data nor your training covers the question, say so honestly.`;
+      currentPrompt += `\n\n## EDITION CONFLICTS\n- When sources contain conflicting stats or rules from different editions (e.g. AD&D THAC0 vs 5E attack bonuses, descending AC vs ascending AC), ALWAYS use the newest edition (5th Edition / 5E) stats.\n- GM session notes and campaign-specific content ALWAYS override published sourcebooks.\n- If you notice an edition conflict, briefly mention it so the GM can decide.`;
       changed = true;
     }
 
@@ -616,15 +638,17 @@ Hooks.once("ready", async () => {
 
   // ── Reputation / Word-of-Mouth Engine ───────────────────────
   const reputationEnabled = game.settings.get(MODULE_ID, "enableReputation");
-  if (aceMemory && reputationEnabled) {
+  if (reputationEnabled) {
     try {
-      reputationEngine = new ReputationEngine(aceMemory);
-      console.log(`${MODULE_ID} | Reputation engine initialized (scene counter: ${reputationEngine.getSceneCounter()})`);
+      reputationEngine = new ReputationEngine();
+      await reputationEngine.load(game.world.id);
+      const repStats = reputationEngine.getStats();
+      console.log(`${MODULE_ID} | Reputation engine loaded: notoriety=${repStats.notoriety}, ${repStats.deedCount} deeds, ${repStats.titleCount} titles, ${repStats.factionCount} faction standings`);
     } catch (err) {
       console.error(`${MODULE_ID} | Reputation engine failed:`, err);
       reputationEngine = null;
     }
-  } else if (!reputationEnabled) {
+  } else {
     console.log(`${MODULE_ID} | Reputation engine disabled by settings.`);
   }
 
@@ -676,6 +700,84 @@ Hooks.once("ready", async () => {
   if (aceMemory && libEnabled) {
     try {
       documentEngine = new DocumentEngine(aceMemory, digestEngine);
+
+      // ── Recover stuck "processing"/"uploading" documents from interrupted sessions ──
+      // If a document was mid-extraction when Foundry crashed, the store may have
+      // status="processing" with no chunks — but the disk cache may have the full
+      // extraction. Try to restore from cache before giving up and marking "error".
+      const allDocs = aceMemory.documents.getAll();
+      let recoveredCount = 0;
+      let cacheRestoredCount = 0;
+
+      // Helper: attempt to restore a document's chunks from the global disk cache
+      const _tryRestoreFromCache = async (doc) => {
+        try {
+          const cached = await documentEngine.loadDocumentCache(doc.fileName);
+          if (cached?.chunks?.length) {
+            if (cached.parents?.length) {
+              aceMemory.documents.setChunks(doc.id, { chunks: cached.chunks, parents: cached.parents });
+            } else {
+              aceMemory.documents.setChunks(doc.id, cached.chunks);
+            }
+            if (cached.tags?.length)  aceMemory.documents.setTags(doc.id, cached.tags);
+            if (cached.pageCount)     aceMemory.documents.setPageCount(doc.id, cached.pageCount);
+            if (cached.embeddings)    aceMemory.documents.setEmbeddings(doc.id, cached.embeddings);
+            if (cached.images?.length) {
+              for (const img of cached.images) aceMemory.documents.addImage(doc.id, img);
+            }
+            aceMemory.documents.setStatus(doc.id, "ready");
+            cacheRestoredCount++;
+            console.log(`${MODULE_ID} | Restored "${doc.displayName}" from disk cache (${cached.chunks.length} chunks)`);
+            return true;
+          }
+        } catch (cacheErr) {
+          console.warn(`${MODULE_ID} | Cache restore failed for "${doc.displayName}":`, cacheErr);
+        }
+        return false;
+      };
+
+      for (const doc of allDocs) {
+        const hasChunks = (doc.chunks?.length ?? 0) > 0;
+
+        // Case 1: Document stuck in "processing"/"uploading" (crashed mid-extraction)
+        if (doc.status === "processing" || doc.status === "uploading") {
+          if (hasChunks) {
+            aceMemory.documents.setStatus(doc.id, "ready");
+          } else if (!(await _tryRestoreFromCache(doc))) {
+            aceMemory.documents.setStatus(doc.id, "error", "Interrupted — please delete and re-upload");
+          }
+          recoveredCount++;
+        }
+
+        // Case 2: Document marked "ready" but has 0 chunks (data lost / save race condition)
+        // The UI shows green badges but the AI can't actually use the document.
+        else if (doc.status === "ready" && !hasChunks && doc.type !== "image") {
+          console.warn(`${MODULE_ID} | "${doc.displayName}" is marked ready but has 0 chunks — attempting cache restore`);
+          if (!(await _tryRestoreFromCache(doc))) {
+            aceMemory.documents.setStatus(doc.id, "error", "Data lost — please delete and re-upload");
+          }
+          recoveredCount++;
+        }
+
+        // Case 3: Document stuck in "error" but disk cache has full data
+        // This happens when recovery marked it as error but the cache was written later.
+        else if (doc.status === "error" && !hasChunks && doc.type !== "image") {
+          console.warn(`${MODULE_ID} | "${doc.displayName}" is in error state — re-checking disk cache`);
+          if (await _tryRestoreFromCache(doc)) {
+            console.log(`${MODULE_ID} | Successfully recovered "${doc.displayName}" from disk cache on retry`);
+          }
+          recoveredCount++;
+        }
+      }
+
+      if (recoveredCount > 0) {
+        aceMemory._scheduleSave("documents");
+        const msg = cacheRestoredCount > 0
+          ? `Recovered ${recoveredCount} document(s) (${cacheRestoredCount} restored from disk cache)`
+          : `Recovered ${recoveredCount} document(s) with issues`;
+        console.warn(`${MODULE_ID} | ${msg}`);
+      }
+
       const stats = documentEngine.getLibrarySummary();
       console.log(`${MODULE_ID} | Document engine initialized (${stats.totalDocuments} docs, ${stats.totalChunks} chunks, ${stats.totalImages} images)`);
 
@@ -749,6 +851,21 @@ Hooks.once("ready", async () => {
       console.warn(`${MODULE_ID} | Vault init failed (non-critical):`, err);
       vaultEngine = null;
       vaultSearch = null;
+    }
+  }
+
+  // ── Scene Intelligence — per-scene deep knowledge cache ──────
+  if (documentEngine || worldBible) {
+    try {
+      sceneIntelligence = new SceneIntelligence({
+        documentEngine,
+        worldBible,
+        digestEngine,
+      });
+      console.log(`${MODULE_ID} | Scene Intelligence initialized`);
+    } catch (err) {
+      console.warn(`${MODULE_ID} | Scene Intelligence init failed (non-critical):`, err);
+      sceneIntelligence = null;
     }
   }
 
@@ -917,88 +1034,89 @@ Hooks.once("ready", async () => {
       narrate:   (text) => panel?.narrateText?.(text),
       stopAllAudio: _stopAllAudio,
 
-      // ── Reputation API (used by ACE: Envoy) ──────────────────────
+      // ── Party Reputation API (used by ACE: Envoy) ─────────────────
+      /** Get the ReputationEngine instance. */
+      getReputationEngine: () => reputationEngine,
+
+      /** Get reputation stats for UI display. */
+      getReputationStats: () => reputationEngine?.getStats() ?? null,
+
+      /** Add a party deed. Returns the new deed object. */
+      addDeed: async (summary, options = {}) => {
+        if (!reputationEngine) return null;
+        return reputationEngine.addDeed(summary, options, game.world.id);
+      },
+
+      /** Remove a deed by ID. */
+      removeDeed: async (deedId) => {
+        if (!reputationEngine) return;
+        return reputationEngine.removeDeed(deedId, game.world.id);
+      },
+
+      /** Set faction standing (e.g. "friendly", "hostile"). */
+      setFactionStanding: async (factionId, standing) => {
+        if (!reputationEngine) return;
+        return reputationEngine.setFactionStanding(factionId, standing, game.world.id);
+      },
+
+      /** Get faction standing. */
+      getFactionStanding: (factionId) => {
+        return reputationEngine?.getFactionStanding(factionId) ?? "neutral";
+      },
+
+      /** Set notoriety level ("unknown"|"local"|"regional"|"continental"|"legendary"). */
+      setNotoriety: async (level) => {
+        if (!reputationEngine) return;
+        return reputationEngine.setNotoriety(level, game.world.id);
+      },
+
+      /** Add a party title. */
+      addTitle: async (title) => {
+        if (!reputationEngine) return;
+        return reputationEngine.addTitle(title, game.world.id);
+      },
+
       /**
-       * Log a conversation encounter from Envoy into the reputation system.
-       * Called when an Envoy conversation ends and session is summarized.
+       * Get what an NPC would know about the party.
+       * Returns { knows, source, attitude, knownDeeds, knownTitles, promptText } or null.
        */
-      logConversationEncounter: ({ actor, playerName, summary, history }) => {
-        if (!reputationEngine || !actor) return;
-        const factionKey = reputationEngine.resolveFactionKey(actor);
-        if (!factionKey) return;
-
-        // Gather PC names from history if available
-        const pcNames = playerName ? [playerName] : [];
-
-        reputationEngine.logEncounter({
-          factionKey,
-          kind:    "conversation",
-          outcome: "survived",
-          npcName: actor.name,
-          pcNames,
-          scene:   canvas?.scene?.name ?? "",
-          summary: (summary ?? "").slice(0, 300),
-          direct:  true,  // Conversations are always direct encounters — the NPC personally met the PC
-        });
-        console.log(`${MODULE_ID} | Reputation: logged DIRECT conversation from Envoy for faction "${factionKey}" — ${actor.name}`);
+      getNpcKnowledge: (npcFactionId, npcLocation) => {
+        if (!reputationEngine) return null;
+        return reputationEngine.getNpcKnowledge(npcFactionId, npcLocation);
       },
 
       /**
        * Get the reputation context paragraph for an NPC (for injection into AI prompts).
        * Called by Envoy's conversation.js before building the system prompt.
-       * Now also includes fame/deed context if the fame engine is active.
+       * Backwards-compatible — now delegates to getNpcKnowledge.
        */
-      getReputationContext: (npcName) => {
-        let ctx = reputationEngine?.buildReputationContext(npcName) ?? "";
-        ctx += fameEngine?.buildFameContext(npcName, canvas?.scene?.name ?? "") ?? "";
-        return ctx;
+      getReputationContext: (npcName, npcFaction, npcLocation) => {
+        if (!reputationEngine) return "";
+        const knowledge = reputationEngine.getNpcKnowledge(npcFaction, npcLocation);
+        return knowledge?.promptText ?? "";
+      },
+
+      /** Suggest deeds from a session summary (AI-powered, returns suggestions for GM review). */
+      suggestDeedsFromSummary: async (summaryText) => {
+        if (!reputationEngine || !aiProvider) return [];
+        return reputationEngine.suggestDeedsFromSummary(summaryText, aiProvider);
+      },
+
+      /** Format suggested deeds as HTML for GM review dialog. */
+      formatDeedsForReview: (suggestedDeeds) => {
+        if (!reputationEngine) return "";
+        return reputationEngine.formatForGmReview(suggestedDeeds);
       },
 
       /**
-       * Check if an NPC is aware of the PCs.
+       * Log a conversation encounter from Envoy. Auto-creates a deed if significant.
+       * Backwards-compatible wrapper for the old logConversationEncounter API.
        */
-      checkNpcAwareness: (npcName, actor) => {
-        if (!reputationEngine) return null;
-        return reputationEngine.checkNpcAwareness(npcName, actor);
-      },
-
-      /**
-       * Get the reputation engine instance (for advanced use).
-       */
-      getReputationEngine: () => reputationEngine,
-
-      /**
-       * Set the intelligence network level for a faction.
-       * Controls how much PC detail the AI can reveal for NPCs of that type.
-       * Usage: ace.setIntelNetwork("undead", "extensive")
-       * @param {string} factionKey — e.g. "undead", "goblinoid", "fiend"
-       * @param {string} level — "none" | "informants" | "extensive" | "omniscient"
-       */
-      setIntelNetwork: (factionKey, level) => {
-        if (!reputationEngine) { ui.notifications?.warn("ACE: Reputation engine not initialized."); return; }
-        return reputationEngine.setIntelligenceNetwork(factionKey, level);
-      },
-
-      /**
-       * Get the intelligence network level for a faction.
-       * @param {string} factionKey
-       * @returns {string} "none" | "informants" | "extensive" | "omniscient"
-       */
-      getIntelNetwork: (factionKey) => {
-        if (!reputationEngine) return "none";
-        return reputationEngine.getIntelligenceNetwork(factionKey);
-      },
-
-      /**
-       * List all known factions with their encounter counts and intel levels.
-       * Usage: ace.listFactions() — prints a nice table to the console.
-       * @returns {Array}
-       */
-      listFactions: () => {
-        if (!reputationEngine) return [];
-        const factions = reputationEngine.listFactions();
-        console.table(factions);
-        return factions;
+      logConversationEncounter: ({ actor, playerName, summary }) => {
+        // Under the new system, conversation encounters don't auto-create deeds.
+        // Deeds are created explicitly by the GM or suggested from session summaries.
+        // This is kept for backwards compatibility — it's a no-op now.
+        console.log(`${MODULE_ID} | Reputation: conversation encounter logged (${actor?.name ?? "unknown"}) — deed creation now requires GM approval`);
       },
 
       // ── Profanity Filter API (used by ACE: Envoy) ────────────────
@@ -1243,10 +1361,110 @@ Hooks.once("ready", async () => {
         return worldBible.mergeFromDigest(digestData, sourceName, sourceFile, aiProvider, game.world.id, onProgress, publishedYear);
       },
 
+      /**
+       * Supplement-merge: runs ONLY the 4 new category passes (cultures, trade,
+       * power structures, demographics, threats, landmarks, current events)
+       * on an already-merged digest. Use this to backfill existing digests that
+       * were merged before the expanded Bible schema.
+       */
+      supplementMergeDigest: async (digestData, sourceName, sourceFile, onProgress, publishedYear = null) => {
+        if (!worldBible?.hasData || !aiProvider) {
+          throw new Error("World Bible must be generated before supplement-merging. Generate a Bible first.");
+        }
+        return worldBible.supplementMerge(digestData, sourceName, sourceFile, aiProvider, game.world.id, onProgress, publishedYear);
+      },
+
+      /**
+       * Run supplement merge on ALL existing digests that are active in this world.
+       * Iterates every digest, loads its data, and runs the 4 new category passes.
+       * @param {function} onProgress - (digestName, digestIndex, totalDigests, step, totalSteps) callback
+       * @returns {Promise<{ results: Object[], errors: string[] }>}
+       */
+      supplementMergeAll: async (onProgress) => {
+        if (!worldBible?.hasData || !aiProvider) {
+          throw new Error("World Bible must exist before supplement-merging.");
+        }
+        if (!digestEngine) {
+          throw new Error("Digest engine not available.");
+        }
+        const allDigests = digestEngine.getAllDigests();
+        const results = [];
+        const errors = [];
+        for (let i = 0; i < allDigests.length; i++) {
+          const meta = allDigests[i];
+          try {
+            const digestData = await digestEngine.loadDigest(meta.id);
+            if (!digestData) {
+              errors.push(`${meta.name ?? meta.id}: digest data not found`);
+              continue;
+            }
+            console.log(`${MODULE_ID} | Supplement merge ${i + 1}/${allDigests.length}: ${meta.name ?? meta.id}`);
+            const digest = digestData.digest ?? digestData;
+            const result = await worldBible.supplementMerge(
+              digest, meta.name ?? meta.id, meta.sourceFile ?? meta.id,
+              aiProvider, game.world.id,
+              (step, total, cat, phase) => {
+                if (onProgress) onProgress(meta.name ?? meta.id, i + 1, allDigests.length, step, total, cat, phase);
+              },
+              meta.publishedYear ?? null
+            );
+            results.push({ name: meta.name ?? meta.id, ...result });
+          } catch (err) {
+            console.error(`${MODULE_ID} | Supplement merge failed for ${meta.name ?? meta.id}:`, err);
+            errors.push(`${meta.name ?? meta.id}: ${err.message}`);
+          }
+        }
+        return { results, errors };
+      },
+
       learnFromText: async (text) => {
         if (!worldBible?.hasData || !aiProvider) return { learned: 0, skipped: 0 };
         return worldBible.learnFromText(text, aiProvider, game.world.id);
       },
+
+      // ── Scene Intelligence API (used by ACE: Envoy) ────────────
+      /**
+       * Get deep scene intelligence for a scene. Cached per scene (5min TTL).
+       * Returns factions, NPCs, deities, cultural context, nearby locations
+       * from the full search pipeline (document library + World Bible + cross-refs).
+       *
+       * @param {string} [sceneName] — Scene name (default: current scene)
+       * @param {string} [sceneId] — Scene ID (default: current scene)
+       * @returns {Promise<Object>} SceneIntelligence data
+       */
+      getSceneIntelligence: async (sceneName, sceneId) => {
+        if (!sceneIntelligence) return null;
+        return sceneIntelligence.getIntelligence(
+          sceneId || canvas?.scene?.id || "",
+          sceneName || canvas?.scene?.name || ""
+        );
+      },
+
+      /**
+       * Get scene intelligence formatted as a text block for AI prompt injection.
+       * @param {string} [sceneName]
+       * @param {string} [sceneId]
+       * @returns {Promise<string>}
+       */
+      getSceneIntelligencePrompt: async (sceneName, sceneId) => {
+        if (!sceneIntelligence) return "";
+        const intel = await sceneIntelligence.getIntelligence(
+          sceneId || canvas?.scene?.id || "",
+          sceneName || canvas?.scene?.name || ""
+        );
+        return sceneIntelligence.formatForPrompt(intel);
+      },
+
+      /**
+       * Invalidate scene intelligence cache (e.g., when a new document is uploaded).
+       * @param {string} [sceneId] — Specific scene, or omit to clear all
+       */
+      invalidateSceneIntelligence: (sceneId) => {
+        sceneIntelligence?.invalidate(sceneId);
+      },
+
+      /** Get the SceneIntelligence instance (for advanced use). */
+      getSceneIntelligenceEngine: () => sceneIntelligence,
     };
   }
 
@@ -1458,12 +1676,14 @@ function _discoverSceneNpcs() {
     // See if this NPC's faction has heard of the PCs (word-of-mouth)
     if (reputationEngine) {
       try {
-        const result = reputationEngine.checkNpcAwareness(name, actor);
-        if (result) {
-          console.log(`${MODULE_ID} | Reputation: ${name} is ${result.level} of PCs (awareness: ${(result.awareness * 100).toFixed(0)}%)`);
+        if (typeof reputationEngine.checkNpcAwareness === "function") {
+          const result = reputationEngine.checkNpcAwareness(name, actor);
+          if (result) {
+            console.log(`${MODULE_ID} | Reputation: ${name} is ${result.level} of PCs (awareness: ${(result.awareness * 100).toFixed(0)}%)`);
+          }
         }
       } catch (err) {
-        console.warn(`${MODULE_ID} | Reputation check failed for ${name}:`, err);
+        // Non-critical — reputation check is optional
       }
     }
 
@@ -1495,6 +1715,11 @@ Hooks.on("canvasReady", () => {
   // Re-inject toolbar button on scene changes (controls re-render)
   _injectAceControl();
 
+  // Pre-warm scene intelligence cache for the new scene (async, non-blocking)
+  if (sceneIntelligence) {
+    sceneIntelligence.getIntelligence().catch(() => {});
+  }
+
   // ── Log scene transition to memory ──────────────────────────
   const newScene = canvas?.scene?.name ?? null;
   if (aceMemory && newScene && newScene !== _lastSceneName) {
@@ -1503,7 +1728,7 @@ Hooks.on("canvasReady", () => {
       // Only log actual scene transitions (not the first load on startup)
       aceMemory.logSceneChange(_lastSceneName, newScene);
       // Increment reputation scene counter on each genuine scene transition
-      if (reputationEngine) reputationEngine.incrementSceneCounter();
+      if (reputationEngine && typeof reputationEngine.incrementSceneCounter === "function") reputationEngine.incrementSceneCounter();
     }
     _lastSceneName = newScene;
 
@@ -1587,7 +1812,8 @@ Hooks.on("deleteCombat", (combat) => {
         if (actor.hasPlayerOwner) {
           pcNames.push(combatant.name);
         } else {
-          const factionKey = reputationEngine.resolveFactionKey(actor);
+          const factionKey = typeof reputationEngine.resolveFactionKey === "function"
+            ? reputationEngine.resolveFactionKey(actor) : null;
           if (factionKey) {
             const hp = actor.system?.attributes?.hp;
             const isKilled = (hp?.value ?? 1) <= 0;
@@ -1638,17 +1864,19 @@ Hooks.on("deleteCombat", (combat) => {
           bestSpreaderStats = npcs.find(n => n.npcStats)?.npcStats ?? null;
         }
 
-        reputationEngine.logEncounter({
-          factionKey,
-          kind,
-          outcome,
-          npcName:  names,
-          pcNames,
-          scene:    canvas?.scene?.name ?? "",
-          summary:  `${kind === "kill" ? "PCs killed" : "PCs fought"} ${names}. ${anySurvived ? "Some survived." : "None survived."}`,
-          npcStats: bestSpreaderStats,
-          direct:   true,  // Combat is always a direct encounter — these NPCs personally fought the PCs
-        });
+        if (typeof reputationEngine.logEncounter === "function") {
+          reputationEngine.logEncounter({
+            factionKey,
+            kind,
+            outcome,
+            npcName:  names,
+            pcNames,
+            scene:    canvas?.scene?.name ?? "",
+            summary:  `${kind === "kill" ? "PCs killed" : "PCs fought"} ${names}. ${anySurvived ? "Some survived." : "None survived."}`,
+            npcStats: bestSpreaderStats,
+            direct:   true,
+          });
+        }
       }
     } catch (err) {
       console.warn(`${MODULE_ID} | Reputation combat logging failed:`, err);
@@ -1934,12 +2162,14 @@ Hooks.on("createToken", (tokenDoc) => {
 
         // Run awareness check
         try {
-          const result = reputationEngine.checkNpcAwareness(name, actor);
-          if (result) {
-            console.log(`${MODULE_ID} | Reputation: newly placed ${name} is ${result.level} of PCs (${(result.awareness * 100).toFixed(0)}%)`);
+          if (typeof reputationEngine?.checkNpcAwareness === "function") {
+            const result = reputationEngine.checkNpcAwareness(name, actor);
+            if (result) {
+              console.log(`${MODULE_ID} | Reputation: newly placed ${name} is ${result.level} of PCs (${(result.awareness * 100).toFixed(0)}%)`);
+            }
           }
         } catch (err) {
-          console.warn(`${MODULE_ID} | Reputation check failed for new token ${name}:`, err);
+          // Non-critical — reputation check is optional
         }
       }
     }

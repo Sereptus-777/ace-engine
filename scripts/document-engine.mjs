@@ -360,13 +360,20 @@ function splitLeafChunks(text, targetSize = LEAF_CHUNK_SIZE) {
  * @param {Array<{page: number, text: string}>} pages
  * @returns {{ chunks: Array, parents: Array }}
  */
-export function chunkPages(pages) {
+export async function chunkPages(pages, progressCb = null) {
   const chunks  = [];
   const parents = [];
   let chunkIdx  = 0;
   let parentIdx = 0;
 
-  for (const { page, text } of pages) {
+  for (let pi = 0; pi < pages.length; pi++) {
+    const { page, text } = pages[pi];
+
+    // Report progress & yield to UI thread every 10 pages
+    if (progressCb && (pi % 10 === 0 || pi === pages.length - 1)) {
+      progressCb(pi + 1, pages.length);
+      await new Promise(r => setTimeout(r, 0));
+    }
     if (!text || text.length < MIN_CHUNK_SIZE) continue;
 
     const sections = detectSections(text, page);
@@ -486,7 +493,7 @@ function splitAtParagraphs(text, maxChars) {
  * @param {string} type - "txt" or "md"
  * @returns {{ chunks: Array, parents: Array }}
  */
-export function chunkTextFile(text, type = "txt") {
+export async function chunkTextFile(text, type = "txt") {
   const pages = extractTextFile(text, type);
   return chunkPages(pages);
 }
@@ -607,12 +614,12 @@ export class DocumentEngine {
   }
 
   /** Chunk extracted pages into searchable text chunks. */
-  chunkPages(pages) {
-    return chunkPages(pages);
+  async chunkPages(pages, progressCb = null) {
+    return chunkPages(pages, progressCb);
   }
 
   /** Chunk a text/markdown file. */
-  chunkTextFile(text, type) {
+  async chunkTextFile(text, type) {
     return chunkTextFile(text, type);
   }
 

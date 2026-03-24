@@ -37,8 +37,8 @@
 /* ── Brushed Gold Glint Animation ─────────────────────────── */
 /* A diagonal light sweep that catches gold surfaces periodically */
 @keyframes goldGlint {
-  0%, 85%  { background-position: -200% 0; }
-  95%      { background-position: 200% 0; }
+  0%, 60%  { background-position: -200% 0; }
+  90%      { background-position: 200% 0; }
   100%     { background-position: 200% 0; }
 }
 
@@ -139,7 +139,7 @@
   box-shadow:
     inset 0 0 12px rgba(212, 175, 55, 0.10),
     0 0 6px rgba(212, 175, 55, 0.08);
-  animation: goldPulse 6s ease-in-out infinite;
+  animation: goldPulse 12s ease-in-out infinite;
 }
 
 /* Polished black metal frame border — bottom accent */
@@ -293,7 +293,7 @@
     transparent 100%
   );
   background-size: 200% 100%;
-  animation: goldGlint 6s ease-in-out infinite 1s;
+  animation: goldGlint 16s ease-in-out infinite 2s;
 }
 
 .ace-tab i {
@@ -455,7 +455,7 @@
     transparent 100%
   );
   background-size: 200% 100%;
-  animation: goldGlint 7s ease-in-out infinite 2s;
+  animation: goldGlint 18s ease-in-out infinite 4s;
 }
 
 .ace-quick-prompt:hover {
@@ -2372,7 +2372,7 @@ li.ace-toolbar-btn:hover {
     transparent 100%
   );
   background-size: 200% 100%;
-  animation: goldGlint 8s ease-in-out infinite;
+  animation: goldGlint 20s ease-in-out infinite;
 }
 
 /* Window title — gold text on dark header */
@@ -3270,7 +3270,7 @@ li.ace-toolbar-btn:hover {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 18px 12px;
   border: 1px dashed rgba(201, 168, 76, 0.3);
   border-radius: 6px;
   background: rgba(201, 168, 76, 0.03);
@@ -3309,9 +3309,9 @@ li.ace-toolbar-btn:hover {
 }
 
 .ace-library-formats-slim {
-  font-size: 10px !important;
-  color: var(--ace-text-muted) !important;
-  opacity: 0.6;
+  font-size: 11px !important;
+  color: var(--ace-text-secondary) !important;
+  opacity: 0.85;
 }
 
 /* ── Document list ─────────────────────────────────────── */
@@ -3788,9 +3788,9 @@ li.ace-toolbar-btn:hover {
   font-size: 0.72rem;
   padding: 3px 10px;
   border-radius: 4px;
-  color: #aa3333;
-  background: rgba(170, 50, 50, 0.08);
-  border: 1px solid rgba(170, 50, 50, 0.25);
+  color: #cc4444;
+  background: rgba(170, 50, 50, 0.12);
+  border: 1px solid rgba(170, 50, 50, 0.35);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -3917,6 +3917,15 @@ li.ace-toolbar-btn:hover {
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 10px;
+}
+
+.ace-bible-stats-extended:empty {
+  display: none;
+  margin: 0;
+}
+
+.ace-bible-stats-extended {
+  margin-top: -4px;
 }
 
 .ace-bible-badge {

@@ -176,7 +176,9 @@ Return ONLY valid JSON with this exact structure:
       "alignment": "Two-axis alignment",
       "strongholds": ["city_ids_with_major_temples"],
       "worshippers": "Who typically worships this deity in this region",
-      "description": "1-2 sentences on the faith's character and practices"
+      "description": "1-2 sentences on the faith's character and practices",
+      "allied_factions": ["faction_ids_whose_members_commonly_worship_this_deity"],
+      "opposed_deities": ["deity_ids_of_rival_or_enemy_gods"]
     }
   ],
   "geography": [
@@ -187,6 +189,101 @@ Return ONLY valid JSON with this exact structure:
       "description": "1-2 sentences covering character and dangers",
       "notable": "Key features, ruins, or inhabitants"
     }
+  ],
+  "cultures": [
+    {
+      "id": "snake_case_id",
+      "region": "${region.id}",
+      "name": "Culture or sub-region name (e.g. 'Icewind Dale', 'Calishite', 'Damaran')",
+      "greeting": "How locals greet strangers (e.g. 'blunt, suspicious of outsiders')",
+      "cuisine": "Common foods and drinks (e.g. 'knucklehead trout, seal blubber, mead')",
+      "clothing": "Typical attire (e.g. 'heavy furs, bone jewelry')",
+      "currency_slang": "Local slang for money if any",
+      "common_threats": "What locals worry about (e.g. 'frost giants, Auril's wrath')",
+      "social_customs": "Important social norms (e.g. 'hospitality is sacred')",
+      "accent_notes": "Speech patterns or dialect hints for NPC dialogue",
+      "taboos": "Things that are forbidden or deeply offensive locally",
+      "festivals": "Major celebrations or holy days"
+    }
+  ],
+  "tradeRoutes": [
+    {
+      "id": "snake_case_id",
+      "name": "Route name (e.g. 'The High Road', 'Golden Way')",
+      "type": "road|sea_lane|river|caravan_trail|underground",
+      "endpoints": ["city_id_start", "city_id_end"],
+      "goods": "What is commonly traded along this route",
+      "dangers": "Known threats or trouble spots",
+      "controlledBy": "faction_id or nation_id that controls/patrols this route"
+    }
+  ],
+  "powerStructures": [
+    {
+      "id": "snake_case_id",
+      "city": "city_id this applies to",
+      "government": "Type and key leaders (e.g. 'Masked Lords oligarchy, Open Lord: Laeral Silverhand')",
+      "law_enforcement": "Who keeps order (e.g. 'City Watch (streets), City Guard (walls)')",
+      "corruption_level": "low|moderate|high|rampant",
+      "crime_organizations": ["faction_ids of criminal groups active here"],
+      "taxes": "Tax burden and notable fees",
+      "justice": "How law is enforced (fair trials, summary execution, bribes, etc.)"
+    }
+  ],
+  "currentEvents": [
+    {
+      "id": "snake_case_id",
+      "event": "Short title (e.g. 'Giant Raids on the Sword Coast')",
+      "description": "2-3 sentences — what is happening and why it matters",
+      "affected_regions": ["region_ids affected"],
+      "affected_factions": ["faction_ids involved"],
+      "era": "When this is happening (e.g. '1492 DR', 'ongoing since 1489 DR')",
+      "impact": "How this affects daily life, travel, or politics"
+    }
+  ],
+  "racialDistribution": [
+    {
+      "id": "snake_case_id",
+      "city": "city_id",
+      "dominant_races": ["shield dwarves", "humans"],
+      "minority_races": ["halflings", "gnomes"],
+      "racial_tensions": "Any notable prejudices or conflicts (e.g. 'drow killed on sight')",
+      "cultural_notes": "How race affects daily life here"
+    }
+  ],
+  "languages": [
+    {
+      "id": "snake_case_id",
+      "region": "${region.id}",
+      "area_name": "Sub-region or city this applies to",
+      "common_languages": ["Common", "Dwarvish"],
+      "uncommon_languages": ["Orc", "Giant"],
+      "dialect_notes": "Notable speech patterns or loanwords"
+    }
+  ],
+  "threatZones": [
+    {
+      "id": "snake_case_id",
+      "name": "Area name (e.g. 'Mere of Dead Men')",
+      "region": "${region.id}",
+      "threats": [
+        { "creature": "creature type or name", "density": "unique|low|moderate|high" }
+      ],
+      "safe_travel": true,
+      "travel_warning": "What locals say about traveling here",
+      "notable_lairs": "Any known lairs, dens, or monster strongholds"
+    }
+  ],
+  "landmarks": [
+    {
+      "id": "snake_case_id",
+      "name": "Landmark name (e.g. 'Myth Drannor')",
+      "type": "ruins|monument|natural_wonder|ancient_site|magical_nexus|battlefield|tomb",
+      "era": "When it was built/destroyed/significant",
+      "current_state": "Current condition and accessibility",
+      "legends": ["What people say about this place — myths, stories, warnings"],
+      "associated_factions": ["faction_ids connected to this place"],
+      "description": "2-3 sentences about its history and significance"
+    }
   ]
 }
 
@@ -196,6 +293,13 @@ Rules:
 - Cross-reference IDs should be consistent (if Cormyr's id is "cormyr", reference it as "cormyr" everywhere)
 - For factions that span multiple regions, include them with their LOCAL presence in this region
 - Include geography entries for all notable terrain features
+- CULTURES: Every distinct cultural area needs a culture entry — include greeting style, food, clothing, speech patterns, taboos
+- TRADE ROUTES: Include all named roads, sea lanes, and trade paths — with what is traded and who controls them
+- POWER STRUCTURES: For every major city, describe who rules, who enforces, corruption, and crime
+- CURRENT EVENTS: Include 2-5 current events happening in this region circa 1489-1496 DR
+- RACIAL DISTRIBUTION: For major cities, note which races dominate and any tensions
+- THREAT ZONES: Identify dangerous wilderness areas with specific monster types and density
+- LANDMARKS: Include famous ruins, ancient sites, magical locations — things NPCs would know as legends
 - Return ONLY the JSON — no explanation, no markdown fences, no comments`;
 }
 
@@ -676,6 +780,15 @@ export class WorldBibleEngine {
     this._factionIndex = new Map();
     this._religionIndex = new Map();
     this._geoIndex = new Map();
+    this._cultureIndex = new Map();
+    this._tradeRouteIndex = new Map();
+    this._powerStructureIndex = new Map();
+    this._currentEventIndex = new Map();
+    this._racialDistIndex = new Map();
+    this._languageIndex = new Map();
+    this._threatZoneIndex = new Map();
+    this._landmarkIndex = new Map();
+    this._npcIndex = new Map();
 
     // Also build a name → id map for fuzzy lookups
     this._nameToId = new Map();
@@ -706,6 +819,49 @@ export class WorldBibleEngine {
         this._geoIndex.set(geo.id, geo);
         this._nameToId.set(geo.name.toLowerCase(), { type: "geography", id: geo.id });
       }
+      // ── New category indexes ──
+      for (const culture of region.cultures ?? []) {
+        culture._regionId = regionId;
+        this._cultureIndex.set(culture.id, culture);
+        this._nameToId.set(culture.name.toLowerCase(), { type: "culture", id: culture.id });
+      }
+      for (const route of region.tradeRoutes ?? []) {
+        route._regionId = regionId;
+        this._tradeRouteIndex.set(route.id, route);
+        this._nameToId.set(route.name.toLowerCase(), { type: "tradeRoute", id: route.id });
+      }
+      for (const ps of region.powerStructures ?? []) {
+        ps._regionId = regionId;
+        this._powerStructureIndex.set(ps.id, ps);
+      }
+      for (const ev of region.currentEvents ?? []) {
+        ev._regionId = regionId;
+        this._currentEventIndex.set(ev.id, ev);
+        this._nameToId.set(ev.event.toLowerCase(), { type: "currentEvent", id: ev.id });
+      }
+      for (const rd of region.racialDistribution ?? []) {
+        rd._regionId = regionId;
+        this._racialDistIndex.set(rd.id, rd);
+      }
+      for (const lang of region.languages ?? []) {
+        lang._regionId = regionId;
+        this._languageIndex.set(lang.id, lang);
+      }
+      for (const tz of region.threatZones ?? []) {
+        tz._regionId = regionId;
+        this._threatZoneIndex.set(tz.id, tz);
+        this._nameToId.set(tz.name.toLowerCase(), { type: "threatZone", id: tz.id });
+      }
+      for (const lm of region.landmarks ?? []) {
+        lm._regionId = regionId;
+        this._landmarkIndex.set(lm.id, lm);
+        this._nameToId.set(lm.name.toLowerCase(), { type: "landmark", id: lm.id });
+      }
+      for (const npc of region.npcs ?? []) {
+        npc._regionId = regionId;
+        this._npcIndex.set(npc.id, npc);
+        this._nameToId.set(npc.name.toLowerCase(), { type: "npc", id: npc.id });
+      }
     }
 
     // Global factions
@@ -720,7 +876,7 @@ export class WorldBibleEngine {
       this._nameToId.set(deity.deity.toLowerCase(), { type: "religion", id: deity.id });
     }
 
-    console.log(`${MODULE_ID} | World Bible: indexes built — ${this._nationIndex.size} nations, ${this._cityIndex.size} cities, ${this._factionIndex.size} factions, ${this._religionIndex.size} deities, ${this._geoIndex.size} geography.`);
+    console.log(`${MODULE_ID} | World Bible: indexes built — ${this._nationIndex.size} nations, ${this._cityIndex.size} cities, ${this._factionIndex.size} factions, ${this._religionIndex.size} deities, ${this._geoIndex.size} geography, ${this._cultureIndex.size} cultures, ${this._tradeRouteIndex.size} trade routes, ${this._powerStructureIndex.size} power structures, ${this._currentEventIndex.size} events, ${this._threatZoneIndex.size} threat zones, ${this._landmarkIndex.size} landmarks, ${this._npcIndex.size} NPCs.`);
   }
 
   // ── Context Retrieval (for bio-generator, conversation, etc.) ──
@@ -742,8 +898,151 @@ export class WorldBibleEngine {
       case "faction": data = this._factionIndex.get(entry.id); break;
       case "religion": data = this._religionIndex.get(entry.id); break;
       case "geography": data = this._geoIndex.get(entry.id); break;
+      case "culture": data = this._cultureIndex.get(entry.id); break;
+      case "tradeRoute": data = this._tradeRouteIndex.get(entry.id); break;
+      case "currentEvent": data = this._currentEventIndex.get(entry.id); break;
+      case "threatZone": data = this._threatZoneIndex.get(entry.id); break;
+      case "landmark": data = this._landmarkIndex.get(entry.id); break;
+      case "npc": data = this._npcIndex.get(entry.id); break;
     }
     return data ? { type: entry.type, id: entry.id, data } : null;
+  }
+
+  /**
+   * Search a specific category index by query string.
+   * Returns raw objects (not formatted text) for programmatic use.
+   * Supports: "factions", "cities", "nations", "geography", "deities", "cultures",
+   *           "threatZones", "landmarks", "npcs"
+   *
+   * For factions: also searches headquarters, nation, and _regionId fields.
+   * For cities: also searches nation field.
+   * For deities: searches the deity name field (religions index).
+   *
+   * Additionally, for "factions" queries: if the query matches a city or geography
+   * name, we resolve that location's region and return all factions in that region
+   * PLUS any factions referenced in the city's localFactions[] array.
+   * This enables: "Amber Temple" → Mount Ghakis region → Barovian factions.
+   *
+   * @param {string} category — Index to search
+   * @param {string} query — Search string (case-insensitive substring match)
+   * @param {number} [maxResults=20] — Cap on returned results
+   * @returns {object[]} — Raw data objects from the index
+   */
+  searchCategory(category, query, maxResults = 20) {
+    if (!query || !this._bible) return [];
+    const q = query.toLowerCase().trim();
+    if (q.length < 2) return [];
+
+    // Map category name → index
+    const indexMap = {
+      factions:    this._factionIndex,
+      cities:      this._cityIndex,
+      nations:     this._nationIndex,
+      geography:   this._geoIndex,
+      deities:     this._religionIndex,
+      religions:   this._religionIndex,
+      cultures:    this._cultureIndex,
+      threatZones: this._threatZoneIndex,
+      landmarks:   this._landmarkIndex,
+      npcs:        this._npcIndex,
+    };
+
+    const index = indexMap[category];
+    if (!index) return [];
+
+    const results = [];
+    const seen = new Set();
+
+    // ── Direct name/field search on the target index ──
+    for (const [id, obj] of index) {
+      if (seen.has(id)) continue;
+      let searchText;
+      if (category === "deities" || category === "religions") {
+        searchText = [obj.deity, obj.title, obj.domains?.join(" ")].filter(Boolean).join(" ").toLowerCase();
+      } else if (category === "factions") {
+        searchText = [obj.name, obj.headquarters, obj.nation, obj.leader, obj.type, obj._regionId].filter(Boolean).join(" ").toLowerCase();
+      } else if (category === "cities") {
+        searchText = [obj.name, obj.nation, obj.type, obj._regionId].filter(Boolean).join(" ").toLowerCase();
+      } else {
+        searchText = [obj.name || obj.deity || obj.event || "", obj.type || "", obj._regionId || ""].filter(Boolean).join(" ").toLowerCase();
+      }
+
+      if (searchText.includes(q)) {
+        seen.add(id);
+        const nameField = (obj.name || obj.deity || "").toLowerCase();
+        const score = nameField === q ? 100 : nameField.startsWith(q) ? 50 : nameField.includes(q) ? 25 : 10;
+        results.push({ ...obj, _score: score });
+      }
+    }
+
+    // ── Location-aware faction resolution ──
+    // If searching factions and query matches a city/geography/nation,
+    // pull all factions in that region + city's localFactions[]
+    if (category === "factions") {
+      // Check if query matches a city name
+      for (const [cityId, city] of this._cityIndex) {
+        if ((city.name || "").toLowerCase().includes(q) || cityId.includes(q)) {
+          // Add factions from city's localFactions[] array
+          for (const factionRef of city.localFactions ?? []) {
+            const fId = typeof factionRef === "string" ? factionRef : factionRef.id;
+            if (seen.has(fId)) continue;
+            const faction = this._factionIndex.get(fId);
+            if (faction) {
+              seen.add(fId);
+              results.push({ ...faction, _score: 40, _matchedVia: `city:${city.name}` });
+            }
+          }
+          // Add all factions in the same region as this city
+          if (city._regionId) {
+            for (const [fId, faction] of this._factionIndex) {
+              if (faction._regionId === city._regionId && !seen.has(fId)) {
+                seen.add(fId);
+                results.push({ ...faction, _score: 15, _matchedVia: `region:${city._regionId}` });
+              }
+            }
+          }
+        }
+      }
+
+      // Check if query matches a geography name (e.g., "Amber Temple", "Mount Ghakis")
+      for (const [geoId, geo] of this._geoIndex) {
+        if ((geo.name || "").toLowerCase().includes(q) || geoId.includes(q)) {
+          if (geo._regionId) {
+            for (const [fId, faction] of this._factionIndex) {
+              if (faction._regionId === geo._regionId && !seen.has(fId)) {
+                seen.add(fId);
+                results.push({ ...faction, _score: 15, _matchedVia: `geo:${geo.name}` });
+              }
+            }
+          }
+        }
+      }
+
+      // Check if query matches a nation name
+      for (const [natId, nation] of this._nationIndex) {
+        if ((nation.name || "").toLowerCase().includes(q) || natId.includes(q)) {
+          for (const [fId, faction] of this._factionIndex) {
+            if (!seen.has(fId) && (faction.nation === natId || (faction.nation || "").toLowerCase().includes(q))) {
+              seen.add(fId);
+              results.push({ ...faction, _score: 20, _matchedVia: `nation:${nation.name}` });
+            }
+          }
+        }
+      }
+
+      // Include global factions (Harpers, Zhentarim, etc.) — relevant everywhere
+      for (const gf of this._bible.globalFactions ?? []) {
+        const gfId = gf.id || (gf.name || "").toLowerCase().replace(/\s+/g, "_");
+        if (!seen.has(gfId) && (gf.scope === "continental" || gf.scope === "global")) {
+          seen.add(gfId);
+          results.push({ ...gf, _score: 5, _matchedVia: "global" });
+        }
+      }
+    }
+
+    // Sort by score descending, then cap
+    results.sort((a, b) => (b._score || 0) - (a._score || 0));
+    return results.slice(0, maxResults);
   }
 
   /**
@@ -800,6 +1099,76 @@ export class WorldBibleEngine {
       lines.push(`\n### Local Religions`);
       for (const r of localReligions) {
         lines.push(`- **${r.deity}** — ${r.title}. ${r.description ?? ""}`);
+        if (r.allied_factions?.length) lines.push(`  Allied factions: ${r.allied_factions.join(", ")}`);
+        if (r.opposed_deities?.length) lines.push(`  Opposed to: ${r.opposed_deities.join(", ")}`);
+      }
+    }
+
+    // Power structure
+    const cityId = city.id;
+    for (const [, ps] of this._powerStructureIndex ?? []) {
+      if (ps.city === cityId) {
+        lines.push(`\n### Power Structure`);
+        lines.push(`Government: ${ps.government}`);
+        if (ps.law_enforcement) lines.push(`Law enforcement: ${ps.law_enforcement}`);
+        if (ps.corruption_level) lines.push(`Corruption: ${ps.corruption_level}`);
+        if (ps.crime_organizations?.length) lines.push(`Crime: ${ps.crime_organizations.join(", ")}`);
+        if (ps.taxes) lines.push(`Taxes: ${ps.taxes}`);
+        if (ps.justice) lines.push(`Justice: ${ps.justice}`);
+        break;
+      }
+    }
+
+    // Racial distribution
+    for (const [, rd] of this._racialDistIndex ?? []) {
+      if (rd.city === cityId) {
+        lines.push(`\n### Demographics`);
+        if (rd.dominant_races?.length) lines.push(`Dominant races: ${rd.dominant_races.join(", ")}`);
+        if (rd.minority_races?.length) lines.push(`Minorities: ${rd.minority_races.join(", ")}`);
+        if (rd.racial_tensions) lines.push(`Tensions: ${rd.racial_tensions}`);
+        if (rd.cultural_notes) lines.push(`Cultural notes: ${rd.cultural_notes}`);
+        break;
+      }
+    }
+
+    // Regional culture (match by region)
+    const regionId = city._regionId || city.region;
+    for (const [, culture] of this._cultureIndex ?? []) {
+      if (culture._regionId === regionId || culture.region === regionId) {
+        lines.push(`\n### Local Culture — ${culture.name}`);
+        if (culture.greeting) lines.push(`Greeting style: ${culture.greeting}`);
+        if (culture.cuisine) lines.push(`Cuisine: ${culture.cuisine}`);
+        if (culture.clothing) lines.push(`Clothing: ${culture.clothing}`);
+        if (culture.accent_notes) lines.push(`Speech: ${culture.accent_notes}`);
+        if (culture.social_customs) lines.push(`Customs: ${culture.social_customs}`);
+        if (culture.taboos) lines.push(`Taboos: ${culture.taboos}`);
+        if (culture.currency_slang) lines.push(`Money slang: ${culture.currency_slang}`);
+        if (culture.festivals) lines.push(`Festivals: ${culture.festivals}`);
+        break;  // one culture per city context to keep it concise
+      }
+    }
+
+    // Nearby threats
+    for (const [, tz] of this._threatZoneIndex ?? []) {
+      if (tz._regionId === regionId) {
+        lines.push(`\n### Nearby Threat: ${tz.name}`);
+        if (tz.threats?.length) {
+          for (const t of tz.threats) {
+            lines.push(`- ${t.creature} (${t.density})`);
+          }
+        }
+        if (tz.travel_warning) lines.push(`Warning: ${tz.travel_warning}`);
+      }
+    }
+
+    // Languages
+    for (const [, lang] of this._languageIndex ?? []) {
+      if (lang._regionId === regionId) {
+        lines.push(`\n### Languages`);
+        if (lang.common_languages?.length) lines.push(`Common: ${lang.common_languages.join(", ")}`);
+        if (lang.uncommon_languages?.length) lines.push(`Uncommon: ${lang.uncommon_languages.join(", ")}`);
+        if (lang.dialect_notes) lines.push(`Dialect: ${lang.dialect_notes}`);
+        break;
       }
     }
 
@@ -852,6 +1221,84 @@ export class WorldBibleEngine {
   }
 
   /**
+   * Get current events for a region (or all regions).
+   * @param {string} [regionId] - optional region filter
+   * @returns {string}
+   */
+  getCurrentEvents(regionId = null) {
+    if (!this._currentEventIndex?.size) return "";
+    const lines = [`\n### Current Events`];
+    for (const [, ev] of this._currentEventIndex) {
+      if (regionId && !(ev.affected_regions ?? []).includes(regionId) && ev._regionId !== regionId) continue;
+      lines.push(`- **${ev.event}** (${ev.era ?? "current"}): ${ev.description}`);
+      if (ev.impact) lines.push(`  Impact: ${ev.impact}`);
+    }
+    return lines.length > 1 ? lines.join("\n") : "";
+  }
+
+  /**
+   * Get threat zones for a region.
+   * @param {string} regionId
+   * @returns {string}
+   */
+  getThreats(regionId) {
+    if (!this._threatZoneIndex?.size || !regionId) return "";
+    const lines = [];
+    for (const [, tz] of this._threatZoneIndex) {
+      if (tz._regionId !== regionId && tz.region !== regionId) continue;
+      const threats = (tz.threats ?? []).map(t => `${t.creature} (${t.density})`).join(", ");
+      lines.push(`**${tz.name}**: ${threats}${tz.travel_warning ? ` — "${tz.travel_warning}"` : ""}`);
+    }
+    return lines.length ? `\n### Nearby Threats\n${lines.join("\n")}` : "";
+  }
+
+  /**
+   * Get culture context for a region.
+   * @param {string} regionId
+   * @returns {string}
+   */
+  getCulture(regionId) {
+    if (!this._cultureIndex?.size || !regionId) return "";
+    for (const [, c] of this._cultureIndex) {
+      if (c._regionId !== regionId && c.region !== regionId) continue;
+      const lines = [`\n### Local Culture — ${c.name}`];
+      if (c.greeting) lines.push(`Greeting: ${c.greeting}`);
+      if (c.cuisine) lines.push(`Cuisine: ${c.cuisine}`);
+      if (c.clothing) lines.push(`Clothing: ${c.clothing}`);
+      if (c.accent_notes) lines.push(`Speech patterns: ${c.accent_notes}`);
+      if (c.social_customs) lines.push(`Customs: ${c.social_customs}`);
+      if (c.taboos) lines.push(`Taboos: ${c.taboos}`);
+      if (c.currency_slang) lines.push(`Money slang: ${c.currency_slang}`);
+      if (c.festivals) lines.push(`Festivals: ${c.festivals}`);
+      return lines.join("\n");
+    }
+    return "";
+  }
+
+  /**
+   * Get a comprehensive NPC bio context for a specific location.
+   * Pulls everything an NPC would know: culture, power, demographics,
+   * threats, events, factions, languages. Perfect for bio generation.
+   * @param {string} cityIdOrName
+   * @returns {string}
+   */
+  getNpcBioContext(cityIdOrName) {
+    // Start with the full city context (already includes culture, power, demographics, etc.)
+    let ctx = this.getCityContext(cityIdOrName);
+    if (!ctx) return "";
+
+    // Add current events
+    const city = this._cityIndex.get(cityIdOrName) ?? this.findByName(cityIdOrName)?.data;
+    if (city) {
+      const regionId = city._regionId || city.region;
+      const events = this.getCurrentEvents(regionId);
+      if (events) ctx += "\n" + events;
+    }
+
+    return ctx;
+  }
+
+  /**
    * Search the bible for any entity matching a query string.
    * Returns formatted context for the best matches.
    * @param {string} query
@@ -896,6 +1343,47 @@ export class WorldBibleEngine {
         case "geography": {
           const g = this._geoIndex.get(m.id);
           if (g) lines.push(`**${g.name}** (${g.type}): ${g.description}`);
+          break;
+        }
+        case "culture": {
+          const c = this._cultureIndex.get(m.id);
+          if (c) {
+            lines.push(`**Culture: ${c.name}**`);
+            if (c.greeting) lines.push(`Greeting: ${c.greeting}`);
+            if (c.cuisine) lines.push(`Cuisine: ${c.cuisine}`);
+            if (c.clothing) lines.push(`Clothing: ${c.clothing}`);
+            if (c.accent_notes) lines.push(`Speech: ${c.accent_notes}`);
+            if (c.social_customs) lines.push(`Customs: ${c.social_customs}`);
+            if (c.taboos) lines.push(`Taboos: ${c.taboos}`);
+          }
+          break;
+        }
+        case "tradeRoute": {
+          const tr = this._tradeRouteIndex.get(m.id);
+          if (tr) lines.push(`**${tr.name}** (${tr.type}): ${tr.goods}. Dangers: ${tr.dangers ?? "unknown"}`);
+          break;
+        }
+        case "currentEvent": {
+          const ev = this._currentEventIndex.get(m.id);
+          if (ev) lines.push(`**Event: ${ev.event}** (${ev.era}): ${ev.description}`);
+          break;
+        }
+        case "threatZone": {
+          const tz = this._threatZoneIndex.get(m.id);
+          if (tz) {
+            const threats = (tz.threats ?? []).map(t => `${t.creature} (${t.density})`).join(", ");
+            lines.push(`**Threat Zone: ${tz.name}** — ${threats}. ${tz.travel_warning ?? ""}`);
+          }
+          break;
+        }
+        case "landmark": {
+          const lm = this._landmarkIndex.get(m.id);
+          if (lm) lines.push(`**${lm.name}** (${lm.type}): ${lm.description}${lm.legends?.length ? ` Legends: ${lm.legends.join("; ")}` : ""}`);
+          break;
+        }
+        case "npc": {
+          const npc = this._npcIndex.get(m.id);
+          if (npc) lines.push(`**${npc.name}** — ${npc.title ?? npc.role}. ${npc.description}`);
           break;
         }
       }
@@ -995,7 +1483,7 @@ Return ONLY the JSON — no explanation, no markdown fences.`;
 
       // Ensure the "resolved" region bucket exists
       if (!this._bible.regions.resolved) {
-        this._bible.regions.resolved = { name: "Auto-Resolved Locations", nations: [], cities: [], factions: [], religions: [], geography: [] };
+        this._bible.regions.resolved = { name: "Auto-Resolved Locations", nations: [], cities: [], factions: [], religions: [], geography: [], cultures: [], tradeRoutes: [], powerStructures: [], currentEvents: [], racialDistribution: [], languages: [], threatZones: [], landmarks: [], npcs: [] };
       }
       this._bible.regions.resolved.cities.push(newCity);
 
@@ -1046,7 +1534,7 @@ Return ONLY the JSON — no explanation, no markdown fences.`;
     const sourceTag = `digest:${sourceFile}`;
     const setting = this._bible.meta?.setting ?? "Forgotten Realms";
     const results = { merged: 0, updated: 0, skipped: 0, errors: [] };
-    const totalSteps = 5;
+    const totalSteps = 9;
     let step = 0;
 
     // ── Publication year authority ─────────────────────────────────
@@ -1267,6 +1755,221 @@ Rules:
 - Use exact names from the source
 - Return ONLY the JSON`,
       },
+      {
+        name: "Cultures & Trade",
+        key: "cultures",
+        digestFields: ["locations", "lore", "npcs"],
+        prompt: `You are extracting CULTURAL DETAILS and TRADE ROUTES from a D&D adventure module to add to a World Bible.
+
+SOURCE: "${sourceName}"
+LOCATION DATA:
+${JSON.stringify(digestData.locations ?? [], null, 1)}
+
+LORE DATA:
+${JSON.stringify(digestData.lore ?? [], null, 1)}
+
+NPC DATA (for cultural clues):
+${JSON.stringify((digestData.npcs ?? []).slice(0, 20), null, 1)}
+
+ADDITIONAL CONTEXT:
+${digestData.summary ?? ""}
+${existingHint}
+
+Extract cultural details for distinct areas/peoples in this adventure, AND any trade routes mentioned:
+{
+  "cultures": [
+    {
+      "id": "snake_case_id",
+      "name": "Culture/area name (e.g. 'Barovian', 'Vistani')",
+      "region": "region_id",
+      "greeting": "How locals greet strangers",
+      "cuisine": "Common foods and drinks mentioned or implied",
+      "clothing": "Typical attire",
+      "currency_slang": "Local slang for money if any",
+      "common_threats": "What locals fear or worry about",
+      "social_customs": "Important social norms",
+      "accent_notes": "Speech patterns for NPC dialogue",
+      "taboos": "Forbidden or offensive things",
+      "festivals": "Celebrations or holy days"
+    }
+  ],
+  "tradeRoutes": [
+    {
+      "id": "snake_case_id",
+      "name": "Route name",
+      "type": "road|sea_lane|river|caravan_trail|underground",
+      "endpoints": ["start_location_id", "end_location_id"],
+      "goods": "What is traded",
+      "dangers": "Known threats",
+      "controlledBy": "faction_id or nation_id"
+    }
+  ]
+}
+
+Rules:
+- Extract ALL distinct cultural groups (even small ones like a specific tribe or village)
+- Include speech patterns and customs NPCs would exhibit — this drives NPC dialogue
+- For trade routes, include any named paths, roads, or waterways used for travel/trade
+- Return ONLY the JSON`,
+      },
+      {
+        name: "Power & Demographics",
+        key: "powerStructures",
+        digestFields: ["locations", "factions", "npcs"],
+        prompt: `You are extracting POWER STRUCTURES and RACIAL DEMOGRAPHICS from a D&D adventure module to add to a World Bible.
+
+SOURCE: "${sourceName}"
+LOCATION DATA:
+${JSON.stringify(digestData.locations ?? [], null, 1)}
+
+FACTION DATA:
+${JSON.stringify(digestData.factions ?? [], null, 1)}
+
+NPC DATA (rulers, guards, officials):
+${JSON.stringify((digestData.npcs ?? []).slice(0, 30), null, 1)}
+
+ADDITIONAL CONTEXT:
+${digestData.summary ?? ""}
+${existingHint}
+
+Extract power structures for settlements and racial demographics:
+{
+  "powerStructures": [
+    {
+      "id": "snake_case_id",
+      "city": "city_id this applies to",
+      "government": "Who rules and how (exact details from source)",
+      "law_enforcement": "Who keeps order",
+      "corruption_level": "low|moderate|high|rampant",
+      "crime_organizations": ["faction_ids of criminal groups"],
+      "taxes": "Tax burden if mentioned",
+      "justice": "How law is enforced"
+    }
+  ],
+  "racialDistribution": [
+    {
+      "id": "snake_case_id",
+      "city": "city_id",
+      "dominant_races": ["race names"],
+      "minority_races": ["race names"],
+      "racial_tensions": "Any prejudices or conflicts",
+      "cultural_notes": "How race affects daily life"
+    }
+  ],
+  "languages": [
+    {
+      "id": "snake_case_id",
+      "region": "region_id",
+      "area_name": "Sub-region or city",
+      "common_languages": ["language names"],
+      "uncommon_languages": ["language names"],
+      "dialect_notes": "Notable speech patterns"
+    }
+  ]
+}
+
+Rules:
+- For every settlement that has a ruler or government described, create a powerStructures entry
+- Racial distribution should reflect what the source says about who lives where
+- Languages should note what's spoken in different areas
+- Return ONLY the JSON`,
+      },
+      {
+        name: "Threats & Landmarks",
+        key: "threatZones",
+        digestFields: ["locations", "lore", "encounters"],
+        prompt: `You are extracting THREAT ZONES and LEGENDARY LANDMARKS from a D&D adventure module to add to a World Bible.
+
+SOURCE: "${sourceName}"
+LOCATION DATA:
+${JSON.stringify(digestData.locations ?? [], null, 1)}
+
+LORE DATA:
+${JSON.stringify(digestData.lore ?? [], null, 1)}
+
+ENCOUNTER DATA:
+${JSON.stringify(digestData.encounters ?? [], null, 1)}
+
+ADDITIONAL CONTEXT:
+${digestData.summary ?? ""}
+${existingHint}
+
+Extract dangerous areas with their monster populations, and famous landmarks/ruins:
+{
+  "threatZones": [
+    {
+      "id": "snake_case_id",
+      "name": "Area name",
+      "region": "region_id",
+      "threats": [
+        { "creature": "creature type or name", "density": "unique|low|moderate|high" }
+      ],
+      "safe_travel": false,
+      "travel_warning": "What locals say about this area",
+      "notable_lairs": "Known lairs or monster strongholds"
+    }
+  ],
+  "landmarks": [
+    {
+      "id": "snake_case_id",
+      "name": "Landmark name",
+      "type": "ruins|monument|natural_wonder|ancient_site|magical_nexus|battlefield|tomb|castle|temple",
+      "era": "When built/destroyed/significant",
+      "current_state": "Current condition",
+      "legends": ["What people say about this place"],
+      "associated_factions": ["faction_ids connected to this place"],
+      "description": "2-3 sentences about history and significance"
+    }
+  ]
+}
+
+Rules:
+- Every dangerous area with monster encounters needs a threatZone entry
+- Landmarks are places that NPCs would know as legends or famous sites
+- Include creature types with realistic density (unique for bosses, high for swarms)
+- Return ONLY the JSON`,
+      },
+      {
+        name: "Current Events",
+        key: "currentEvents",
+        digestFields: ["lore", "factions", "plotHooks"],
+        prompt: `You are extracting CURRENT EVENTS from a D&D adventure module to add to a World Bible.
+
+SOURCE: "${sourceName}"
+LORE DATA:
+${JSON.stringify(digestData.lore ?? [], null, 1)}
+
+FACTION DATA:
+${JSON.stringify(digestData.factions ?? [], null, 1)}
+
+PLOT HOOKS:
+${JSON.stringify(digestData.plotHooks ?? [], null, 1)}
+
+ADDITIONAL CONTEXT:
+${digestData.summary ?? ""}
+${existingHint}
+
+Extract current events — things that are HAPPENING in the world during this adventure:
+{
+  "currentEvents": [
+    {
+      "id": "snake_case_id",
+      "event": "Short title (e.g. 'Strahd's Curse Over Barovia')",
+      "description": "2-3 sentences — what is happening and why it matters",
+      "affected_regions": ["region_ids affected"],
+      "affected_factions": ["faction_ids involved"],
+      "era": "When this is happening",
+      "impact": "How this affects daily life, travel, or politics"
+    }
+  ]
+}
+
+Rules:
+- Include the MAIN conflicts and storylines of the adventure
+- Include any background events that affect NPC behavior or world state
+- These should be things NPCs would talk about or react to
+- Return ONLY the JSON`,
+      },
     ];
 
     // ── Run each category pass ───────────────────────────────────
@@ -1282,6 +1985,15 @@ Rules:
         factions: [],
         religions: [],
         geography: [],
+        cultures: [],
+        tradeRoutes: [],
+        powerStructures: [],
+        currentEvents: [],
+        racialDistribution: [],
+        languages: [],
+        threatZones: [],
+        landmarks: [],
+        npcs: [],
       };
     }
     const region = this._bible.regions[regionId];
@@ -1309,72 +2021,83 @@ Rules:
         }
 
         // ── Merge results into Bible ──
-        const entries = parsed[cat.key] ?? parsed.npcs ?? parsed.cities ?? parsed.factions ?? parsed.religions ?? parsed.geography ?? [];
+        // Some category passes return multiple arrays (e.g. cultures + tradeRoutes),
+        // so we iterate over ALL array keys in the parsed response.
+        const allKeys = ["cities", "factions", "npcs", "religions", "geography",
+          "cultures", "tradeRoutes", "powerStructures", "currentEvents",
+          "racialDistribution", "languages", "threatZones", "landmarks"];
+        let totalProcessed = 0;
 
-        for (const entry of entries) {
-          if (!entry.id || !entry.name) continue;
+        for (const mergeKey of allKeys) {
+          const entries = parsed[mergeKey];
+          if (!Array.isArray(entries) || entries.length === 0) continue;
 
-          // Tag with source
-          entry._sources = [sourceTag];
-          entry._regionId = regionId;
+          for (const entry of entries) {
+            // Some entries use "name", some use "event", "deity", etc. — need an identifier
+            const entryName = entry.name ?? entry.event ?? entry.deity ?? entry.area_name;
+            if (!entry.id) continue;
 
-          // Check for existing entry by ID or name
-          const existingByName = this._nameToId?.get(entry.name?.toLowerCase());
-          const existingId = existingByName?.id;
+            // Tag with source
+            entry._sources = [sourceTag];
+            entry._regionId = regionId;
 
-          if (existingId) {
-            // Existing entry found — decide whether to overwrite or supplement
-            let existingEntry;
-            switch (cat.key) {
-              case "cities": existingEntry = this._cityIndex.get(existingId); break;
-              case "factions": existingEntry = this._factionIndex.get(existingId); break;
-              case "religions": existingEntry = this._religionIndex.get(existingId); break;
-              case "geography": existingEntry = this._geoIndex.get(existingId); break;
-            }
+            // Check for existing entry by ID or name
+            const lookupName = (entryName ?? "").toLowerCase();
+            const existingByName = lookupName ? this._nameToId?.get(lookupName) : null;
+            const existingId = existingByName?.id;
 
-            if (existingEntry) {
-              const prevSources = existingEntry._sources ?? [];
-              if (!prevSources.includes(sourceTag)) prevSources.push(sourceTag);
-
-              if (canOverwrite) {
-                // Newer/equal source → full overwrite (book data wins)
-                Object.assign(existingEntry, entry, { _sources: prevSources });
-                results.updated++;
-              } else {
-                // Older source → supplement only: add source tag but do NOT
-                // overwrite descriptions, rulers, or key details. Only fill
-                // in fields that are currently empty/missing.
-                for (const [k, v] of Object.entries(entry)) {
-                  if (k.startsWith("_")) continue;  // skip internal fields
-                  if (k === "id" || k === "name") continue;  // never overwrite identity
-                  const existing = existingEntry[k];
-                  if (!existing || existing === "unknown" || existing === "") {
-                    existingEntry[k] = v;  // fill empty field
-                  }
-                }
-                existingEntry._sources = prevSources;
-                results.updated++;
+            if (existingId) {
+              // Existing entry found — decide whether to overwrite or supplement
+              let existingEntry;
+              switch (mergeKey) {
+                case "cities": existingEntry = this._cityIndex.get(existingId); break;
+                case "factions": existingEntry = this._factionIndex.get(existingId); break;
+                case "religions": existingEntry = this._religionIndex.get(existingId); break;
+                case "geography": existingEntry = this._geoIndex.get(existingId); break;
+                case "cultures": existingEntry = this._cultureIndex.get(existingId); break;
+                case "tradeRoutes": existingEntry = this._tradeRouteIndex.get(existingId); break;
+                case "powerStructures": existingEntry = this._powerStructureIndex.get(existingId); break;
+                case "currentEvents": existingEntry = this._currentEventIndex.get(existingId); break;
+                case "racialDistribution": existingEntry = this._racialDistIndex.get(existingId); break;
+                case "languages": existingEntry = this._languageIndex.get(existingId); break;
+                case "threatZones": existingEntry = this._threatZoneIndex.get(existingId); break;
+                case "landmarks": existingEntry = this._landmarkIndex.get(existingId); break;
+                case "npcs": existingEntry = this._npcIndex.get(existingId); break;
               }
-              continue;
-            }
-          }
 
-          // New entry — add to region
-          switch (cat.key) {
-            case "cities": region.cities.push(entry); break;
-            case "factions": region.factions.push(entry); break;
-            case "npcs":
-              // NPCs stored as a special array on the region
-              if (!region.npcs) region.npcs = [];
-              region.npcs.push(entry);
-              break;
-            case "religions": region.religions.push(entry); break;
-            case "geography": region.geography.push(entry); break;
+              if (existingEntry) {
+                const prevSources = existingEntry._sources ?? [];
+                if (!prevSources.includes(sourceTag)) prevSources.push(sourceTag);
+
+                if (canOverwrite) {
+                  Object.assign(existingEntry, entry, { _sources: prevSources });
+                  results.updated++;
+                } else {
+                  for (const [k, v] of Object.entries(entry)) {
+                    if (k.startsWith("_")) continue;
+                    if (k === "id" || k === "name") continue;
+                    const existing = existingEntry[k];
+                    if (!existing || existing === "unknown" || existing === "") {
+                      existingEntry[k] = v;
+                    }
+                  }
+                  existingEntry._sources = prevSources;
+                  results.updated++;
+                }
+                totalProcessed++;
+                continue;
+              }
+            }
+
+            // New entry — add to region
+            if (!region[mergeKey]) region[mergeKey] = [];
+            region[mergeKey].push(entry);
+            results.merged++;
+            totalProcessed++;
           }
-          results.merged++;
         }
 
-        console.log(`${MODULE_ID} | World Bible merge: ✓ ${cat.name} — ${entries.length} entries processed.`);
+        console.log(`${MODULE_ID} | World Bible merge: ✓ ${cat.name} — ${totalProcessed} entries processed.`);
 
       } catch (err) {
         results.errors.push(`${cat.name}: ${err.message}`);
@@ -1389,6 +2112,325 @@ Rules:
 
     const total = results.merged + results.updated;
     console.log(`${MODULE_ID} | World Bible merge: COMPLETE — ${results.merged} new, ${results.updated} updated, ${results.errors.length} errors. Source: "${sourceName}".`);
+    onProgress(totalSteps, totalSteps, "Complete!", "complete");
+
+    return results;
+  }
+
+  // ── Supplement Merge: run ONLY the new category passes on existing digest data ──
+
+  /**
+   * Run ONLY the 4 new category extraction passes (Cultures & Trade,
+   * Power & Demographics, Threats & Landmarks, Current Events) on an
+   * already-merged digest. Does NOT re-run the original 5 passes.
+   *
+   * @param {object} digestData    - The full digest object
+   * @param {string} sourceName    - Display name of the source
+   * @param {string} sourceFile    - Filename
+   * @param {object} aiProvider    - The AI provider instance
+   * @param {string} worldId       - Current world ID
+   * @param {function} onProgress  - (step, total, category, phase) callback
+   * @param {number|null} publishedYear
+   * @returns {Promise<{ merged: number, updated: number, errors: string[] }>}
+   */
+  async supplementMerge(digestData, sourceName, sourceFile, aiProvider, worldId, onProgress = () => {}, publishedYear = null) {
+    if (!this._bible || !aiProvider || !digestData) {
+      throw new Error("World Bible, AI provider, and digest data are all required.");
+    }
+
+    const sourceTag = `digest:${sourceFile}`;
+    const setting = this._bible.meta?.setting ?? "Forgotten Realms";
+    const results = { merged: 0, updated: 0, skipped: 0, errors: [] };
+    const totalSteps = 4;
+    let step = 0;
+
+    const BIBLE_BASE_YEAR = 2024;
+    const srcYear = publishedYear ?? 0;
+    const canOverwrite = srcYear >= BIBLE_BASE_YEAR;
+
+    const existingNames = [];
+    for (const [name] of this._nameToId ?? []) existingNames.push(name);
+    const existingHint = existingNames.length
+      ? `\n\nThe World Bible already contains these entries (DO NOT duplicate — update/enrich if you have more detail):\n${existingNames.slice(0, 200).join(", ")}`
+      : "";
+
+    // Only the 4 NEW category passes
+    const categories = [
+      {
+        name: "Cultures & Trade",
+        key: "cultures",
+        digestFields: ["locations", "lore", "npcs"],
+        prompt: `You are extracting CULTURAL DETAILS and TRADE ROUTES from a D&D adventure module to add to a World Bible.
+
+SOURCE: "${sourceName}"
+LOCATION DATA:
+${JSON.stringify(digestData.locations ?? [], null, 1)}
+
+LORE DATA:
+${JSON.stringify(digestData.lore ?? [], null, 1)}
+
+NPC DATA (for cultural clues):
+${JSON.stringify((digestData.npcs ?? []).slice(0, 20), null, 1)}
+
+ADDITIONAL CONTEXT:
+${digestData.summary ?? ""}
+${existingHint}
+
+Extract cultural details for distinct areas/peoples in this adventure, AND any trade routes mentioned:
+{
+  "cultures": [
+    {
+      "id": "snake_case_id",
+      "name": "Culture/area name (e.g. 'Barovian', 'Vistani')",
+      "region": "region_id",
+      "greeting": "How locals greet strangers",
+      "cuisine": "Common foods and drinks mentioned or implied",
+      "clothing": "Typical attire",
+      "currency_slang": "Local slang for money if any",
+      "common_threats": "What locals fear or worry about",
+      "social_customs": "Important social norms",
+      "accent_notes": "Speech patterns for NPC dialogue",
+      "taboos": "Forbidden or offensive things",
+      "festivals": "Celebrations or holy days"
+    }
+  ],
+  "tradeRoutes": [
+    {
+      "id": "snake_case_id",
+      "name": "Route name",
+      "type": "road|sea_lane|river|caravan_trail|underground",
+      "endpoints": ["start_location_id", "end_location_id"],
+      "goods": "What is traded",
+      "dangers": "Known threats",
+      "controlledBy": "faction_id or nation_id"
+    }
+  ]
+}
+
+Rules:
+- Extract ALL distinct cultural groups (even small ones)
+- Include speech patterns and customs NPCs would exhibit
+- Return ONLY the JSON`,
+      },
+      {
+        name: "Power & Demographics",
+        key: "powerStructures",
+        digestFields: ["locations", "factions", "npcs"],
+        prompt: `You are extracting POWER STRUCTURES and RACIAL DEMOGRAPHICS from a D&D adventure module to add to a World Bible.
+
+SOURCE: "${sourceName}"
+LOCATION DATA:
+${JSON.stringify(digestData.locations ?? [], null, 1)}
+
+FACTION DATA:
+${JSON.stringify(digestData.factions ?? [], null, 1)}
+
+NPC DATA (rulers, guards, officials):
+${JSON.stringify((digestData.npcs ?? []).slice(0, 30), null, 1)}
+
+ADDITIONAL CONTEXT:
+${digestData.summary ?? ""}
+${existingHint}
+
+Extract power structures for settlements and racial demographics:
+{
+  "powerStructures": [
+    {
+      "id": "snake_case_id",
+      "city": "city_id this applies to",
+      "government": "Who rules and how",
+      "law_enforcement": "Who keeps order",
+      "corruption_level": "low|moderate|high|rampant",
+      "crime_organizations": ["faction_ids"],
+      "taxes": "Tax burden if mentioned",
+      "justice": "How law is enforced"
+    }
+  ],
+  "racialDistribution": [
+    {
+      "id": "snake_case_id",
+      "city": "city_id",
+      "dominant_races": ["race names"],
+      "minority_races": ["race names"],
+      "racial_tensions": "Any prejudices or conflicts",
+      "cultural_notes": "How race affects daily life"
+    }
+  ],
+  "languages": [
+    {
+      "id": "snake_case_id",
+      "region": "region_id",
+      "area_name": "Sub-region or city",
+      "common_languages": ["language names"],
+      "uncommon_languages": ["language names"],
+      "dialect_notes": "Notable speech patterns"
+    }
+  ]
+}
+
+Rules:
+- For every settlement with a ruler or government, create a powerStructures entry
+- Return ONLY the JSON`,
+      },
+      {
+        name: "Threats & Landmarks",
+        key: "threatZones",
+        digestFields: ["locations", "lore", "encounters"],
+        prompt: `You are extracting THREAT ZONES and LEGENDARY LANDMARKS from a D&D adventure module to add to a World Bible.
+
+SOURCE: "${sourceName}"
+LOCATION DATA:
+${JSON.stringify(digestData.locations ?? [], null, 1)}
+
+LORE DATA:
+${JSON.stringify(digestData.lore ?? [], null, 1)}
+
+ENCOUNTER DATA:
+${JSON.stringify(digestData.encounters ?? [], null, 1)}
+
+ADDITIONAL CONTEXT:
+${digestData.summary ?? ""}
+${existingHint}
+
+Extract dangerous areas and famous landmarks:
+{
+  "threatZones": [
+    {
+      "id": "snake_case_id",
+      "name": "Area name",
+      "region": "region_id",
+      "threats": [
+        { "creature": "creature type or name", "density": "unique|low|moderate|high" }
+      ],
+      "safe_travel": false,
+      "travel_warning": "What locals say about this area",
+      "notable_lairs": "Known lairs or monster strongholds"
+    }
+  ],
+  "landmarks": [
+    {
+      "id": "snake_case_id",
+      "name": "Landmark name",
+      "type": "ruins|monument|natural_wonder|ancient_site|magical_nexus|battlefield|tomb|castle|temple",
+      "era": "When built/destroyed/significant",
+      "current_state": "Current condition",
+      "legends": ["What people say about this place"],
+      "associated_factions": ["faction_ids"],
+      "description": "2-3 sentences about history and significance"
+    }
+  ]
+}
+
+Rules:
+- Every dangerous area with monster encounters needs a threatZone entry
+- Landmarks are places NPCs would know as legends
+- Return ONLY the JSON`,
+      },
+      {
+        name: "Current Events",
+        key: "currentEvents",
+        digestFields: ["lore", "factions", "plotHooks"],
+        prompt: `You are extracting CURRENT EVENTS from a D&D adventure module to add to a World Bible.
+
+SOURCE: "${sourceName}"
+LORE DATA:
+${JSON.stringify(digestData.lore ?? [], null, 1)}
+
+FACTION DATA:
+${JSON.stringify(digestData.factions ?? [], null, 1)}
+
+PLOT HOOKS:
+${JSON.stringify(digestData.plotHooks ?? [], null, 1)}
+
+ADDITIONAL CONTEXT:
+${digestData.summary ?? ""}
+${existingHint}
+
+Extract current events happening during this adventure:
+{
+  "currentEvents": [
+    {
+      "id": "snake_case_id",
+      "event": "Short title (e.g. 'Strahd's Curse Over Barovia')",
+      "description": "2-3 sentences — what is happening and why it matters",
+      "affected_regions": ["region_ids affected"],
+      "affected_factions": ["faction_ids involved"],
+      "era": "When this is happening",
+      "impact": "How this affects daily life, travel, or politics"
+    }
+  ]
+}
+
+Rules:
+- Include main conflicts and background events that affect NPC behavior
+- These should be things NPCs would talk about
+- Return ONLY the JSON`,
+      },
+    ];
+
+    // Re-use the same merge infrastructure
+    const regionId = `digest_${sourceFile.replace(/[^a-z0-9]/gi, "_").toLowerCase()}`;
+    if (!this._bible.regions[regionId]) {
+      console.warn(`${MODULE_ID} | Supplement merge: region "${regionId}" not found — run a full merge first.`);
+      return results;
+    }
+    const region = this._bible.regions[regionId];
+
+    for (const cat of categories) {
+      step++;
+      onProgress(step, totalSteps, cat.name, "generating");
+      console.log(`${MODULE_ID} | Supplement merge: [${step}/${totalSteps}] ${cat.name} from "${sourceName}"...`);
+
+      const hasData = cat.digestFields.some(f => (digestData[f]?.length ?? 0) > 0);
+      if (!hasData) {
+        console.log(`${MODULE_ID} | Supplement merge: skipping ${cat.name} — no digest data.`);
+        continue;
+      }
+
+      try {
+        const response = await aiProvider.chat(cat.prompt, "", "", [], [], { maxTokens: 16000, timeout: 300_000 });
+        const parsed = this._parseJSON(response);
+
+        if (!parsed) {
+          results.errors.push(`${cat.name}: failed to parse AI response`);
+          continue;
+        }
+
+        const allKeys = ["cultures", "tradeRoutes", "powerStructures", "currentEvents",
+          "racialDistribution", "languages", "threatZones", "landmarks"];
+        let totalProcessed = 0;
+
+        for (const mergeKey of allKeys) {
+          const entries = parsed[mergeKey];
+          if (!Array.isArray(entries) || entries.length === 0) continue;
+
+          for (const entry of entries) {
+            const entryName = entry.name ?? entry.event ?? entry.deity ?? entry.area_name;
+            if (!entry.id) continue;
+
+            entry._sources = [sourceTag];
+            entry._regionId = regionId;
+
+            if (!region[mergeKey]) region[mergeKey] = [];
+            region[mergeKey].push(entry);
+            results.merged++;
+            totalProcessed++;
+          }
+        }
+
+        console.log(`${MODULE_ID} | Supplement merge: ✓ ${cat.name} — ${totalProcessed} entries processed.`);
+
+      } catch (err) {
+        results.errors.push(`${cat.name}: ${err.message}`);
+        console.error(`${MODULE_ID} | Supplement merge: ✗ ${cat.name} — error:`, err.message || err);
+      }
+    }
+
+    this._buildIndexes();
+    await this.save(worldId);
+    await this.backup(worldId);
+
+    console.log(`${MODULE_ID} | Supplement merge: COMPLETE — ${results.merged} new entries. Source: "${sourceName}".`);
     onProgress(totalSteps, totalSteps, "Complete!", "complete");
 
     return results;
@@ -1551,6 +2593,13 @@ Rules:
       factionCount: this._factionIndex?.size ?? 0,
       deityCount: this._religionIndex?.size ?? 0,
       geoCount: this._geoIndex?.size ?? 0,
+      cultureCount: this._cultureIndex?.size ?? 0,
+      tradeRouteCount: this._tradeRouteIndex?.size ?? 0,
+      powerStructureCount: this._powerStructureIndex?.size ?? 0,
+      eventCount: this._currentEventIndex?.size ?? 0,
+      threatZoneCount: this._threatZoneIndex?.size ?? 0,
+      landmarkCount: this._landmarkIndex?.size ?? 0,
+      npcCount: this._npcIndex?.size ?? 0,
     };
   }
 }

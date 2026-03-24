@@ -3526,10 +3526,22 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
   static _onCopyMessage(event, target) {
     const idx = parseInt(target.dataset.index ?? target.closest("[data-index]")?.dataset.index);
     const msg = this._chatHistory[idx];
-    if (msg) {
-      navigator.clipboard.writeText(msg.content);
-      ui.notifications.info("Copied to clipboard!");
-    }
+    if (!msg) return;
+
+    // Clean up the content for clipboard:
+    // 1. Strip markdown bold/italic markers
+    // 2. Strip any [NARRATION] / [/NARRATION] tags
+    // 3. Strip leading "Entering X:" or "**Entering X:**" title lines
+    let text = msg.content
+      .replace(/\[\/?(NARRATION|narration)\]/g, "")
+      .replace(/\*\*/g, "")
+      .replace(/\*/g, "")
+      .replace(/^#{1,3}\s+.*\n?/gm, "")       // strip markdown headers
+      .replace(/^> /gm, "")                     // strip blockquote markers
+      .trim();
+
+    navigator.clipboard.writeText(text);
+    ui.notifications.info("Copied to clipboard!");
   }
 
   /**
@@ -4096,7 +4108,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
         const dispEnabled = game.settings.get(MODULE_ID, "enableDispositionTags") ?? true;
         if (dispEnabled && this.reputation && this._chatHistory[aiMsgIndex]) {
           const fullResponse = this._chatHistory[aiMsgIndex].content;
-          const dispTag = this.reputation.parseDispositionTag(fullResponse);
+          const dispTag = this.reputation.parseDispositionTag?.(fullResponse) ?? null;
           if (dispTag && dispTag.value !== null) {
             // Strip the tag from the displayed message
             this._chatHistory[aiMsgIndex].content = fullResponse.replace(dispTag.raw, "").trim();
@@ -5498,8 +5510,8 @@ Appropriate loot, XP, and story rewards.
       // Also check reputation context for this NPC
       if (this.reputation) {
         try {
-          const repCtx = this.reputation.buildReputationContext(name);
-          if (repCtx) parts.push(repCtx);
+          const knowledge = this.reputation.getNpcKnowledge?.(null, null);
+          if (knowledge?.promptText) parts.push(knowledge.promptText);
         } catch { /* non-critical */ }
       }
 
@@ -5793,9 +5805,15 @@ Appropriate loot, XP, and story rewards.
     for (const name of candidates) {
       if (!name || seen.has(name.toLowerCase())) continue;
       seen.add(name.toLowerCase());
-      const ctx = this.reputation.buildReputationContext(name);
-      if (ctx) contextParts.push(ctx);
-      if (contextParts.length >= 2) break; // limit to avoid bloating prompt
+      try {
+        // getNpcKnowledge takes (factionId, location) — pass null for both
+        // and let it determine context from notoriety level
+        const knowledge = this.reputation.getNpcKnowledge?.(null, null);
+        if (knowledge?.promptText) contextParts.push(knowledge.promptText);
+      } catch (err) {
+        console.warn("ace-engine | Reputation context skipped:", err.message);
+      }
+      if (contextParts.length >= 1) break; // one reputation block is enough
     }
 
     return contextParts.join("\n");
@@ -7567,11 +7585,21 @@ MAGNITUDE: [local/regional/major/legendary]`;
     if (cats.lore) catTags.push(`${cats.lore} lore`);
     const catTagsHtml = catTags.length ? `<div class="ace-library-card-tags">${catTags.map(t => `<span class="ace-library-tag">${t}</span>`).join("")}</div>` : "";
 
-    // Merge status
+    // Merge status — check if ANY Bible region was created from this digest
     const wb = this._worldBible;
     const regionKey = `digest_${(d.sourceFile ?? "").replace(/[^a-z0-9]/gi, "_").toLowerCase()}`;
-    const hasMerged = wb?.data?.regions?.[regionKey]?.cities?.length > 0
-                   || wb?.data?.regions?.[regionKey]?.factions?.length > 0;
+    let hasMerged = wb?.data?.regions?.[regionKey]?.cities?.length > 0
+                 || wb?.data?.regions?.[regionKey]?.factions?.length > 0;
+    // Fallback: if the filename changed (re-upload), search all digest regions by keyword overlap
+    if (!hasMerged && wb?.data?.regions) {
+      const srcWords = (d.sourceFile ?? d.displayName ?? "").toLowerCase().replace(/[^a-z0-9]/g, " ").split(/\s+/).filter(w => w.length > 3);
+      for (const [rk, rv] of Object.entries(wb.data.regions)) {
+        if (!rk.startsWith("digest_")) continue;
+        if (!(rv.cities?.length > 0 || rv.factions?.length > 0)) continue;
+        const matches = srcWords.filter(w => rk.includes(w));
+        if (matches.length >= 3) { hasMerged = true; break; }
+      }
+    }
 
     // Pipeline
     let pipelineHtml = `<div class="ace-pipeline">
@@ -7654,6 +7682,14 @@ MAGNITUDE: [local/regional/major/legendary]`;
             <span class="ace-bible-badge"><strong>${stats.factionCount}</strong> Factions</span>
             <span class="ace-bible-badge"><strong>${stats.deityCount}</strong> Deities</span>
             <span class="ace-bible-badge"><strong>${stats.geoCount}</strong> Geography</span>
+          </div>
+          <div class="ace-bible-stats ace-bible-stats-extended">
+            ${stats.cultureCount ? `<span class="ace-bible-badge"><strong>${stats.cultureCount}</strong> Cultures</span>` : ""}
+            ${stats.tradeRouteCount ? `<span class="ace-bible-badge"><strong>${stats.tradeRouteCount}</strong> Trade Routes</span>` : ""}
+            ${stats.eventCount ? `<span class="ace-bible-badge"><strong>${stats.eventCount}</strong> Events</span>` : ""}
+            ${stats.threatZoneCount ? `<span class="ace-bible-badge"><strong>${stats.threatZoneCount}</strong> Threat Zones</span>` : ""}
+            ${stats.landmarkCount ? `<span class="ace-bible-badge"><strong>${stats.landmarkCount}</strong> Landmarks</span>` : ""}
+            ${stats.npcCount ? `<span class="ace-bible-badge"><strong>${stats.npcCount}</strong> NPCs</span>` : ""}
           </div>
           <button class="ace-lib-action ace-bible-regen" data-action="worldBibleRegenerate"
                   title="Regenerate the World Bible (costs API credits)">
@@ -7745,8 +7781,18 @@ MAGNITUDE: [local/regional/major/legendary]`;
     const hasDigest = !!digestMeta;
     const wb = this._worldBible;
     const regionKey = `digest_${(doc.fileName || "").replace(/[^a-z0-9]/gi, "_").toLowerCase()}`;
-    const hasMerged = wb?.data?.regions?.[regionKey]?.cities?.length > 0
-                   || wb?.data?.regions?.[regionKey]?.factions?.length > 0;
+    let hasMerged = wb?.data?.regions?.[regionKey]?.cities?.length > 0
+                 || wb?.data?.regions?.[regionKey]?.factions?.length > 0;
+    // Fallback: if the filename changed (re-upload), search all digest regions by keyword overlap
+    if (!hasMerged && wb?.data?.regions) {
+      const srcWords = (doc.fileName ?? doc.displayName ?? "").toLowerCase().replace(/[^a-z0-9]/g, " ").split(/\s+/).filter(w => w.length > 3);
+      for (const [rk, rv] of Object.entries(wb.data.regions)) {
+        if (!rk.startsWith("digest_")) continue;
+        if (!(rv.cities?.length > 0 || rv.factions?.length > 0)) continue;
+        const matches = srcWords.filter(w => rk.includes(w));
+        if (matches.length >= 3) { hasMerged = true; break; }
+      }
+    }
 
     // Build pipeline HTML
     let pipelineHtml = "";
@@ -8243,7 +8289,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
    * Shared merge execution — takes over the card with a progress bar UI.
    */
   static async _executeBibleMerge(cardEl, displayName, sourceFile, digestData, publishedYear) {
-    const totalSteps = 5;
+    const totalSteps = 9;  // 5 original + 4 supplement passes
 
     // Save original card HTML for restore on error
     const origHtml = cardEl.innerHTML;
@@ -8271,6 +8317,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
     const counterEl = cardEl.querySelector(".ace-merge-progress-counter");
 
     try {
+      // Phase 1: Original 5 merge passes
       const results = await game.modules.get("ace-engine")?.api?.mergeDigestIntoBible(
         digestData.digest,
         displayName,
@@ -8284,21 +8331,47 @@ MAGNITUDE: [local/regional/major/legendary]`;
         publishedYear
       );
 
+      // Phase 2: Supplement 4 new category passes (steps 6-9)
+      let suppResults = { merged: 0, updated: 0, skipped: 0, errors: [] };
+      try {
+        suppResults = await game.modules.get("ace-engine")?.api?.supplementMergeDigest(
+          digestData.digest,
+          displayName,
+          sourceFile,
+          (step, total, category) => {
+            const globalStep = 5 + step;  // offset by original 5 passes
+            const pct = Math.round((globalStep / totalSteps) * 100);
+            if (stepEl) stepEl.textContent = category;
+            if (fillEl) fillEl.style.width = `${pct}%`;
+            if (counterEl) counterEl.textContent = `${globalStep} / ${totalSteps}`;
+          },
+          publishedYear
+        );
+      } catch (suppErr) {
+        console.warn(`${MODULE_ID} | Supplement merge failed (non-fatal):`, suppErr);
+      }
+
+      // Combine results from both phases
+      const totalMerged = (results.merged ?? 0) + (suppResults.merged ?? 0);
+      const totalUpdated = (results.updated ?? 0) + (suppResults.updated ?? 0);
+      const totalSkipped = (results.skipped ?? 0) + (suppResults.skipped ?? 0);
+      const allErrors = [...(results.errors ?? []), ...(suppResults.errors ?? [])];
+
       // Show completion state
       if (stepEl) stepEl.textContent = "Complete!";
       if (fillEl) fillEl.style.width = "100%";
       if (counterEl) counterEl.textContent = `${totalSteps} / ${totalSteps}`;
 
       const summaryEl = cardEl.querySelector(".ace-merge-progress-source");
-      if (summaryEl) summaryEl.textContent = `${results.merged} new entries, ${results.updated} updated${results.skipped ? `, ${results.skipped} skipped` : ""}`;
+      if (summaryEl) summaryEl.textContent = `${totalMerged} new entries, ${totalUpdated} updated${totalSkipped ? `, ${totalSkipped} skipped` : ""}`;
 
       // Add done class for green glow
       const progressEl = cardEl.querySelector(".ace-merge-progress");
       if (progressEl) progressEl.classList.add("ace-merge-done");
 
-      const msg = `Merged "${displayName}" into World Bible: ${results.merged} new, ${results.updated} updated${results.skipped ? `, ${results.skipped} skipped (older source)` : ""}.`;
-      if (results.errors?.length) {
-        ui.notifications.warn(`${msg} (${results.errors.length} errors — check console)`);
+      const msg = `Merged "${displayName}" into World Bible: ${totalMerged} new, ${totalUpdated} updated${totalSkipped ? `, ${totalSkipped} skipped (older source)` : ""}.`;
+      if (allErrors.length) {
+        ui.notifications.warn(`${msg} (${allErrors.length} errors — check console)`);
       } else {
         ui.notifications.info(`ACE | ${msg}`);
       }
@@ -8495,13 +8568,28 @@ MAGNITUDE: [local/regional/major/legendary]`;
           const mergeResults = await game.modules.get(MODULE_ID)?.api?.mergeDigestIntoBible(
             digestResult, doc.displayName, doc.fileName,
             (step, total, category) => {
-              this._updateLibraryCardStatus(docId, `📖 Merging: ${category}…`);
+              this._updateLibraryCardStatus(docId, `📖 Merging: ${category}… (${step}/${total})`);
             },
             doc.publishedYear ?? null
           );
+          // Run supplement merge (4 new category passes) immediately after
+          let suppResults = { merged: 0, updated: 0 };
+          try {
+            suppResults = await game.modules.get(MODULE_ID)?.api?.supplementMergeDigest(
+              digestResult, doc.displayName, doc.fileName,
+              (step, total, category) => {
+                this._updateLibraryCardStatus(docId, `📖 Enriching: ${category}… (${step}/${total})`);
+              },
+              doc.publishedYear ?? null
+            );
+          } catch (suppErr) {
+            console.warn(`${MODULE_ID} | Supplement merge failed (non-fatal):`, suppErr);
+          }
           this._updateLibraryCardStatus(docId, "");
           this._refreshLibraryUI();
-          ui.notifications.info(`ACE | Auto-merged "${doc.displayName}": ${mergeResults.merged} new, ${mergeResults.updated} updated.`);
+          const totalMerged = (mergeResults.merged ?? 0) + (suppResults.merged ?? 0);
+          const totalUpdated = (mergeResults.updated ?? 0) + (suppResults.updated ?? 0);
+          ui.notifications.info(`ACE | Auto-merged "${doc.displayName}": ${totalMerged} new, ${totalUpdated} updated.`);
         }
       } catch (mergeErr) {
         console.warn(`${MODULE_ID} | Auto-merge failed (non-fatal):`, mergeErr);
@@ -8533,8 +8621,10 @@ MAGNITUDE: [local/regional/major/legendary]`;
    * @param {FileList} fileList
    */
   async _processUploadedFiles(fileList) {
+    console.log(`${MODULE_ID} | Upload handler fired — ${fileList?.length ?? 0} file(s)`);
     const store = this._documentEngine?._mm?.documents;
     if (!store) {
+      console.error(`${MODULE_ID} | Document store missing: _documentEngine=${!!this._documentEngine}, _mm=${!!this._documentEngine?._mm}, documents=${!!this._documentEngine?._mm?.documents}`);
       ui.notifications.error("ACE | Document store not available. Is memory initialized?");
       return;
     }
@@ -8557,8 +8647,17 @@ MAGNITUDE: [local/regional/major/legendary]`;
       // 1. Upload raw file to Foundry library directory
       let storedPath;
       try {
-        const result = await _FP().upload("data", libDir, file, { notify: false });
-        storedPath = result.path;
+        console.log(`${MODULE_ID} | Uploading "${file.name}" (${(file.size / 1024 / 1024).toFixed(1)} MB) to ${libDir}...`);
+        const fp = _FP();
+        console.log(`${MODULE_ID} | FilePicker resolved:`, typeof fp, fp?.name ?? fp?.constructor?.name);
+        const result = await fp.upload("data", libDir, file, { notify: false });
+        console.log(`${MODULE_ID} | Upload result:`, result);
+        storedPath = result?.path;
+        if (!storedPath) {
+          console.error(`${MODULE_ID} | Upload returned no path:`, result);
+          ui.notifications.error(`ACE | Upload succeeded but no file path returned for ${file.name}`);
+          continue;
+        }
       } catch (err) {
         console.error(`${MODULE_ID} | Upload failed for ${file.name}:`, err);
         ui.notifications.error(`ACE | Failed to upload ${file.name}`);
@@ -8670,9 +8769,11 @@ MAGNITUDE: [local/regional/major/legendary]`;
       });
 
       store.setPageCount(docId, pages.length);
-      this._updateLibraryCardStatus(docId, `⏳ Chunking ${pages.length} pages…`);
+      this._updateLibraryCardStatus(docId, `⏳ Chunking ${pages.length} pages…`, 0);
 
-      const chunkResult = this._documentEngine.chunkPages(pages);
+      const chunkResult = await this._documentEngine.chunkPages(pages, (cur, tot) => {
+        this._updateLibraryCardStatus(docId, `⏳ Chunking page ${cur}/${tot}…`, cur / tot);
+      });
       store.setChunks(docId, chunkResult);
 
       // ── Scanned-PDF detection ─────────────────────────────────
@@ -8720,8 +8821,9 @@ MAGNITUDE: [local/regional/major/legendary]`;
       // ── Generate semantic embeddings (Phase 5 — optional, requires Ollama) ──
       try {
         const embOk = await this._documentEngine.generateEmbeddings(docId, (cur, tot) => {
-          if (cur % 50 === 0 || cur === tot) {
+          if (cur % 10 === 0 || cur === tot) {
             console.log(`${MODULE_ID} | Embedding chunk ${cur}/${tot}`);
+            this._updateLibraryCardStatus(docId, `⏳ Embedding ${cur}/${tot} chunks…`, cur / tot);
           }
         });
         if (embOk) {
@@ -8751,7 +8853,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
     } else if (type === "txt" || type === "md") {
       // ── Text / Markdown: chunk by paragraphs or headings ──
       const text = await file.text();
-      const txtResult = this._documentEngine.chunkTextFile(text, type);
+      const txtResult = await this._documentEngine.chunkTextFile(text, type);
       store.setChunks(docId, txtResult);
 
       // Auto-extract tags
@@ -8774,7 +8876,10 @@ MAGNITUDE: [local/regional/major/legendary]`;
       // Generate semantic embeddings (Phase 5)
       try {
         await this._documentEngine.generateEmbeddings(docId, (cur, tot) => {
-          if (cur % 50 === 0 || cur === tot) console.log(`${MODULE_ID} | Embedding chunk ${cur}/${tot}`);
+          if (cur % 10 === 0 || cur === tot) {
+            console.log(`${MODULE_ID} | Embedding chunk ${cur}/${tot}`);
+            this._updateLibraryCardStatus(docId, `⏳ Embedding ${cur}/${tot} chunks…`, cur / tot);
+          }
         });
       } catch (_) { /* non-fatal */ }
 

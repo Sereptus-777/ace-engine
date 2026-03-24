@@ -1,719 +1,707 @@
 // ============================================================
-// ACE — Reputation / Word-of-Mouth Engine
-//
-// Tracks faction-level awareness of PCs based on encounters.
-// When PCs fight/talk/kill NPCs of a type, other NPCs of the
-// same type may later "know about" the PCs — decaying over time.
-// Also handles disposition auto-update via AI response tags.
+// ACE — AI Campaign Engine — Party Reputation Engine
+// Tracks what the party has done and makes that knowledge
+// available to NPCs based on faction and notoriety level.
 // ============================================================
 
-import { MODULE_ID } from "./ace-engine.mjs";
+const MODULE_ID = "ace-engine";
+const REPUTATION_DIR  = (worldId) => `worlds/${worldId}/ace-engine`;
+const REPUTATION_FILE = "ace-party-reputation.json";
 
-// ── Significance weights by encounter kind ──────────────────
-const SIGNIFICANCE = {
-  combat:       0.7,
-  kill:         0.9,
-  conversation: 0.3,
-};
+// ── v13-safe FilePicker access ─────────────────────────────────
+const _FP = () =>
+  foundry.applications?.apps?.FilePicker?.implementation ??
+  globalThis.FilePicker;
 
-// ── Survival multipliers ────────────────────────────────────
-const SURVIVAL_BONUS = {
-  survived: 1.5,
-  fled:     1.3,
-  killed:   0.7,
-  unknown:  1.0,
-};
+/** Silent upload — suppresses Foundry notification toast. */
+let _silentDepth = 0;
+let _origNotifyInfo = null;
+async function _silentUpload(source, dir, file) {
+  try {
+    if (ui.notifications) {
+      if (_silentDepth === 0) _origNotifyInfo = ui.notifications.info;
+      _silentDepth++;
+      ui.notifications.info = () => {};
+    }
+    return await _FP().upload(source, dir, file, { notify: false });
+  } finally {
+    if (ui.notifications && _silentDepth > 0) {
+      _silentDepth--;
+      if (_silentDepth === 0 && _origNotifyInfo) {
+        ui.notifications.info = _origNotifyInfo;
+        _origNotifyInfo = null;
+      }
+    }
+  }
+}
 
-// ── Tuning constants ────────────────────────────────────────
-const DECAY_PER_SCENE       = 0.85;   // 15% decay per scene transition
-const VAGUE_THRESHOLD       = 0.25;   // ≥ 0.25 = vague rumors
-const DETAILED_THRESHOLD    = 0.60;   // ≥ 0.60 = detailed knowledge
-const MAX_ENCOUNTERS        = 50;     // max stored per faction
-const DIRECT_FLOOR          = 0.30;   // Direct encounters never decay below this
+// ── Constants ──────────────────────────────────────────────────
+const NOTORIETY_LEVELS = ["unknown", "local", "regional", "continental", "legendary"];
+const STANDING_VALUES  = ["revered", "friendly", "neutral", "suspicious", "hostile", "hated"];
+const IMPACT_LEVELS    = ["local", "regional", "continental", "legendary"];
 
-// ── NPC Stat Modifiers for propagation ────────────────────
-// How well an NPC spreads info (INT + CHA of the original NPC)
-// and how well the receiving NPC picks it up (WIS + INT)
-const SPREAD_BONUS = {
-  // Spreader: High INT/CHA = better description of events
-  low:     0.7,   // INT or CHA ≤ 7  → poor communicator
-  average: 1.0,   // 8-14 → normal
-  high:    1.3,   // ≥ 15 → eloquent/charismatic spreader
-};
+/** Build an empty reputation data structure. */
+function _emptyData(worldId) {
+  return {
+    meta: {
+      worldId,
+      savedAt: new Date().toISOString(),
+      version: 1,
+    },
+    notoriety:       "unknown",
+    deeds:           [],
+    factionStanding: {},
+    titles:          [],
+    knownInRegions:  [],
+  };
+}
 
-const RECEIVE_BONUS = {
-  // Receiver: High WIS/INT = pays attention to rumors
-  low:     0.7,   // WIS or INT ≤ 7 → oblivious
-  average: 1.0,   // 8-14 → normal
-  high:    1.2,   // ≥ 15 → perceptive, listens carefully
-};
-
-// ── Intelligence Network Levels ───────────────────────────
-// GM-configurable per faction: controls how much PC detail flows into AI prompts
-const INTEL_LEVELS = {
-  none:       0,   // Only faction rumors (default)
-  informants: 1,   // Knows names and general descriptions (tavern spies)
-  extensive:  2,   // Knows equipment, abilities, recent activities (scrying/familiar network)
-  omniscient: 3,   // Knows everything (godlike beings, hive minds)
-};
-
-// ── Disposition constants (mirrors Foundry) ─────────────────
-const DISP = {
-  HOSTILE:  -1,
-  NEUTRAL:   0,
-  FRIENDLY:  1,
-  SECRET:   -2,
-};
-
-const DISP_LABELS = { [-2]: "Secret", [-1]: "Hostile", 0: "Neutral", 1: "Friendly" };
-
+// ── ReputationEngine ───────────────────────────────────────────
 export class ReputationEngine {
-
-  /**
-   * @param {object} memoryManager — AceMemoryManager instance (has .world, .npcs, .history)
-   */
-  constructor(memoryManager) {
-    this._mm = memoryManager;
+  constructor() {
+    this._data        = null;
+    this._loaded      = false;
+    this._dirty       = false;
+    this._deedCounter = 0;
   }
 
-  // ── Creature Type Resolution ──────────────────────────────
+  // ── Persistence ─────────────────────────────────────────────
 
   /**
-   * Extract the creature-type faction key from a Foundry actor.
-   * dnd5e: system.details.type.value  → "goblinoid", "elemental", etc.
-   * PF2e:  system.details.creatureType
-   * Fallback: race or actor type
-   * @param {Actor} actor
-   * @returns {string|null}
+   * Load reputation data from disk for the given world.
+   * Creates an empty structure if the file does not exist.
+   * @param {string} worldId
    */
-  resolveCreatureType(actor) {
-    if (!actor?.system) return null;
+  async load(worldId) {
+    const path = `${REPUTATION_DIR(worldId)}/${REPUTATION_FILE}`;
+    try {
+      const response = await fetch(`/${path}?_=${Date.now()}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const json = await response.json();
+      this._data = json;
 
-    // dnd5e primary: creature type ("goblinoid", "undead", "elemental", etc.)
-    const typeValue = actor.system?.details?.type?.value;
-    if (typeValue && typeof typeValue === "string" && typeValue.trim()) {
-      return typeValue.toLowerCase().trim();
-    }
-
-    // dnd5e subtype fallback ("goblin", "fire", etc.)
-    const subtype = actor.system?.details?.type?.subtype;
-    if (subtype && typeof subtype === "string" && subtype.trim()) {
-      return subtype.toLowerCase().trim();
-    }
-
-    // PF2e: creatureType
-    const pf2eType = actor.system?.details?.creatureType;
-    if (pf2eType && typeof pf2eType === "string" && pf2eType.trim()) {
-      return pf2eType.toLowerCase().trim();
-    }
-
-    // Generic fallback: race field
-    const race = actor.system?.details?.race?.name
-              ?? actor.system?.details?.race;
-    if (race && typeof race === "string" && race.trim()) {
-      return race.toLowerCase().trim();
-    }
-
-    return null;
-  }
-
-  /**
-   * Resolve the faction key for an actor.
-   * Checks if any GM-defined faction absorbs this creature type,
-   * otherwise uses the creature type directly.
-   * @param {Actor} actor
-   * @returns {string|null}
-   */
-  resolveFactionKey(actor) {
-    const creatureType = this.resolveCreatureType(actor);
-    if (!creatureType) return null;
-
-    // Check if any manually-grouped faction absorbs this creature type
-    const factions = this._mm.world.getFactions();
-    for (const [key, fac] of Object.entries(factions)) {
-      if (fac.creatureTypes && Array.isArray(fac.creatureTypes)) {
-        if (fac.creatureTypes.includes(creatureType)) return key;
-      }
-    }
-
-    // Otherwise use the creature type itself as the faction key
-    return creatureType;
-  }
-
-  // ── Faction Management ────────────────────────────────────
-
-  /**
-   * Ensure a faction entry exists in WorldStore. Auto-creates if missing.
-   * @param {string} key — Faction key (creature type string)
-   * @param {string} [displayName] — Human-friendly name
-   */
-  ensureFaction(key, displayName) {
-    if (!key || !this._mm?.world) return;
-    const factions = this._mm.world._data.factions;
-    if (factions[key]) return; // already exists
-
-    factions[key] = {
-      displayName: displayName ?? key.charAt(0).toUpperCase() + key.slice(1),
-      encounters: [],
-    };
-    this._mm.world.markDirty();
-  }
-
-  // ── Log Reputation Events ─────────────────────────────────
-
-  /**
-   * Record an encounter between PCs and an NPC faction.
-   * Called when combat ends, an NPC is killed, or conversation occurs.
-   * @param {object} opts
-   * @param {string} opts.factionKey — Creature type / faction key
-   * @param {string} opts.kind       — "combat" | "kill" | "conversation"
-   * @param {string} opts.outcome    — "survived" | "killed" | "fled"
-   * @param {string} opts.npcName    — NPC name(s) involved
-   * @param {string[]} opts.pcNames  — PC names involved
-   * @param {string} opts.scene      — Scene name
-   * @param {string} opts.summary    — AI-readable summary (max 300 chars)
-   * @param {object} [opts.npcStats] — {int, wis, cha} of the NPC involved
-   * @param {object} [opts.pcSnapshots] — PC state at encounter time
-   * @param {boolean} [opts.direct] — True if this NPC personally encountered the PCs
-   *                                   (direct encounters never fully decay, min 30% awareness)
-   */
-  logEncounter({ factionKey, kind, outcome, npcName, pcNames, scene, summary, npcStats, pcSnapshots, direct }) {
-    if (!factionKey || !this._mm?.world) return;
-
-    this.ensureFaction(factionKey);
-    const fac = this._mm.world._data.factions[factionKey];
-    if (!fac) return;
-
-    // Auto-snapshot PCs if not provided
-    const snapshots = pcSnapshots ?? this._snapshotPCs(pcNames);
-
-    fac.encounters.push({
-      t:       Math.floor(Date.now() / 1000),
-      sc:      this.getSceneCounter(),
-      scene:   scene ?? "",
-      kind:    kind ?? "combat",
-      outcome: outcome ?? "unknown",
-      npcName: npcName ?? "Unknown",
-      pcNames: pcNames ?? [],
-      summary: (summary ?? "").slice(0, 300),
-      // NPC stats of the spreader (affects how well info propagates)
-      npcStats: npcStats ?? null,
-      // PC state at time of encounter (for change detection later)
-      pcSnap:  snapshots,
-      // Direct encounters (NPC personally met the PCs) never fully decay
-      direct:  !!direct,
-    });
-
-    // Prune oldest if over limit
-    if (fac.encounters.length > MAX_ENCOUNTERS) {
-      fac.encounters.splice(0, fac.encounters.length - MAX_ENCOUNTERS);
-    }
-
-    this._mm.world.markDirty();
-    this._mm._scheduleSave?.("world");
-
-    console.log(`${MODULE_ID} | Reputation: logged ${kind} event for faction "${factionKey}" — ${npcName} (${outcome})`);
-  }
-
-  // ── PC Snapshot ─────────────────────────────────────────────
-
-  /**
-   * Capture current PC state for storage in encounter records.
-   * Used for change detection when re-encountering ("you've grown stronger").
-   * @param {string[]} pcNames
-   * @returns {object} Map of pcName → snapshot
-   */
-  _snapshotPCs(pcNames) {
-    if (!pcNames?.length) return {};
-    const snapshots = {};
-    for (const name of pcNames) {
-      const actor = game.actors?.getName(name);
-      if (!actor) continue;
-      snapshots[name] = {
-        level:   actor.system?.details?.level ?? 0,
-        class:   actor.items?.find(i => i.type === "class")?.name ?? "",
-        race:    actor.system?.details?.race?.value ?? actor.system?.details?.race ?? "",
-        hp:      actor.system?.attributes?.hp?.value ?? 0,
-        maxHp:   actor.system?.attributes?.hp?.max ?? 0,
-        ac:      actor.system?.attributes?.ac?.value ?? 0,
-        int:     actor.system?.abilities?.int?.value ?? 10,
-        wis:     actor.system?.abilities?.wis?.value ?? 10,
-        cha:     actor.system?.abilities?.cha?.value ?? 10,
-        str:     actor.system?.abilities?.str?.value ?? 10,
-        weapons: this._getNotableWeapons(actor),
-        gear:    this._getNotableGear(actor),
-      };
-    }
-    return snapshots;
-  }
-
-  /**
-   * Get notable weapon names from an actor (equipped or most powerful).
-   * @param {Actor} actor
-   * @returns {string[]}
-   */
-  _getNotableWeapons(actor) {
-    if (!actor?.items) return [];
-    return actor.items
-      .filter(i => i.type === "weapon" && (i.system?.equipped || i.system?.quantity > 0))
-      .map(i => i.name)
-      .slice(0, 3); // max 3
-  }
-
-  /**
-   * Get notable gear (magic items, armor, shields).
-   * @param {Actor} actor
-   * @returns {string[]}
-   */
-  _getNotableGear(actor) {
-    if (!actor?.items) return [];
-    const notable = [];
-    // Equipped armor
-    const armor = actor.items.find(i => i.type === "equipment" && i.system?.armor?.type && i.system?.equipped);
-    if (armor) notable.push(armor.name);
-    // Magic items (rarity uncommon+)
-    const rarities = new Set(["uncommon", "rare", "veryRare", "legendary", "artifact"]);
-    for (const item of actor.items) {
-      if (rarities.has(item.system?.rarity) && notable.length < 5) {
-        notable.push(item.name);
-      }
-    }
-    return notable;
-  }
-
-  // ── PC Change Detection ─────────────────────────────────────
-
-  /**
-   * Compare current PC state against a stored snapshot.
-   * Returns human-readable changes for AI context.
-   * @param {string} pcName
-   * @param {object} oldSnapshot
-   * @returns {string[]} Array of change descriptions
-   */
-  detectPcChanges(pcName, oldSnapshot) {
-    if (!oldSnapshot) return [];
-    const actor = game.actors?.getName(pcName);
-    if (!actor) return [];
-
-    const changes = [];
-    const currentLevel = actor.system?.details?.level ?? 0;
-    const currentWeapons = this._getNotableWeapons(actor);
-    const currentGear = this._getNotableGear(actor);
-    const currentAc = actor.system?.attributes?.ac?.value ?? 0;
-
-    if (currentLevel > (oldSnapshot.level ?? 0)) {
-      changes.push(`${pcName} has grown more powerful (was level ${oldSnapshot.level}, now level ${currentLevel}).`);
-    }
-
-    // New weapons not in old snapshot
-    const oldWeapons = new Set(oldSnapshot.weapons ?? []);
-    const newWeapons = currentWeapons.filter(w => !oldWeapons.has(w));
-    if (newWeapons.length) {
-      changes.push(`${pcName} now carries: ${newWeapons.join(", ")}.`);
-    }
-
-    // New notable gear
-    const oldGear = new Set(oldSnapshot.gear ?? []);
-    const newGear = currentGear.filter(g => !oldGear.has(g));
-    if (newGear.length) {
-      changes.push(`${pcName} has acquired: ${newGear.join(", ")}.`);
-    }
-
-    // Significant AC change
-    if (currentAc > (oldSnapshot.ac ?? 0) + 2) {
-      changes.push(`${pcName} appears much more heavily armored than before.`);
-    }
-
-    return changes;
-  }
-
-  // ── Awareness Computation ─────────────────────────────────
-
-  /**
-   * Compute how aware a faction is of the PCs, based on encounter history
-   * and decay over scene transitions. Now factors in NPC stats:
-   * - Spreader INT/CHA affects how well info propagates
-   * - Receiver WIS/INT (optional) affects how well they pick it up
-   * @param {string} factionKey
-   * @param {Actor} [receiverActor] — The NPC receiving the info (optional, for stat-based bonus)
-   * @returns {{ awareness: number, level: string, bestEvent: object|null }}
-   */
-  computeAwareness(factionKey, receiverActor) {
-    const fac = this._mm.world._data.factions?.[factionKey];
-    if (!fac?.encounters?.length) {
-      return { awareness: 0, level: "unaware", bestEvent: null };
-    }
-
-    // Receiver bonus (how well this specific NPC pays attention to rumors)
-    let receiverBonus = RECEIVE_BONUS.average;
-    if (receiverActor?.system?.abilities) {
-      const recWis = receiverActor.system.abilities?.wis?.value ?? 10;
-      const recInt = receiverActor.system.abilities?.int?.value ?? 10;
-      const recBest = Math.max(recWis, recInt);
-      receiverBonus = recBest <= 7 ? RECEIVE_BONUS.low
-                    : recBest >= 15 ? RECEIVE_BONUS.high
-                    : RECEIVE_BONUS.average;
-    }
-
-    const currentScene = this.getSceneCounter();
-    let maxAwareness = 0;
-    let bestEvent = null;
-
-    for (const enc of fac.encounters) {
-      const scenesSince = currentScene - (enc.sc ?? 0);
-      if (scenesSince < 0) continue;
-
-      const sig  = SIGNIFICANCE[enc.kind] ?? 0.5;
-      const surv = SURVIVAL_BONUS[enc.outcome] ?? 1.0;
-
-      // Spreader bonus (how well the original NPC communicated the event)
-      let spreadBonus = SPREAD_BONUS.average;
-      if (enc.npcStats) {
-        const npcInt = enc.npcStats.int ?? 10;
-        const npcCha = enc.npcStats.cha ?? 10;
-        const spreadBest = Math.max(npcInt, npcCha);
-        spreadBonus = spreadBest <= 7 ? SPREAD_BONUS.low
-                    : spreadBest >= 15 ? SPREAD_BONUS.high
-                    : SPREAD_BONUS.average;
-      }
-
-      let aw = Math.min(1.0, sig * surv * spreadBonus * receiverBonus * Math.pow(DECAY_PER_SCENE, scenesSince));
-
-      // Direct encounters (NPC personally met PCs) never fully decay.
-      // A goblin that FOUGHT the party will always remember them, at least vaguely.
-      if (enc.direct && aw < DIRECT_FLOOR) {
-        aw = DIRECT_FLOOR;
-      }
-
-      if (aw > maxAwareness) {
-        maxAwareness = aw;
-        bestEvent = enc;
-      }
-    }
-
-    const level = maxAwareness >= DETAILED_THRESHOLD ? "detailed"
-                : maxAwareness >= VAGUE_THRESHOLD    ? "vague"
-                : "unaware";
-
-    return { awareness: maxAwareness, level, bestEvent };
-  }
-
-  // ── NPC Awareness Check ───────────────────────────────────
-
-  /**
-   * Full awareness check for a specific NPC. Resolves their faction,
-   * computes awareness, and writes to the NPC's relationships record.
-   * Called when a token is placed or discovered on a scene.
-   * @param {string} npcName
-   * @param {Actor} actor
-   * @returns {{ factionKey: string, awareness: number, level: string, bestEvent: object }|null}
-   */
-  checkNpcAwareness(npcName, actor) {
-    const factionKey = this.resolveFactionKey(actor);
-    if (!factionKey) return null;
-
-    const { awareness, level, bestEvent } = this.computeAwareness(factionKey);
-    if (level === "unaware") return null;
-
-    // Write awareness to the NPC's relationships in the NPC store
-    const rec = this._mm.npcs.getRecord(npcName);
-    if (rec) {
-      const pcNames = bestEvent?.pcNames ?? [];
-      for (const pc of pcNames) {
-        rec.relationships[pc] = {
-          aware:       true,
-          source:      "faction",
-          reason:      bestEvent?.summary ?? "Word has spread among their kind.",
-          lastUpdated: Math.floor(Date.now() / 1000),
-        };
-      }
-      this._mm.npcs.markDirty();
-      this._mm._scheduleSave?.("npcs");
-    }
-
-    return { factionKey, awareness, level, bestEvent };
-  }
-
-  // ── AI Context Builder ────────────────────────────────────
-
-  /**
-   * Build a reputation context paragraph for injection into AI prompts.
-   * Returns empty string if the NPC is unaware of PCs.
-   * Now includes:
-   * - Intelligence network level (controls detail)
-   * - Knowledge scoping (tells AI what it does/doesn't know)
-   * - PC change detection (notices level-ups, new weapons)
-   * @param {string} npcName
-   * @returns {string}
-   */
-  buildReputationContext(npcName) {
-    const rec = this._mm.npcs.getRecord(npcName);
-    if (!rec) return "";
-
-    // Resolve faction key — try from stored actorId, or from relationships
-    const actor = rec.actorId ? game.actors?.get(rec.actorId) : null;
-    const factionKey = actor ? this.resolveFactionKey(actor) : null;
-    if (!factionKey) return "";
-
-    const { awareness, level, bestEvent } = this.computeAwareness(factionKey, actor);
-    if (level === "unaware") return "";
-
-    const fac = this._mm.world._data.factions?.[factionKey];
-    const factionName = fac?.displayName ?? factionKey;
-    const intelLevel = this.getIntelligenceNetwork(factionKey);
-    const intelValue = INTEL_LEVELS[intelLevel] ?? 0;
-
-    const isDirect = bestEvent?.direct ?? false;
-
-    let ctx = `\n## REPUTATION AWARENESS\n`;
-    ctx += `This ${factionName} `;
-
-    if (isDirect) {
-      // Direct encounter — this NPC (or this specific creature) personally fought/met the PCs
-      ctx += `has PERSONALLY encountered these adventurers before. `;
-      ctx += `It remembers: ${bestEvent?.summary ?? "a direct confrontation with the party."}`;
-      ctx += `\nThis is a personal memory, not hearsay — the creature recalls the experience vividly.`;
-    } else if (level === "detailed" || intelValue >= INTEL_LEVELS.informants) {
-      ctx += `has heard detailed accounts from others of its kind about the adventurers. `;
-      ctx += `They know: ${bestEvent?.summary ?? "the adventurers have been active in the area."}`;
-    } else {
-      ctx += `has heard vague rumors from others of its kind about adventurers in the area. `;
-      ctx += `The rumors suggest: ${bestEvent?.summary ?? "strangers have been causing trouble."}`;
-    }
-
-    // Outcome-based disposition hints
-    if (bestEvent?.outcome === "killed") {
-      ctx += `\nOthers of this creature's kind were slain — it may be fearful or vengeful.`;
-    } else if (bestEvent?.outcome === "survived" && bestEvent?.kind === "combat") {
-      ctx += `\nA survivor reported the encounter — this creature is wary.`;
-    } else if (bestEvent?.outcome === "fled") {
-      ctx += `\nA survivor fled and spread the word — this creature is cautious.`;
-    }
-
-    // PC names (scoped by knowledge level)
-    if (bestEvent?.pcNames?.length) {
-      if (isDirect) {
-        // Direct encounters: the NPC met them face-to-face
-        ctx += `\nThe creature personally encountered: ${bestEvent.pcNames.join(", ")}.`;
-      } else if (intelValue >= INTEL_LEVELS.informants || level === "detailed") {
-        ctx += `\nNames the creature has heard: ${bestEvent.pcNames.join(", ")}.`;
-      } else {
-        ctx += `\nThe creature has heard there are ${bestEvent.pcNames.length} adventurers, but doesn't know their names.`;
-      }
-    }
-
-    // ── Intelligence Network: detailed PC info ────────────────
-    if (intelValue >= INTEL_LEVELS.extensive && bestEvent?.pcSnap) {
-      ctx += `\n\nDETAILED INTELLIGENCE (from spy network/scrying):`;
-      for (const [pcName, snap] of Object.entries(bestEvent.pcSnap)) {
-        const parts = [`${pcName}`];
-        if (snap.class) parts.push(`${snap.class} level ${snap.level}`);
-        if (snap.weapons?.length) parts.push(`carries ${snap.weapons.join(", ")}`);
-        if (snap.gear?.length) parts.push(`notable gear: ${snap.gear.join(", ")}`);
-        ctx += `\n- ${parts.join(", ")}`;
-
-        // PC change detection — compare old snapshot to current state
-        const changes = this.detectPcChanges(pcName, snap);
-        if (changes.length) {
-          ctx += `\n  CHANGES NOTICED: ${changes.join(" ")}`;
+      // Re-hydrate deed counter from the highest existing deed ID number
+      this._deedCounter = 0;
+      for (const deed of (this._data.deeds ?? [])) {
+        const match = String(deed.id ?? "").match(/deed_(\d+)/);
+        if (match) {
+          const n = parseInt(match[1], 10);
+          if (n > this._deedCounter) this._deedCounter = n;
         }
       }
-    } else if (intelValue === INTEL_LEVELS.informants && bestEvent?.pcSnap) {
-      ctx += `\n\nINFORMANT REPORTS (tavern gossip):`;
-      for (const [pcName, snap] of Object.entries(bestEvent.pcSnap)) {
-        const parts = [`${pcName}`];
-        if (snap.class) parts.push(`appears to be a ${snap.class}`);
-        if (snap.race) parts.push(`${snap.race}`);
-        ctx += `\n- ${parts.join(", ")}`;
+
+      // Ensure all required arrays/objects exist (handles older saves)
+      this._data.deeds           ??= [];
+      this._data.factionStanding ??= {};
+      this._data.titles          ??= [];
+      this._data.knownInRegions  ??= [];
+
+      this._loaded = true;
+      this._dirty  = false;
+      console.log(`${MODULE_ID} | Reputation: loaded from ${path} (${this._data.deeds.length} deeds, notoriety: ${this._data.notoriety})`);
+    } catch (err) {
+      const msg = String(err.message ?? err);
+      if (!msg.includes("404") && !msg.includes("HTTP 404")) {
+        console.warn(`${MODULE_ID} | Reputation: could not load (${msg}) — starting fresh`);
+      } else {
+        console.log(`${MODULE_ID} | Reputation: no existing file found — starting fresh`);
+      }
+      this._data        = _emptyData(worldId);
+      this._deedCounter = 0;
+      this._loaded      = true;
+      this._dirty       = false;
+    }
+  }
+
+  /**
+   * Save reputation data to disk.
+   * No-ops if not dirty or the current user is not the GM.
+   * @param {string} worldId
+   */
+  async save(worldId) {
+    if (!this._dirty)       return;
+    if (!game.user?.isGM)   return;
+    if (!this._data)        return;
+
+    this._data.meta.savedAt = new Date().toISOString();
+
+    const dir  = REPUTATION_DIR(worldId);
+    const json = JSON.stringify(this._data, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const file = new File([blob], REPUTATION_FILE, { type: "application/json" });
+
+    try {
+      // Ensure directory exists — ignore error if it already does
+      try {
+        await _FP().createDirectory("data", dir, { notify: false });
+      } catch (_) { /* directory already exists */ }
+
+      await _silentUpload("data", dir, file);
+      this._dirty = false;
+      console.log(`${MODULE_ID} | Reputation: saved to ${dir}/${REPUTATION_FILE}`);
+    } catch (err) {
+      console.error(`${MODULE_ID} | Reputation: save failed —`, err);
+      throw err;
+    }
+  }
+
+  // ── Getters ──────────────────────────────────────────────────
+
+  /** Full reputation data object. */
+  get data() {
+    return this._data;
+  }
+
+  /** Current notoriety level string. */
+  get notoriety() {
+    return this._data?.notoriety ?? "unknown";
+  }
+
+  /** Array of deed objects. */
+  get deeds() {
+    return this._data?.deeds ?? [];
+  }
+
+  /** Array of title strings. */
+  get titles() {
+    return this._data?.titles ?? [];
+  }
+
+  // ── Faction Standing ─────────────────────────────────────────
+
+  /**
+   * Return the party's standing with a given faction.
+   * Defaults to "neutral" if the faction is not tracked.
+   * @param {string} factionId
+   * @returns {string}
+   */
+  getFactionStanding(factionId) {
+    if (!factionId || !this._data) return "neutral";
+    return this._data.factionStanding[factionId] ?? "neutral";
+  }
+
+  /**
+   * Update the party's standing with a faction and save.
+   * @param {string} factionId
+   * @param {string} standing  — one of STANDING_VALUES
+   * @param {string} worldId
+   */
+  async setFactionStanding(factionId, standing, worldId) {
+    if (!factionId) return;
+    if (!STANDING_VALUES.includes(standing)) {
+      console.warn(`${MODULE_ID} | Reputation: unknown standing "${standing}", defaulting to "neutral"`);
+      standing = "neutral";
+    }
+    if (!this._data) return;
+    this._data.factionStanding[factionId] = standing;
+    this._dirty = true;
+    console.log(`${MODULE_ID} | Reputation: faction "${factionId}" standing → ${standing}`);
+    await this.save(worldId);
+  }
+
+  // ── Notoriety ────────────────────────────────────────────────
+
+  /**
+   * Manually override the notoriety level and save.
+   * @param {string} level  — one of NOTORIETY_LEVELS
+   * @param {string} worldId
+   */
+  async setNotoriety(level, worldId) {
+    if (!NOTORIETY_LEVELS.includes(level)) {
+      console.warn(`${MODULE_ID} | Reputation: unknown notoriety level "${level}", ignoring`);
+      return;
+    }
+    if (!this._data) return;
+    this._data.notoriety = level;
+    this._dirty = true;
+    console.log(`${MODULE_ID} | Reputation: notoriety manually set → ${level}`);
+    await this.save(worldId);
+  }
+
+  // ── Titles ───────────────────────────────────────────────────
+
+  /**
+   * Add a title if not already present and save.
+   * @param {string} title
+   * @param {string} worldId
+   */
+  async addTitle(title, worldId) {
+    if (!title || !this._data) return;
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    if (this._data.titles.includes(trimmed)) {
+      console.log(`${MODULE_ID} | Reputation: title "${trimmed}" already exists, skipping`);
+      return;
+    }
+    this._data.titles.push(trimmed);
+    this._dirty = true;
+    console.log(`${MODULE_ID} | Reputation: title added — "${trimmed}"`);
+    await this.save(worldId);
+  }
+
+  /**
+   * Remove a title by exact match and save.
+   * @param {string} title
+   * @param {string} worldId
+   */
+  async removeTitle(title, worldId) {
+    if (!title || !this._data) return;
+    const before = this._data.titles.length;
+    this._data.titles = this._data.titles.filter(t => t !== title);
+    if (this._data.titles.length !== before) {
+      this._dirty = true;
+      console.log(`${MODULE_ID} | Reputation: title removed — "${title}"`);
+      await this.save(worldId);
+    }
+  }
+
+  // ── Deeds ────────────────────────────────────────────────────
+
+  /**
+   * Add a new deed, auto-recalculate notoriety, and save.
+   *
+   * @param {string} summary        — Short description of the deed
+   * @param {object} [options={}]
+   * @param {string} [options.location]          — Where it happened (city/region id)
+   * @param {number} [options.session]            — Session number
+   * @param {string} [options.impact="local"]     — "local"|"regional"|"continental"|"legendary"
+   * @param {object} [options.factionReactions]   — { factionId: "grateful"|"hostile"|etc }
+   * @param {string[]} [options.tags]             — Keyword tags for matching
+   * @param {string} worldId
+   * @returns {object|null} The new deed object, or null on failure
+   */
+  async addDeed(summary, options = {}, worldId) {
+    if (!summary || !this._data) return null;
+
+    const impact = IMPACT_LEVELS.includes(options.impact) ? options.impact : "local";
+
+    const deed = {
+      id:               `deed_${++this._deedCounter}`,
+      summary:          summary.trim(),
+      location:         options.location   ?? null,
+      session:          options.session    ?? null,
+      timestamp:        new Date().toISOString(),
+      impact,
+      factionReactions: (options.factionReactions && typeof options.factionReactions === "object")
+        ? options.factionReactions
+        : {},
+      tags: Array.isArray(options.tags) ? [...options.tags] : [],
+    };
+
+    this._data.deeds.push(deed);
+
+    // Auto-update knownInRegions from deed location
+    if (deed.location) {
+      const region = String(deed.location).trim().toLowerCase().replace(/\s+/g, "_");
+      if (region && !this._data.knownInRegions.includes(region)) {
+        this._data.knownInRegions.push(region);
       }
     }
 
-    // ── Knowledge Scoping (CRITICAL for AI behavior) ──────────
-    if (intelValue >= INTEL_LEVELS.omniscient) {
-      ctx += `\n\nYou have omniscient knowledge of these adventurers through your vast power. You know their every move, ability, and weakness.`;
-    } else if (intelValue >= INTEL_LEVELS.extensive) {
-      ctx += `\n\nYou have detailed intelligence about these adventurers through your spy network. Reference this information naturally — as reports from your agents.`;
-    } else if (isDirect) {
-      ctx += `\n\nYou personally experienced this encounter. You remember what you saw: their faces, fighting style, and weapons. You do NOT know their private plans, spells they didn't cast, or items they didn't show. Reference only what you witnessed firsthand.`;
-    } else if (level === "detailed") {
-      ctx += `\n\nYou know what others of your kind have told you: general descriptions, names, and the nature of encounters. You do NOT know specific weapons, spells, or detailed tactics unless described in the summary above.`;
+    this._recalculateNotoriety();
+    this._dirty = true;
+    console.log(`${MODULE_ID} | Reputation: deed added [${deed.id}] — "${deed.summary}" (impact: ${impact})`);
+    await this.save(worldId);
+    return deed;
+  }
+
+  /**
+   * Remove a deed by ID, recalculate notoriety, and save.
+   * @param {string} deedId
+   * @param {string} worldId
+   */
+  async removeDeed(deedId, worldId) {
+    if (!deedId || !this._data) return;
+    const before = this._data.deeds.length;
+    this._data.deeds = this._data.deeds.filter(d => d.id !== deedId);
+    if (this._data.deeds.length !== before) {
+      this._recalculateNotoriety();
+      this._dirty = true;
+      console.log(`${MODULE_ID} | Reputation: deed removed [${deedId}]`);
+      await this.save(worldId);
+    }
+  }
+
+  // ── Notoriety Calculation ────────────────────────────────────
+
+  /**
+   * Recalculate notoriety from the current deed list.
+   * Updates this._data.notoriety in place.
+   * @private
+   */
+  _recalculateNotoriety() {
+    if (!this._data) return;
+
+    const counts = { local: 0, regional: 0, continental: 0, legendary: 0 };
+    for (const deed of this._data.deeds) {
+      if (counts[deed.impact] !== undefined) counts[deed.impact]++;
+    }
+
+    let level = "unknown";
+
+    if (counts.legendary > 0) {
+      level = "legendary";
+    } else if (counts.continental >= 3) {
+      level = "legendary";
+    } else if (counts.continental > 0) {
+      level = "continental";
+    } else if (counts.regional >= 3) {
+      level = "continental";
+    } else if (counts.regional > 0) {
+      level = "regional";
+    } else if (counts.local >= 3) {
+      level = "regional";
+    } else if (counts.local > 0) {
+      level = "local";
+    }
+
+    const previous = this._data.notoriety;
+    this._data.notoriety = level;
+    if (previous !== level) {
+      console.log(`${MODULE_ID} | Reputation: notoriety recalculated ${previous} → ${level}`);
+    }
+  }
+
+  // ── NPC Knowledge ────────────────────────────────────────────
+
+  /**
+   * Return what an NPC would know about the party, or null if they know nothing.
+   *
+   * Decision logic (first match wins):
+   *  1. notoriety "unknown"      → null (party is unknown to everyone)
+   *  2. notoriety "legendary"    → every NPC knows ("legendary_status")
+   *  3. notoriety "continental"  → widespread, every NPC knows ("widespread_fame")
+   *  4. NPC's faction is tracked → faction network knows ("faction_network")
+   *  5. NPC is in a known region → local word of mouth ("local_knowledge")
+   *  6. Otherwise                → null
+   *
+   * @param {string|null} npcFactionId  — Faction ID of the NPC (may be null/undefined)
+   * @param {string|null} npcLocation   — Location/region ID of the NPC (may be null/undefined)
+   * @returns {object|null}
+   */
+  getNpcKnowledge(npcFactionId = null, npcLocation = null) {
+    if (!this._data) return null;
+
+    const notoriety = this._data.notoriety;
+    if (notoriety === "unknown") return null;
+
+    const factionKey  = npcFactionId
+      ? String(npcFactionId).trim().toLowerCase()
+      : null;
+    const locationKey = npcLocation
+      ? String(npcLocation).trim().toLowerCase().replace(/\s+/g, "_")
+      : null;
+
+    const hasFactionLink  = factionKey  !== null && factionKey  in this._data.factionStanding;
+    const isInKnownRegion = locationKey !== null && this._data.knownInRegions.includes(locationKey);
+
+    let knows  = false;
+    let source = null;
+
+    if (notoriety === "legendary") {
+      knows  = true;
+      source = "legendary_status";
+    } else if (notoriety === "continental") {
+      knows  = true;
+      source = "widespread_fame";
+    } else if (hasFactionLink) {
+      knows  = true;
+      source = "faction_network";
+    } else if (isInKnownRegion) {
+      knows  = true;
+      source = "local_knowledge";
+    }
+
+    if (!knows) return null;
+
+    // Derive attitude from faction standing (if available)
+    let attitude = "neutral";
+    if (hasFactionLink) {
+      const standing = this._data.factionStanding[factionKey];
+      if (standing === "revered" || standing === "friendly") {
+        attitude = "friendly";
+      } else if (standing === "hostile" || standing === "hated") {
+        attitude = "hostile";
+      } else {
+        // suspicious / neutral → neutral attitude in NPC knowledge
+        attitude = "neutral";
+      }
+    }
+
+    const knownDeeds  = this._filterDeedsForNpc(factionKey, locationKey, notoriety);
+    const knownTitles = [...this._data.titles];
+    const promptText  = this._buildNpcPromptText({ notoriety, source, attitude, knownDeeds, knownTitles });
+
+    return {
+      knows: true,
+      source,
+      attitude,
+      knownDeeds,
+      knownTitles,
+      promptText,
+    };
+  }
+
+  /**
+   * Filter the deed list to those most relevant for a given NPC context.
+   * @private
+   * @param {string|null} factionKey
+   * @param {string|null} locationKey
+   * @param {string} notoriety
+   * @returns {object[]} Lightweight deed summaries
+   */
+  _filterDeedsForNpc(factionKey, locationKey, notoriety) {
+    if (!this._data) return [];
+
+    return this._data.deeds.filter(deed => {
+      // High-impact deeds are known when fame is widespread
+      if (notoriety === "legendary" || notoriety === "continental") {
+        if (deed.impact === "legendary" || deed.impact === "continental") return true;
+      }
+
+      // Deeds that specifically name this faction in reactions
+      if (factionKey && deed.factionReactions) {
+        const reactionKey = Object.keys(deed.factionReactions)
+          .find(k => k.toLowerCase() === factionKey);
+        if (reactionKey) return true;
+      }
+
+      // Deeds that happened in the NPC's region
+      if (locationKey && deed.location) {
+        const deedLoc = String(deed.location).trim().toLowerCase().replace(/\s+/g, "_");
+        if (deedLoc === locationKey) return true;
+      }
+
+      // For legendary notoriety include ALL deeds — the legend is everywhere
+      if (notoriety === "legendary") return true;
+
+      return false;
+    }).map(deed => {
+      // Find this faction's specific reaction, if any
+      let factionReaction = null;
+      if (factionKey && deed.factionReactions) {
+        const key = Object.keys(deed.factionReactions)
+          .find(k => k.toLowerCase() === factionKey);
+        if (key) factionReaction = deed.factionReactions[key];
+      }
+      return {
+        summary:         deed.summary,
+        impact:          deed.impact,
+        factionReaction,
+      };
+    });
+  }
+
+  /**
+   * Build the pre-formatted prompt text to inject into an NPC system prompt.
+   * @private
+   */
+  _buildNpcPromptText({ notoriety, source, attitude, knownDeeds, knownTitles }) {
+    const sourceLabel = {
+      faction_network:  "their faction network",
+      local_knowledge:  "local word of mouth",
+      widespread_fame:  "widespread regional fame",
+      legendary_status: "legendary reputation that has spread across the land",
+    }[source] ?? "word of mouth";
+
+    const attitudeLabel = {
+      friendly: "friendly / respectful",
+      neutral:  "neutral / curious",
+      hostile:  "hostile / wary",
+    }[attitude] ?? "neutral / curious";
+
+    const titlesLine = knownTitles.length > 0
+      ? knownTitles.join(", ")
+      : "an unnamed adventuring party";
+
+    let deedsSection;
+    if (knownDeeds.length > 0) {
+      const lines = knownDeeds.map(d => {
+        const reaction = d.factionReaction
+          ? ` [this NPC's faction reaction: ${d.factionReaction}]`
+          : "";
+        return `- ${d.summary} (${d.impact} impact)${reaction}`;
+      }).join("\n");
+      deedsSection = `\nKnown deeds:\n${lines}`;
     } else {
-      ctx += `\n\nIMPORTANT: You have heard only VAGUE RUMORS. You know roughly that adventurers are in the area. You do NOT know their names, specific equipment, or abilities. Do NOT reference specific details you wouldn't know from vague word-of-mouth.`;
+      deedsSection = "\nThe NPC has heard only vague rumours but knows no specific deeds.";
     }
 
-    // Disposition change instruction
-    ctx += `\n\nIMPORTANT: If during this conversation or interaction the NPC's attitude changes significantly (e.g., agrees to help, becomes friendly, turns hostile, or is persuaded), include a tag at the very END of your response on its own line: [DISPOSITION:NEUTRAL] or [DISPOSITION:FRIENDLY] or [DISPOSITION:HOSTILE]. Only include this when a genuine attitude shift occurs — not for minor dialogue.`;
-
-    return ctx;
+    return [
+      "## PARTY REPUTATION",
+      `The adventuring party is known as: ${titlesLine}. Their notoriety level: ${notoriety}.`,
+      `This NPC has heard of them through ${sourceLabel}.`,
+      `NPC's attitude toward the party: ${attitudeLabel}`,
+      deedsSection,
+      "",
+      "Use this knowledge naturally in conversation. The NPC should reference these deeds",
+      "if relevant, react according to their attitude, and address the party with appropriate",
+      "respect/fear/hostility. Do NOT list all deeds — weave 1-2 naturally into dialogue.",
+    ].join("\n");
   }
 
-  // ── Disposition Tag Parsing ───────────────────────────────
+  // ── AI Deed Suggestion ───────────────────────────────────────
 
   /**
-   * Parse a [DISPOSITION:...] tag from AI response text.
-   * @param {string} text — Full AI response text
-   * @returns {{ label: string, value: number, raw: string }|null}
+   * Use the AI provider to extract notable deeds from a session summary.
+   * Returns suggested deed objects for GM review — does NOT save them.
+   *
+   * Supports both .complete(systemPrompt, userPrompt) and
+   * .chat([{role, content}]) style providers.
+   *
+   * @param {string} summaryText
+   * @param {object} aiProvider  — ACE aiProvider instance
+   * @returns {object[]} Array of sanitised suggested deed objects (not yet saved)
    */
-  parseDispositionTag(text) {
-    if (!text) return null;
-    const match = text.match(/\[DISPOSITION:(HOSTILE|NEUTRAL|FRIENDLY|SECRET)\]/i);
-    if (!match) return null;
+  async suggestDeedsFromSummary(summaryText, aiProvider) {
+    if (!summaryText || !aiProvider) return [];
 
-    const label = match[1].toUpperCase();
-    const value = label === "HOSTILE"  ? DISP.HOSTILE
-                : label === "NEUTRAL"  ? DISP.NEUTRAL
-                : label === "FRIENDLY" ? DISP.FRIENDLY
-                : label === "SECRET"   ? DISP.SECRET
-                : null;
+    const systemPrompt = [
+      "You are an expert Dungeons & Dragons game analyst.",
+      "Extract notable accomplishments from a session summary.",
+      "Return ONLY a valid JSON array. Each object must have:",
+      '  - "summary": string (concise deed description, 1-2 sentences)',
+      '  - "impact": one of "local" | "regional" | "continental" | "legendary"',
+      '  - "location": string or null (region/city where it happened)',
+      '  - "factionReactions": object mapping faction IDs to reactions',
+      '    e.g. {"harpers": "grateful", "zhentarim": "hostile"} or {}',
+      '  - "tags": string array of relevant keywords',
+      "",
+      "Only include significant story deeds: boss kills, quest completions,",
+      "major decisions, faction-shaping events.",
+      "Skip minor skirmishes and routine encounters.",
+      "If there are no significant deeds, return an empty array: []",
+    ].join("\n");
 
-    return { label, value, raw: match[0] };
-  }
-
-  // ── Disposition Application ───────────────────────────────
-
-  /**
-   * Update a token's disposition on the canvas and show a GM notification.
-   * @param {string|Token} tokenOrName — Token name string or Token object
-   * @param {number} newDisposition — CONST.TOKEN_DISPOSITIONS value
-   */
-  async applyDispositionChange(tokenOrName, newDisposition) {
-    if (newDisposition == null) return;
-
-    // Resolve token from name or use directly
-    let token;
-    if (typeof tokenOrName === "string") {
-      token = canvas?.tokens?.placeables?.find(t => t.name === tokenOrName);
-    } else {
-      token = tokenOrName;
-    }
-
-    if (!token?.document) {
-      console.warn(`${MODULE_ID} | Reputation: could not find token "${tokenOrName}" for disposition change`);
-      return;
-    }
-
-    const oldDisp = token.document.disposition;
-    if (oldDisp === newDisposition) return; // no change needed
+    const userPrompt = `Session summary:\n${summaryText}\n\nExtract notable deeds as a JSON array.`;
 
     try {
-      await token.document.update({ disposition: newDisposition });
+      let raw = "";
 
-      const oldLabel = DISP_LABELS[oldDisp] ?? "Unknown";
-      const newLabel = DISP_LABELS[newDisposition] ?? "Unknown";
+      if (typeof aiProvider.complete === "function") {
+        raw = await aiProvider.complete(systemPrompt, userPrompt);
+      } else if (typeof aiProvider.chat === "function") {
+        raw = await aiProvider.chat([
+          { role: "system", content: systemPrompt },
+          { role: "user",   content: userPrompt  },
+        ]);
+      } else {
+        console.warn(`${MODULE_ID} | Reputation: aiProvider has no compatible complete() or chat() method`);
+        return [];
+      }
 
-      ui.notifications?.info(`ACE: ${token.name}'s disposition changed: ${oldLabel} → ${newLabel}`);
-      console.log(`${MODULE_ID} | Reputation: ${token.name} disposition ${oldLabel} → ${newLabel}`);
+      // Extract JSON array from response — handles markdown code fences
+      const jsonMatch = String(raw).match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        console.warn(`${MODULE_ID} | Reputation: AI response contained no JSON array`);
+        return [];
+      }
 
-      // Log to history
-      this._mm.history.push({
-        k:    "disposition_change",
-        tgt:  token.name,
-        from: oldLabel,
-        to:   newLabel,
-        s:    canvas?.scene?.name ?? "",
-      });
-      this._mm._scheduleSave?.("history");
+      const suggested = JSON.parse(jsonMatch[0]);
+      if (!Array.isArray(suggested)) return [];
 
-      // Emit hook for story-note integration
-      Hooks.callAll("ace.dispositionChange", {
-        npcName:   token.name,
-        fromLabel: oldLabel,
-        toLabel:   newLabel,
-        scene:     canvas?.scene?.name ?? "",
-      });
+      // Sanitise each entry
+      return suggested
+        .map((d, i) => ({
+          summary:          String(d.summary ?? "").trim(),
+          impact:           IMPACT_LEVELS.includes(d.impact) ? d.impact : "local",
+          location:         d.location ? String(d.location).trim() : null,
+          factionReactions: (d.factionReactions && typeof d.factionReactions === "object")
+            ? d.factionReactions
+            : {},
+          tags:             Array.isArray(d.tags) ? d.tags.map(String) : [],
+          _suggestIndex:    i,  // used by formatForGmReview checkboxes
+        }))
+        .filter(d => d.summary.length > 0);
+
     } catch (err) {
-      console.error(`${MODULE_ID} | Reputation: failed to update disposition for ${token.name}:`, err);
-    }
-  }
-
-  // ── Intelligence Network Management ─────────────────────
-
-  /**
-   * Get the intelligence network level for a faction.
-   * Checks: 1) faction data in WorldStore, 2) module settings fallback.
-   * @param {string} factionKey
-   * @returns {string} "none" | "informants" | "extensive" | "omniscient"
-   */
-  getIntelligenceNetwork(factionKey) {
-    if (!factionKey) return "none";
-
-    // Check faction data first
-    const fac = this._mm.world._data.factions?.[factionKey];
-    if (fac?.intelligenceNetwork) return fac.intelligenceNetwork;
-
-    // Fallback to module settings
-    try {
-      const networks = game.settings.get(MODULE_ID, "factionIntelNetworks") ?? {};
-      return networks[factionKey] ?? "none";
-    } catch (_) {
-      return "none";
+      console.error(`${MODULE_ID} | Reputation: suggestDeedsFromSummary failed —`, err);
+      return [];
     }
   }
 
   /**
-   * Set the intelligence network level for a faction.
-   * Stores in both WorldStore faction data AND module settings for redundancy.
-   * @param {string} factionKey
-   * @param {string} level — "none" | "informants" | "extensive" | "omniscient"
+   * Format an array of suggested deeds as an HTML string for a review dialog.
+   * Each deed gets a checkbox so the GM can approve/reject before adding.
+   *
+   * @param {object[]} suggestedDeeds
+   * @returns {string} HTML string
    */
-  async setIntelligenceNetwork(factionKey, level) {
-    if (!factionKey) return;
-    const validLevels = Object.keys(INTEL_LEVELS);
-    if (!validLevels.includes(level)) {
-      console.warn(`${MODULE_ID} | Invalid intelligence level "${level}". Valid: ${validLevels.join(", ")}`);
-      return;
+  formatForGmReview(suggestedDeeds) {
+    if (!Array.isArray(suggestedDeeds) || suggestedDeeds.length === 0) {
+      return `<p class="ace-rep-empty">No deeds were extracted from the summary.</p>`;
     }
 
-    // Store in faction data
-    this.ensureFaction(factionKey);
-    const fac = this._mm.world._data.factions[factionKey];
-    if (fac) {
-      fac.intelligenceNetwork = level;
-      this._mm.world.markDirty();
-      this._mm._scheduleSave?.("world");
-    }
+    const rows = suggestedDeeds.map((deed, i) => {
+      const factionHtml = Object.keys(deed.factionReactions ?? {}).length > 0
+        ? `<span class="ace-rep-factions">${
+            Object.entries(deed.factionReactions)
+              .map(([f, r]) => `${f}: <em>${r}</em>`)
+              .join(", ")
+          }</span>`
+        : "";
 
-    // Also store in module settings for redundancy
-    try {
-      const networks = foundry.utils.deepClone(game.settings.get(MODULE_ID, "factionIntelNetworks") ?? {});
-      networks[factionKey] = level;
-      await game.settings.set(MODULE_ID, "factionIntelNetworks", networks);
-    } catch (err) {
-      console.warn(`${MODULE_ID} | Could not save intel network to settings:`, err);
-    }
+      const tagsHtml = (deed.tags ?? []).length > 0
+        ? `<span class="ace-rep-tags">${deed.tags.join(", ")}</span>`
+        : "";
 
-    const displayName = fac?.displayName ?? factionKey;
-    console.log(`${MODULE_ID} | Reputation: ${displayName} intelligence network set to "${level}"`);
-    ui.notifications?.info(`ACE: ${displayName} intelligence network → ${level}`);
+      const locationHtml = deed.location
+        ? `<span class="ace-rep-location">Location: ${deed.location}</span>`
+        : "";
+
+      return `
+        <div class="ace-rep-deed-row" data-index="${i}">
+          <label class="ace-rep-deed-label">
+            <input type="checkbox"
+                   class="ace-rep-deed-check"
+                   name="deed_${i}"
+                   value="${i}"
+                   checked />
+            <span class="ace-rep-deed-summary">${deed.summary}</span>
+          </label>
+          <div class="ace-rep-deed-meta">
+            <span class="ace-rep-impact ace-rep-impact--${deed.impact}">${deed.impact}</span>
+            ${locationHtml}
+            ${factionHtml}
+            ${tagsHtml}
+          </div>
+        </div>`;
+    }).join("\n");
+
+    return `
+      <div class="ace-rep-review">
+        <p class="ace-rep-review-intro">
+          The AI found <strong>${suggestedDeeds.length}</strong> notable deed(s).
+          Check the ones you want to add to the party's reputation record.
+        </p>
+        <div class="ace-rep-deed-list">
+          ${rows}
+        </div>
+      </div>`;
   }
+
+  // ── Stats ────────────────────────────────────────────────────
 
   /**
-   * List all known factions and their intelligence network levels.
-   * Useful for the GM to see what's configured.
-   * @returns {Array<{key: string, displayName: string, encounters: number, intelNetwork: string}>}
+   * Return summary counts for UI display.
+   * @returns {object}
    */
-  listFactions() {
-    const factions = this._mm.world._data.factions ?? {};
-    return Object.entries(factions).map(([key, fac]) => ({
-      key,
-      displayName: fac.displayName ?? key,
-      encounters: fac.encounters?.length ?? 0,
-      intelNetwork: fac.intelligenceNetwork ?? "none",
-    }));
-  }
-
-  // ── Scene Counter Helpers ─────────────────────────────────
-
-  /** Increment the scene counter in WorldStore. */
-  incrementSceneCounter() {
-    const count = this._mm.world.incrementSceneCounter();
-    this._mm._scheduleSave?.("world");
-    console.log(`${MODULE_ID} | Reputation: scene counter → ${count}`);
-    return count;
-  }
-
-  /** Get the current scene counter. */
-  getSceneCounter() {
-    return this._mm.world.getSceneCounter();
+  getStats() {
+    if (!this._data) {
+      return {
+        notoriety:    "unknown",
+        deedCount:    0,
+        titleCount:   0,
+        factionCount: 0,
+        regionCount:  0,
+      };
+    }
+    return {
+      notoriety:    this._data.notoriety,
+      deedCount:    this._data.deeds.length,
+      titleCount:   this._data.titles.length,
+      factionCount: Object.keys(this._data.factionStanding).length,
+      regionCount:  this._data.knownInRegions.length,
+    };
   }
 }
