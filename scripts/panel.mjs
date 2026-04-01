@@ -6,6 +6,7 @@
 import { MODULE_ID, localCredentials } from "./ace-engine.mjs";
 import { CanvasHighlight } from "./canvas-highlight.mjs";
 import { filterProfanity, buildProfanityPrompt } from "./profanity-filter.mjs";
+// Social Profile Engine moved to ace-envoy (standalone module)
 
 // v13-safe FilePicker access (for document library uploads)
 const _FP = () =>
@@ -291,6 +292,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       npcSpeechSend:       AcePanel._onNpcSpeechSend,
       npcSpeechVoice:      AcePanel._onNpcSpeechVoice,
       npcSpeechStop:       AcePanel._onNpcSpeechStop,
+      // Social Profile moved to ace-envoy
       // ── Tactical Command Center ────────────────────────
       tccToggleSection:    AcePanel._onTccToggleSection,
       tccGroupRoll:        AcePanel._onTccGroupRoll,

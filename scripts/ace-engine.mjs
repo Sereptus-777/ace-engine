@@ -23,6 +23,7 @@ import { WorldBibleEngine }    from "./world-bible-engine.mjs";
 import { VaultEngine }         from "./vault-engine.mjs";
 import { VaultSearch }         from "./vault-search.mjs";
 import { SceneIntelligence }   from "./scene-intelligence.mjs";
+// Social Profile Engine moved to ace-envoy (standalone module, no cross-dependency)
 
 const MODULE_ID = "ace-engine";
 
