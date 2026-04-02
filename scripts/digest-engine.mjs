@@ -85,6 +85,9 @@ export class DigestEngine {
     this._indexLoaded = false;
     this._index = { version: 1, digests: {} };
     this._cache = new Map(); // digestId → full digest JSON
+    // ── Direct Lookup Index ──
+    this._lookupIndex = null;   // Map<normalizedName, Array<{category, entry, source}>>
+    this._worldGraph = null;    // cached world graph object
     // ── Digest run state ──
     this._running = false;    // true while generateDigest() is in progress
     this._paused = false;
@@ -535,6 +538,256 @@ export class DigestEngine {
     return parts.join("\n");
   }
 
+  // ── Direct Lookup Index ──────────────────────────────────
+  // O(1) name-based lookup for NPCs, locations, factions, items, etc.
+  // Built from the world graph at startup. No API calls, no keyword scoring.
+
+  /** Category config: array key in world graph → name field → display label */
+  static LOOKUP_CATEGORIES = [
+    { key: "npcs",      nameField: "name",  label: "NPC" },
+    { key: "locations",  nameField: "name",  label: "Location" },
+    { key: "factions",   nameField: "name",  label: "Faction" },
+    { key: "items",      nameField: "name",  label: "Item" },
+    { key: "encounters", nameField: "name",  label: "Encounter" },
+    { key: "plotHooks",  nameField: "title", label: "Plot Hook" },
+    { key: "lore",       nameField: "topic", label: "Lore" },
+  ];
+
+  /**
+   * Build the lookup index from a world graph.
+   * Creates a Map keyed by normalized name → array of matching entries.
+   * Each entry is stored under its full name AND each individual word (3+ chars).
+   * @param {Object} graph - World graph object from buildWorldGraph/loadWorldGraph
+   */
+  buildLookupIndex(graph) {
+    if (!graph) return;
+    this._worldGraph = graph;
+    const index = new Map();
+    let entityCount = 0;
+
+    // Build source lookup: index in sources array → source display name
+    const sourceNames = (graph.sources ?? []).map(s => s.name ?? "Unknown");
+    const defaultSource = sourceNames[0] ?? "World Graph";
+
+    const addToIndex = (key, record) => {
+      if (!key) return;
+      const existing = index.get(key);
+      if (existing) {
+        // Avoid exact duplicates (same entry reference)
+        if (!existing.some(r => r.entry === record.entry)) existing.push(record);
+      } else {
+        index.set(key, [record]);
+      }
+    };
+
+    for (const cat of DigestEngine.LOOKUP_CATEGORIES) {
+      const entries = graph[cat.key];
+      if (!entries?.length) continue;
+
+      for (const entry of entries) {
+        const rawName = entry[cat.nameField];
+        if (!rawName || typeof rawName !== "string") continue;
+
+        const normalized = rawName.toLowerCase().trim();
+        if (!normalized) continue;
+
+        // Resolve source — if entry has _source stamp, use it; otherwise default
+        const source = entry._source ?? defaultSource;
+        const record = { category: cat.label, entry, source };
+
+        // Store under full normalized name
+        addToIndex(normalized, record);
+
+        // Store under each individual word (3+ chars) for partial matching
+        const words = normalized.split(/\s+/);
+        if (words.length > 1) {
+          for (const word of words) {
+            if (word.length >= 3) addToIndex(word, record);
+          }
+        }
+
+        entityCount++;
+      }
+    }
+
+    this._lookupIndex = index;
+    console.log(`${MODULE_ID} | Lookup index built: ${index.size} keys indexing ${entityCount} entities`);
+  }
+
+  /** Whether the lookup index is ready for queries. */
+  get hasLookupIndex() {
+    return this._lookupIndex?.size > 0;
+  }
+
+  /** Get the cached world graph. */
+  getWorldGraph() {
+    return this._worldGraph;
+  }
+
+  /**
+   * Direct name lookup against the world graph index.
+   * @param {string} name - Entity name to look up (e.g., "Clovin Belview", "Abbey of Saint Markovia")
+   * @param {Object} [options]
+   * @param {string} [options.category] - Filter to category label ("NPC", "Location", "Faction", etc.)
+   * @param {number} [options.maxResults=50] - Max entries to return
+   * @returns {Array<{category: string, entry: Object, source: string, matchType: "exact"|"partial"}>}
+   */
+  lookupByName(name, options = {}) {
+    if (!name || !this._lookupIndex) return [];
+    const { category, maxResults = 50 } = options;
+
+    const normalized = name.toLowerCase().trim();
+    if (!normalized) return [];
+
+    const seen = new Set(); // track by category:name to deduplicate
+    const results = [];
+
+    const addResult = (record, matchType) => {
+      if (category && record.category !== category) return;
+      const nameField = DigestEngine.LOOKUP_CATEGORIES.find(c => c.label === record.category)?.nameField ?? "name";
+      const key = `${record.category}:${(record.entry[nameField] ?? "").toLowerCase()}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      results.push({ ...record, matchType });
+    };
+
+    // 1. Exact full-name match — highest priority
+    const exact = this._lookupIndex.get(normalized);
+    if (exact) {
+      for (const record of exact) addResult(record, "exact");
+    }
+
+    // 2. Per-word partial matches (only if input has multiple words or exact didn't find enough)
+    const words = normalized.split(/\s+/).filter(w => w.length >= 3);
+    for (const word of words) {
+      const partial = this._lookupIndex.get(word);
+      if (partial) {
+        for (const record of partial) addResult(record, "partial");
+      }
+    }
+
+    // Sort: exact first, then partial; within each group, NPC > Location > Faction > rest
+    const categoryPriority = { NPC: 0, Location: 1, Faction: 2, Item: 3, Encounter: 4, "Plot Hook": 5, Lore: 6 };
+    results.sort((a, b) => {
+      if (a.matchType !== b.matchType) return a.matchType === "exact" ? -1 : 1;
+      return (categoryPriority[a.category] ?? 9) - (categoryPriority[b.category] ?? 9);
+    });
+
+    return results.slice(0, maxResults);
+  }
+
+  /**
+   * Look up multiple names at once, deduplicating across all results.
+   * @param {string[]} names - Array of entity names to look up
+   * @param {Object} [options] - Same as lookupByName
+   * @returns {Array<{category, entry, source, matchType, queryName}>}
+   */
+  lookupMultiple(names, options = {}) {
+    if (!names?.length || !this._lookupIndex) return [];
+
+    const seen = new Set();
+    const results = [];
+
+    for (const name of names) {
+      if (!name) continue;
+      const hits = this.lookupByName(name, options);
+      for (const hit of hits) {
+        const nameField = DigestEngine.LOOKUP_CATEGORIES.find(c => c.label === hit.category)?.nameField ?? "name";
+        const dedup = `${hit.category}:${(hit.entry[nameField] ?? "").toLowerCase()}`;
+        if (seen.has(dedup)) continue;
+        seen.add(dedup);
+        results.push({ ...hit, queryName: name });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Format lookup results into AI-ready context text.
+   * @param {Array} results - From lookupByName or lookupMultiple
+   * @param {number} [maxChars=4000] - Character budget
+   * @returns {{ text: string, charsUsed: number }}
+   */
+  formatLookupResults(results, maxChars = 4000) {
+    if (!results?.length) return { text: "", charsUsed: 0 };
+
+    const header = "── DIRECT LOOKUP (canonical source data) ──\n";
+    let text = header;
+    let charsUsed = header.length;
+
+    // Group by source for cleaner output
+    const bySource = new Map();
+    for (const r of results) {
+      const src = r.source ?? "Unknown";
+      if (!bySource.has(src)) bySource.set(src, []);
+      bySource.get(src).push(r);
+    }
+
+    for (const [source, entries] of bySource) {
+      const srcHeader = `**From: ${source}**\n`;
+      if (charsUsed + srcHeader.length > maxChars) break;
+      text += srcHeader;
+      charsUsed += srcHeader.length;
+
+      for (const { category, entry } of entries) {
+        const line = this._formatLookupEntry(category, entry);
+        if (charsUsed + line.length > maxChars) break;
+        text += line;
+        charsUsed += line.length;
+      }
+      text += "\n";
+      charsUsed += 1;
+    }
+
+    return { text, charsUsed };
+  }
+
+  /**
+   * Format a single lookup entry based on its category.
+   * @private
+   */
+  _formatLookupEntry(category, entry) {
+    const kl = entry.knowledge_level ? ` {${entry.knowledge_level}}` : "";
+
+    switch (category) {
+      case "NPC": {
+        const parts = [`**${entry.name}** (${entry.role ?? "?"})`];
+        if (entry.faction) parts.push(`[${entry.faction}]`);
+        if (entry.notes) parts.push(entry.notes);
+        if (entry.location) parts.push(`— ${entry.location}`);
+        return `- [NPC]${kl} ${parts.join(" ")}\n`;
+      }
+      case "Location": {
+        const parts = [`**${entry.name}** (${entry.type ?? "location"})`];
+        if (entry.parent_location) parts.push(`in ${entry.parent_location}`);
+        if (entry.region && entry.region !== entry.parent_location) parts.push(`[${entry.region}]`);
+        if (entry.key_details) parts.push(`: ${entry.key_details}`);
+        if (entry.encounters) parts.push(`Encounters: ${entry.encounters}`);
+        return `- [Location]${kl} ${parts.join(" ")}\n`;
+      }
+      case "Faction": {
+        const parts = [`**${entry.name}**`];
+        if (entry.type) parts.push(`(${entry.type})`);
+        if (entry.territory) parts.push(`[operates in: ${entry.territory}]`);
+        if (entry.goals) parts.push(entry.goals);
+        if (entry.allies) parts.push(`Allies: ${entry.allies}`);
+        if (entry.enemies) parts.push(`Enemies: ${entry.enemies}`);
+        return `- [Faction]${kl} ${parts.join(" ")}\n`;
+      }
+      case "Item":
+        return `- [Item]${kl} **${entry.name}** (${entry.type ?? "item"}): ${entry.description ?? ""}${entry.location ? " — " + entry.location : ""}\n`;
+      case "Encounter":
+        return `- [Encounter] **${entry.name}**: ${entry.creatures ?? ""} at ${entry.location ?? "unknown"} (${entry.difficulty ?? "?"})\n`;
+      case "Plot Hook":
+        return `- [Plot]${kl} **${entry.title}**: ${entry.description ?? ""}${entry.trigger ? " Trigger: " + entry.trigger : ""}\n`;
+      case "Lore":
+        return `- [Lore]${kl} **${entry.topic}**: ${entry.details ?? ""}\n`;
+      default:
+        return `- [${category}] ${JSON.stringify(entry)}\n`;
+    }
+  }
+
   // ── Context Building from Digests ────────────────────────
 
   /**
@@ -921,21 +1174,30 @@ export class DigestEngine {
    * @returns {Promise<Object|null>}
    */
   async loadWorldGraph() {
+    let graph = null;
     try {
       const resp = await fetch("ace-engine-library/world-graph.json", { cache: "no-store" });
-      if (resp.ok) return await resp.json();
+      if (resp.ok) graph = await resp.json();
     } catch (_) { /* not found */ }
 
     // Try backup
-    try {
-      const resp = await fetch("ace-engine-library/world-graph-backup.json", { cache: "no-store" });
-      if (resp.ok) {
-        console.warn(`${MODULE_ID} | Loaded world graph from backup`);
-        return await resp.json();
-      }
-    } catch (_) { /* no backup either */ }
+    if (!graph) {
+      try {
+        const resp = await fetch("ace-engine-library/world-graph-backup.json", { cache: "no-store" });
+        if (resp.ok) {
+          console.warn(`${MODULE_ID} | Loaded world graph from backup`);
+          graph = await resp.json();
+        }
+      } catch (_) { /* no backup either */ }
+    }
 
-    return null;
+    // Cache and build lookup index
+    if (graph) {
+      this._worldGraph = graph;
+      this.buildLookupIndex(graph);
+    }
+
+    return graph;
   }
 
   /**
@@ -949,6 +1211,11 @@ export class DigestEngine {
 
     const graph = this.buildWorldGraph(activeDigestIds);
     await this.saveWorldGraph(graph);
+
+    // Rebuild lookup index from new graph
+    this._worldGraph = graph;
+    this.buildLookupIndex(graph);
+
     return graph;
   }
 }

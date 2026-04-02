@@ -788,6 +788,16 @@ Hooks.once("ready", async () => {
         if (activeIds.length) {
           await digestEngine.loadActiveDigests(activeIds);
           console.log(`${MODULE_ID} | Loaded ${activeIds.length} active digest(s) for this world`);
+
+          // Load world graph and build direct lookup index
+          const graph = await digestEngine.loadWorldGraph();
+          if (graph) {
+            console.log(`${MODULE_ID} | World graph loaded — lookup index ready`);
+          } else {
+            // No world graph on disk — rebuild from active digests
+            console.log(`${MODULE_ID} | No world graph found — rebuilding from active digests...`);
+            await digestEngine.rebuildWorldGraph(activeIds);
+          }
         }
       }
 
@@ -1227,7 +1237,7 @@ Hooks.once("ready", async () => {
         const sceneName = canvas?.scene?.name ?? "";
         const lastMsg = options.lastAssistantMsg ?? "";
         const maxChars = options.maxChars ?? 8000;
-        return await documentEngine.buildDocumentContext("", userMessage, sceneName, maxChars, lastMsg) ?? "";
+        return await documentEngine.buildDocumentContext("", userMessage, sceneName, maxChars, lastMsg, npcName) ?? "";
       },
 
       /**
@@ -1239,6 +1249,48 @@ Hooks.once("ready", async () => {
       getLastSearchEntities: () => {
         return documentEngine?.getLastSearchEntities?.() ?? {};
       },
+
+      // ── Digest Direct Lookup API ─────────────────────────────
+      // O(1) name-based lookup against the world graph index.
+      // No API calls — purely in-memory from pre-built index.
+
+      /**
+       * Direct name lookup in the digest world graph.
+       * @param {string} name - Entity name (e.g., "Clovin Belview", "Abbey of Saint Markovia")
+       * @param {Object} [options] - { category: "NPC"|"Location"|"Faction"|etc, maxResults: 50 }
+       * @returns {Array<{category, entry, source, matchType}>}
+       */
+      digestLookup: (name, options) => {
+        return digestEngine?.lookupByName(name, options) ?? [];
+      },
+
+      /**
+       * Look up multiple names at once, deduplicating across results.
+       * @param {string[]} names - Array of entity names
+       * @param {Object} [options] - Same as digestLookup
+       * @returns {Array<{category, entry, source, matchType, queryName}>}
+       */
+      digestLookupMultiple: (names, options) => {
+        return digestEngine?.lookupMultiple(names, options) ?? [];
+      },
+
+      /**
+       * Direct lookup + format as AI-ready context text.
+       * @param {string} name - Entity name to look up
+       * @param {Object} [options] - { maxChars: 4000, category: "NPC"|etc }
+       * @returns {string} Formatted lookup context, or ""
+       */
+      digestLookupContext: (name, options = {}) => {
+        if (!digestEngine?.hasLookupIndex) return "";
+        const maxChars = options.maxChars ?? 4000;
+        const results = digestEngine.lookupByName(name, options);
+        if (!results.length) return "";
+        const { text } = digestEngine.formatLookupResults(results, maxChars);
+        return text;
+      },
+
+      /** Get the digest engine instance. */
+      getDigestEngine: () => digestEngine,
 
       /**
        * Get relevant images from the document library for multimodal AI.

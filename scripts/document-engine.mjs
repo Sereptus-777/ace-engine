@@ -636,21 +636,21 @@ export class DocumentEngine {
    * @param {string} lastAssistantMsg - Last AI response (for conversation-aware search)
    * @returns {string} Formatted context block, or ""
    */
-  async buildDocumentContext(sceneContext = "", userMessage = "", currentScene = "", maxChars = 8000, lastAssistantMsg = "") {
+  async buildDocumentContext(sceneContext = "", userMessage = "", currentScene = "", maxChars = 8000, lastAssistantMsg = "", npcName = "") {
     const store = this._mm?.documents;
     if (!store) return "";
 
     if (!userMessage?.trim()) return "";
 
     const contentBudget = maxChars - 300; // reserve 300 chars for headers/framing
-    return this._buildContextBM25(store, userMessage, sceneContext, currentScene, contentBudget, lastAssistantMsg);
+    return this._buildContextBM25(store, userMessage, sceneContext, currentScene, contentBudget, lastAssistantMsg, npcName);
   }
 
   /**
    * New BM25 + regex search pipeline.
    * @private
    */
-  async _buildContextBM25(store, userMessage, sceneContext, currentScene, contentBudget, lastAssistantMsg = "") {
+  async _buildContextBM25(store, userMessage, sceneContext, currentScene, contentBudget, lastAssistantMsg = "", npcName = "") {
     // ═══════════════════════════════════════════════════════════
     // Phase 3-5: Smart Context Assembly + Adaptive Digest + Embeddings
     // ═══════════════════════════════════════════════════════════
@@ -703,6 +703,50 @@ export class DocumentEngine {
       `terms=[${analysis.searchTerms.slice(0, 8).join(",")}]` +
       (conversationEntities.length ? ` | +${conversationEntities.length} conversation entities` : "") +
       (sceneRoomIds.length ? ` | scene rooms=[${sceneRoomIds}]` : ""));
+
+    // ── Phase 0: Direct Digest Lookup ──────────────────────
+    // O(1) name-based lookup against the world graph index.
+    // Fires BEFORE any chunk search — direct hits get priority placement.
+    let directLookupCtx = "";
+    let directLookupCharsUsed = 0;
+
+    if (this._digestEngine?.hasLookupIndex) {
+      // Collect names to look up from multiple sources
+      const lookupNames = new Set();
+
+      // From query classifier — NPC and location entities it detected
+      for (const npc of (analysis.entities?.npcs ?? [])) lookupNames.add(npc);
+      for (const loc of (analysis.entities?.locations ?? [])) lookupNames.add(loc);
+
+      // From the explicit npcName parameter (Envoy passes actor.name here)
+      if (npcName) lookupNames.add(npcName);
+
+      // Safety net: extract capitalized proper names from raw query
+      // (catches names the classifier might miss)
+      const properNamePattern = /[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}/g;
+      let pnMatch;
+      while ((pnMatch = properNamePattern.exec(userMessage)) !== null) {
+        const candidate = pnMatch[0];
+        // Skip common English words that happen to be capitalized
+        if (!["The", "This", "That", "What", "Where", "Who", "How", "Tell", "Can", "Does"].includes(candidate)) {
+          lookupNames.add(candidate);
+        }
+      }
+
+      if (lookupNames.size > 0) {
+        const lookupBudget = analysis.intent === "npc"
+          ? Math.floor(contentBudget * 0.40)
+          : Math.floor(contentBudget * 0.25);
+
+        const results = this._digestEngine.lookupMultiple([...lookupNames]);
+        if (results.length > 0) {
+          const formatted = this._digestEngine.formatLookupResults(results, lookupBudget);
+          directLookupCtx = formatted.text;
+          directLookupCharsUsed = formatted.charsUsed;
+          console.log(`ACE Search | Direct lookup: ${results.length} hits for [${[...lookupNames].join(", ")}] (${directLookupCharsUsed} chars)`);
+        }
+      }
+    }
 
     // 2. Regex pre-search — exact matches for rooms, floors, NPC names
     const regexResults = store.regexSearch(analysis.preSearchPatterns, 30);
@@ -766,7 +810,8 @@ export class DocumentEngine {
     const hasDigests = activeDigestIds.length > 0 && this._digestEngine;
 
     if (hasDigests) {
-      // Adaptive split based on intent
+      // Adaptive split based on intent — adjusted for direct lookup results
+      const remainingBudget = contentBudget - directLookupCharsUsed;
       const digestRatios = {
         room: 0.15,       // Room query — mostly want raw text, minimal digest
         npc: 0.25,        // NPC query — some digest context helps
@@ -778,8 +823,11 @@ export class DocumentEngine {
         floor: 0.20,      // Floor/area — mostly raw chunks
         rules: 0.10,      // Rules — almost entirely raw text
       };
-      const digestRatio = digestRatios[analysis.intent] ?? 0.35;
-      const digestBudget = Math.floor(contentBudget * digestRatio);
+      let digestRatio = digestRatios[analysis.intent] ?? 0.35;
+      // If direct lookup already found named entities, halve the digest ratio
+      // (those entities are already covered — digest can focus on supplementary data)
+      if (directLookupCharsUsed > 0) digestRatio *= 0.5;
+      const digestBudget = Math.floor(remainingBudget * digestRatio);
 
       // Phase 4: Query-aware digest — pass the classified intent so the
       // digest engine can prioritize relevant categories
@@ -794,7 +842,7 @@ export class DocumentEngine {
     }
 
     // ── Phase 3: Smart Context Assembly ──────────────────────
-    const chunkBudget = contentBudget - digestCharsUsed;
+    const chunkBudget = contentBudget - directLookupCharsUsed - digestCharsUsed;
 
     // Step A: Identify "must-include" chunks — exact room/NPC/scene matches
     //         These get guaranteed slots before ranked fill.
@@ -1094,7 +1142,7 @@ export class DocumentEngine {
       }
     }
 
-    if (!digestCtx && !selected.length) return "";
+    if (!directLookupCtx && !digestCtx && !selected.length) return "";
 
     // ── Step C: Sort selected by page order for readability ──
     selected.sort((a, b) => {
@@ -1112,12 +1160,18 @@ export class DocumentEngine {
     ctx += "The following information comes from the GM's reference documents. ";
     ctx += "Use this as background knowledge — do not quote it directly to players.\n\n";
 
+    // Direct lookup goes first — canonical structured data from the world graph
+    if (directLookupCtx) {
+      ctx += directLookupCtx;
+    }
+    // Keyword-scored digest data supplements direct lookup
     if (digestCtx) {
       ctx += "### Structured Reference Data\n";
       ctx += digestCtx;
-      if (chunkCtx) ctx += "\n### Relevant Document Excerpts\n";
     }
+    // Raw document chunks fill remaining budget with prose detail
     if (chunkCtx) {
+      ctx += "\n### Relevant Document Excerpts\n";
       ctx += chunkCtx;
     }
 
