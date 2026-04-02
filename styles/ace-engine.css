@@ -628,6 +628,17 @@
   margin: 1px 0;
 }
 
+/* Kill extra spacing when AI outputs blank lines between list items —
+   the markdown parser wraps each item in <p> which adds paragraph gaps */
+.ace-msg-body li p {
+  margin: 0;
+  display: inline;
+}
+.ace-msg-body li p + p {
+  display: block;
+  margin-top: 2px;
+}
+
 .ace-msg-body code.ace-inline-code {
   background: rgba(0, 0, 0, 0.3);
   padding: 1px 5px;
