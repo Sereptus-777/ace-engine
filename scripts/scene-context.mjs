@@ -965,20 +965,24 @@ export class SceneContext {
    * @returns {string}
    */
   _extractSenses(actor) {
-    const senses = actor?.system?.attributes?.senses ?? actor?.system?.traits?.senses ?? {};
-    if (!senses || typeof senses !== "object") return "";
+    const rawSenses = actor?.system?.attributes?.senses ?? actor?.system?.traits?.senses ?? {};
+    if (!rawSenses || typeof rawSenses !== "object") return "";
+
+    // D&D 5e 5.3.0 moved senses into .ranges sub-object; 5.2.x keeps them flat
+    const senses = rawSenses.ranges ?? rawSenses;
 
     const parts = [];
     for (const [key, val] of Object.entries(senses)) {
-      if (key === "units" || key === "special" || !val) continue;
+      if (key === "units" || key === "special" || key === "ranges" || !val) continue;
       if (typeof val === "number" && val > 0) {
         parts.push(`${key} ${val}ft`);
       } else if (typeof val === "string" && val) {
         parts.push(`${key}: ${val}`);
       }
     }
-    // Special senses string
-    if (senses.special) parts.push(senses.special);
+    // Special senses string — check both old and new paths
+    const special = rawSenses.special ?? senses.special;
+    if (special) parts.push(special);
     return parts.length ? parts.join(", ") : "";
   }
 

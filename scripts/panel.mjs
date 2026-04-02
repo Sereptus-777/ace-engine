@@ -5985,13 +5985,14 @@ Appropriate loot, XP, and story rewards.
         traits.push("Tongues (understands all languages)");
     }
 
-    // ── 2. Senses attribute ──────────────────────────────────
-    const senses = actor.system?.attributes?.senses ?? {};
+    // ── 2. Senses attribute (compatible with D&D 5e 5.2.x and 5.3.0+) ──
+    const rawSenses = actor.system?.attributes?.senses ?? {};
+    const senses = rawSenses.ranges ?? rawSenses;
     if (senses.blindsight > 0) traits.push(`Blindsight ${senses.blindsight}ft`);
     if (senses.tremorsense > 0) traits.push(`Tremorsense ${senses.tremorsense}ft`);
     if (senses.truesight > 0) traits.push(`Truesight ${senses.truesight}ft`);
 
-    const specialSenses = (senses.special ?? "").toLowerCase();
+    const specialSenses = (rawSenses.special ?? senses.special ?? "").toLowerCase();
     if (specialSenses.includes("telepathy") && !traits.some(t => t.startsWith("Telepathy"))) {
       const m = specialSenses.match(/telepathy\s+(\d+)\s*(?:ft|feet)?/i);
       traits.push(m ? `Telepathy ${m[1]}ft` : "Telepathy");
