@@ -1325,9 +1325,14 @@ Hooks.once("ready", async () => {
        * @param {string} cityName - City name (case-insensitive)
        * @returns {string} Formatted world context, or ""
        */
-      getWorldBibleCityContext: (cityName) => {
+      getWorldBibleCityContext: (cityName, npcName) => {
         if (!worldBible?.hasData) return "";
-        return worldBible.getCityContext(cityName);
+        let ctx = worldBible.getCityContext(cityName);
+        // If NPC name provided, also search for NPC-specific context
+        if (npcName && !ctx) {
+          ctx = worldBible.search(`${npcName} ${cityName}`, 3);
+        }
+        return ctx ?? "";
       },
 
       /**
@@ -1396,9 +1401,11 @@ Hooks.once("ready", async () => {
        * @param {string} locationName
        * @returns {Promise<string>}
        */
-      resolveWorldBibleLocation: async (locationName) => {
+      resolveWorldBibleLocation: async (locationName, npcName) => {
         if (!worldBible?.hasData || !aiProvider) return "";
-        return worldBible.resolveLocation(locationName, aiProvider, game.world.id);
+        // Include NPC name in the resolution query for better matching
+        const query = npcName ? `${npcName} ${locationName}` : locationName;
+        return worldBible.resolveLocation(query, aiProvider, game.world.id);
       },
 
       /**
@@ -1502,13 +1509,22 @@ Hooks.once("ready", async () => {
        * @param {string} [sceneId]
        * @returns {Promise<string>}
        */
-      getSceneIntelligencePrompt: async (sceneName, sceneId) => {
+      getSceneIntelligencePrompt: async (sceneName, sceneId, npcName) => {
         if (!sceneIntelligence) return "";
         const intel = await sceneIntelligence.getIntelligence(
           sceneId || canvas?.scene?.id || "",
           sceneName || canvas?.scene?.name || ""
         );
-        return sceneIntelligence.formatForPrompt(intel);
+        let prompt = sceneIntelligence.formatForPrompt(intel);
+        // If NPC name provided, append digest lookup for NPC-specific context
+        if (npcName && digestEngine?.hasLookupIndex) {
+          const npcResults = digestEngine.lookupByName(npcName, { category: "NPC", maxResults: 5 });
+          if (npcResults.length) {
+            const { text } = digestEngine.formatLookupResults(npcResults, 1500);
+            if (text) prompt += `\n\n${text}`;
+          }
+        }
+        return prompt;
       },
 
       /**
