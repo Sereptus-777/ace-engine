@@ -62,10 +62,14 @@ export class SceneContext {
     this._cacheTime = 0;
     this._cacheTTL = 5000;
     this._worldBible = null;
+    this._digestEngine = null;
   }
 
   /** @param {WorldBibleEngine} bible */
   setWorldBible(bible) { this._worldBible = bible; }
+
+  /** @param {DigestEngine} engine */
+  setDigestEngine(engine) { this._digestEngine = engine; }
 
   refresh() { this._cache = null; this._cacheTime = 0; }
   refreshCombat() { this._cache = null; }
@@ -144,6 +148,12 @@ export class SceneContext {
 
     const lines = [`### Scene: ${scene.name}`];
 
+    // ── Smart Location Resolution ──────────────────────────────
+    // When scene names are abbreviated (e.g., "BM: 2F North East"),
+    // cross-reference NPC tokens + digest data to identify the actual location.
+    const resolvedLocation = this._resolveSceneLocation(scene);
+    if (resolvedLocation) lines.push(`**Resolved Location:** ${resolvedLocation}`);
+
     // Check ACE custom flag first, then Foundry native description
     const aceDesc = scene.flags?.["ace-engine"]?.sceneDescription;
     const nativeDesc = scene.description ? this._stripHtml(scene.description) : "";
@@ -165,6 +175,108 @@ export class SceneContext {
     if (bibleContext) lines.push(bibleContext);
 
     return lines.join("\n");
+  }
+
+  /**
+   * Resolve an abbreviated scene name to an actual canonical location by
+   * cross-referencing NPC tokens on the scene with their known locations
+   * from the digest world graph.
+   *
+   * Example: Scene "BM: 2F North East" has Clovin Belview (a mongrelfolk).
+   * Digest says Clovin's location is "Abbey of Saint Markovia".
+   * → Resolved: "Abbey of Saint Markovia (2nd floor, northeast section)"
+   *
+   * @param {Scene} scene
+   * @returns {string} Resolved location description, or ""
+   */
+  _resolveSceneLocation(scene) {
+    if (!this._digestEngine?.hasLookupIndex) return "";
+
+    const sceneName = scene.name ?? "";
+    // Only attempt resolution if scene name looks abbreviated
+    // (contains prefix with colon, very short, or mostly abbreviations)
+    const looksAbbreviated = /^[A-Z]{1,4}:/.test(sceneName) ||
+                             sceneName.length < 15 ||
+                             /^\S+\s*:\s*\d/.test(sceneName);
+    if (!looksAbbreviated) return "";
+
+    // ── Strategy 1: Look up NPC tokens on this scene in the digest ──
+    // If an NPC has a known location in the digest, that's likely where the scene is.
+    const tokenDocs = [...(scene.tokens ?? [])];
+    const locationVotes = {}; // location name → count of NPCs from there
+
+    for (const td of tokenDocs) {
+      const actor = td.actor;
+      if (!actor || actor.hasPlayerOwner) continue;
+
+      const npcName = actor.name;
+      if (!npcName) continue;
+
+      const results = this._digestEngine.lookupByName(npcName, { category: "NPC", maxResults: 3 });
+      for (const r of results) {
+        if (r.matchType === "exact" && r.entry.location) {
+          const loc = r.entry.location;
+          locationVotes[loc] = (locationVotes[loc] || 0) + (r.matchType === "exact" ? 3 : 1);
+        }
+      }
+    }
+
+    // Pick the location with the most votes
+    let bestLocation = "";
+    let bestScore = 0;
+    for (const [loc, score] of Object.entries(locationVotes)) {
+      if (score > bestScore) {
+        bestLocation = loc;
+        bestScore = score;
+      }
+    }
+
+    // ── Strategy 2: Parse floor/section info from scene name ──
+    let floorSection = "";
+    const floorMatch = sceneName.match(/(\d+)[Ff]\b/);
+    if (floorMatch) {
+      const floor = parseInt(floorMatch[1]);
+      const ordinal = floor === 1 ? "1st" : floor === 2 ? "2nd" : floor === 3 ? "3rd" : `${floor}th`;
+      floorSection = `${ordinal} floor`;
+    }
+    // Directional section
+    const dirMatch = sceneName.match(/\b(North|South|East|West|NE|NW|SE|SW|North\s*East|North\s*West|South\s*East|South\s*West|Central|Main)\b/i);
+    if (dirMatch) {
+      const dir = dirMatch[1].toLowerCase().replace(/\s+/g, "");
+      const dirNames = { north: "north", south: "south", east: "east", west: "west",
+        ne: "northeast", nw: "northwest", se: "southeast", sw: "southwest",
+        northeast: "northeast", northwest: "northwest", southeast: "southeast", southwest: "southwest",
+        central: "central", main: "main" };
+      const dirName = dirNames[dir] ?? dirMatch[1];
+      floorSection = floorSection ? `${floorSection}, ${dirName} section` : `${dirName} section`;
+    }
+
+    // ── Strategy 3: Try matching scene prefix against digest locations directly ──
+    if (!bestLocation) {
+      // Extract the prefix before the colon (e.g., "BM" from "BM: 2F North East")
+      const prefixMatch = sceneName.match(/^([A-Z]{1,4}):/);
+      if (prefixMatch) {
+        const prefix = prefixMatch[1];
+        // Search digest locations whose name contains words starting with these letters
+        // E.g., "BM" could match "Bonegrinder Mill" or "Barovia Manor"
+        // We let the NPC-based resolution take priority — this is a weaker fallback
+        const locResults = this._digestEngine.lookupByName(prefix, { category: "Location", maxResults: 5 });
+        // Only use if there's exactly one strong match (otherwise too ambiguous)
+        if (locResults.length === 1 && locResults[0].matchType === "exact") {
+          bestLocation = locResults[0].entry.name;
+        }
+      }
+    }
+
+    if (!bestLocation) return "";
+
+    // Build the final resolved string
+    if (floorSection) {
+      return `This scene is most likely **${bestLocation}** (${floorSection}). ` +
+             `Location identified by cross-referencing NPC tokens with adventure source material.`;
+    }
+    return `This scene is most likely **${bestLocation}**. ` +
+           `Location identified by cross-referencing NPC tokens with adventure source material.`;
   }
 
   /**
@@ -342,6 +454,34 @@ export class SceneContext {
       for (const td of pcTokens) {
         if (td.actor) lines.push(this._buildDetailedActorBlock(td.actor, true));
       }
+    } else {
+      // No PCs on current scene — scan ALL scenes to find where they are
+      const pcLocations = this._findPCsAcrossScenes();
+      if (pcLocations.length) {
+        lines.push("**Player Characters (not on current scene):**");
+        lines.push("The party's tokens were found on other scenes:");
+        for (const pc of pcLocations) {
+          const sceneList = pc.scenes.join(", ");
+          let entry = `- **${pc.name}**`;
+          if (pc.level !== null) entry += ` — Level ${pc.level}`;
+          if (pc.classInfo) entry += ` ${pc.classInfo}`;
+          entry += ` — found on: ${sceneList}`;
+          lines.push(entry);
+        }
+        // Determine likely party location (scene with most PC tokens)
+        const sceneCounts = {};
+        for (const pc of pcLocations) {
+          for (const s of pc.scenes) {
+            sceneCounts[s] = (sceneCounts[s] || 0) + 1;
+          }
+        }
+        const sorted = Object.entries(sceneCounts).sort((a, b) => b[1] - a[1]);
+        if (sorted.length > 0) {
+          lines.push(`**Likely party location:** "${sorted[0][0]}" (${sorted[0][1]} PC token(s))`);
+        }
+      } else {
+        lines.push("**Player Characters:** None found on any scene.");
+      }
     }
     if (npcTokens.length) {
       lines.push("**NPCs & Creatures:**");
@@ -355,6 +495,39 @@ export class SceneContext {
     }
 
     return lines.join("\n");
+  }
+
+  /**
+   * Scan all scenes in the world to find PC tokens when none are on the current scene.
+   * Returns an array of { name, level, classInfo, scenes[] } for each unique PC actor.
+   */
+  _findPCsAcrossScenes() {
+    const currentSceneId = canvas?.scene?.id;
+    const pcMap = new Map(); // actorId → { name, level, classInfo, scenes[] }
+
+    for (const scene of game.scenes ?? []) {
+      if (scene.id === currentSceneId) continue; // already checked current scene
+      for (const td of scene.tokens ?? []) {
+        const actor = td.actor ?? game.actors?.get(td.actorId);
+        if (!actor?.hasPlayerOwner) continue;
+
+        const key = actor.id;
+        if (!pcMap.has(key)) {
+          pcMap.set(key, {
+            name: actor.name,
+            level: this._extractLevel(actor),
+            classInfo: this._extractClass(actor),
+            scenes: [],
+          });
+        }
+        const entry = pcMap.get(key);
+        if (!entry.scenes.includes(scene.name)) {
+          entry.scenes.push(scene.name);
+        }
+      }
+    }
+
+    return [...pcMap.values()];
   }
 
   /**

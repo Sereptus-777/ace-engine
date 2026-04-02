@@ -798,6 +798,9 @@ Hooks.once("ready", async () => {
             console.log(`${MODULE_ID} | No world graph found — rebuilding from active digests...`);
             await digestEngine.rebuildWorldGraph(activeIds);
           }
+
+          // Give SceneContext access to digest engine for location resolution
+          if (sceneCtx) sceneCtx.setDigestEngine(digestEngine);
         }
       }
 
