@@ -63,6 +63,9 @@ export class SceneContext {
     this._cacheTTL = 5000;
     this._worldBible = null;
     this._digestEngine = null;
+    // ── Scene Entity Pre-Load Cache (Enhancement 3) ──
+    this._sceneEntityCache = new Map(); // npcName → {primary, connected, envoyContext}
+    this._preloadSceneId = null;
   }
 
   /** @param {WorldBibleEngine} bible */
@@ -71,9 +74,58 @@ export class SceneContext {
   /** @param {DigestEngine} engine */
   setDigestEngine(engine) { this._digestEngine = engine; }
 
-  refresh() { this._cache = null; this._cacheTime = 0; }
+  refresh() { this._cache = null; this._cacheTime = 0; this._sceneEntityCache.clear(); this._preloadSceneId = null; }
   refreshCombat() { this._cache = null; }
   refreshActor() { this._cache = null; }
+
+  // ── Scene Entity Pre-Load (Enhancement 3) ──────────────
+
+  /**
+   * Pre-load digest entries for all NPC tokens on the current scene.
+   * Called on canvasReady — provides instant context for any NPC interaction.
+   */
+  preloadSceneEntities() {
+    try {
+      const scene = canvas?.scene;
+      if (!scene || !this._digestEngine?.hasLookupIndex) return;
+      if (this._preloadSceneId === scene.id && this._sceneEntityCache.size > 0) return; // already loaded
+
+      this._sceneEntityCache.clear();
+      this._preloadSceneId = scene.id;
+
+      const tokenDocs = scene.tokens?.contents ?? [];
+      let loaded = 0;
+      for (const td of tokenDocs) {
+        const actor = td.actor;
+        if (!actor || actor.hasPlayerOwner) continue; // skip PCs
+        const npcName = actor.name;
+        if (!npcName || this._sceneEntityCache.has(npcName)) continue;
+
+        const result = this._digestEngine.lookupWithConnections(npcName, {
+          category: "NPC", maxResults: 3, maxConnected: 3, includeEnvoy: false
+        });
+        if (result.primary.length > 0) {
+          this._sceneEntityCache.set(npcName, result);
+          loaded++;
+        }
+      }
+      if (loaded > 0) {
+        console.log(`ACE Engine | Scene pre-load: ${loaded} NPCs cached for "${scene.name}"`);
+      }
+    } catch (err) {
+      console.warn("ACE Engine | Scene pre-load failed:", err.message);
+    }
+  }
+
+  /** Get pre-loaded NPC data (instant, no lookup needed). */
+  getPreloadedNPC(name) {
+    return this._sceneEntityCache.get(name) ?? null;
+  }
+
+  /** Get all pre-loaded NPC names for the current scene. */
+  getPreloadedNPCNames() {
+    return [...this._sceneEntityCache.keys()];
+  }
 
   gather() {
     const now = Date.now();

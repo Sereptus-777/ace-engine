@@ -88,6 +88,11 @@ export class DigestEngine {
     // ── Direct Lookup Index ──
     this._lookupIndex = null;   // Map<normalizedName, Array<{category, entry, source}>>
     this._worldGraph = null;    // cached world graph object
+    // ── Reverse Indexes (Enhancement 2) ──
+    this._reverseLocationIndex = new Map(); // normalizedLocation → [{entry, source}]
+    this._reverseFactionIndex = new Map();  // normalizedFaction → [{entry, source}]
+    // ── Recent Context Memory (Enhancement 4) ──
+    this._recentLookups = [];  // [{name, category, timestamp}] max 10
     // ── Digest run state ──
     this._running = false;    // true while generateDigest() is in progress
     this._paused = false;
@@ -611,7 +616,28 @@ export class DigestEngine {
     }
 
     this._lookupIndex = index;
-    console.log(`${MODULE_ID} | Lookup index built: ${index.size} keys indexing ${entityCount} entities`);
+
+    // ── Build reverse indexes: location→NPCs, faction→members ──
+    const revLocation = new Map();
+    const revFaction = new Map();
+    const npcs = graph.npcs ?? [];
+    for (const npc of npcs) {
+      const source = npc._source ?? defaultSource;
+      if (npc.location) {
+        const locKey = npc.location.toLowerCase().trim();
+        if (!revLocation.has(locKey)) revLocation.set(locKey, []);
+        revLocation.get(locKey).push({ entry: npc, source });
+      }
+      if (npc.faction) {
+        const facKey = npc.faction.toLowerCase().trim();
+        if (!revFaction.has(facKey)) revFaction.set(facKey, []);
+        revFaction.get(facKey).push({ entry: npc, source });
+      }
+    }
+    this._reverseLocationIndex = revLocation;
+    this._reverseFactionIndex = revFaction;
+
+    console.log(`${MODULE_ID} | Lookup index built: ${index.size} keys indexing ${entityCount} entities, ${revLocation.size} locations, ${revFaction.size} factions (reverse)`);
   }
 
   /** Whether the lookup index is ready for queries. */
@@ -666,12 +692,26 @@ export class DigestEngine {
       }
     }
 
-    // Sort: exact first, then partial; within each group, NPC > Location > Faction > rest
+    // Sort: exact first, then partial; recency boost; then NPC > Location > Faction > rest
     const categoryPriority = { NPC: 0, Location: 1, Faction: 2, Item: 3, Encounter: 4, "Plot Hook": 5, Lore: 6 };
+    const recentNames = new Set(this._recentLookups.map(r => r.name.toLowerCase()));
     results.sort((a, b) => {
       if (a.matchType !== b.matchType) return a.matchType === "exact" ? -1 : 1;
+      // Recency boost — recently looked-up entities sort higher
+      const nameFieldA = DigestEngine.LOOKUP_CATEGORIES.find(c => c.label === a.category)?.nameField ?? "name";
+      const nameFieldB = DigestEngine.LOOKUP_CATEGORIES.find(c => c.label === b.category)?.nameField ?? "name";
+      const aRecent = recentNames.has((a.entry[nameFieldA] ?? "").toLowerCase());
+      const bRecent = recentNames.has((b.entry[nameFieldB] ?? "").toLowerCase());
+      if (aRecent !== bRecent) return aRecent ? -1 : 1;
       return (categoryPriority[a.category] ?? 9) - (categoryPriority[b.category] ?? 9);
     });
+
+    // ── Track recent lookups for context memory ──
+    if (results.length > 0 && results[0].matchType === "exact") {
+      const topHit = results[0];
+      this._recentLookups.push({ name: topHit.entry[DigestEngine.LOOKUP_CATEGORIES.find(c => c.label === topHit.category)?.nameField ?? "name"] ?? name, category: topHit.category, timestamp: Date.now() });
+      if (this._recentLookups.length > 10) this._recentLookups.shift();
+    }
 
     return results.slice(0, maxResults);
   }
@@ -786,6 +826,182 @@ export class DigestEngine {
       default:
         return `- [${category}] ${JSON.stringify(entry)}\n`;
     }
+  }
+
+  // ── Reverse Index Queries (Enhancement 2) ────────────────
+
+  /** Get all NPCs at a given location name. */
+  getNPCsAtLocation(locationName) {
+    if (!locationName) return [];
+    return this._reverseLocationIndex.get(locationName.toLowerCase().trim()) ?? [];
+  }
+
+  /** Get all NPC members of a given faction name. */
+  getFactionMembers(factionName) {
+    if (!factionName) return [];
+    return this._reverseFactionIndex.get(factionName.toLowerCase().trim()) ?? [];
+  }
+
+  // ── Recent Context Memory (Enhancement 4) ──────────────
+
+  /** Get formatted context of recently looked-up entities. */
+  getRecentContext(maxChars = 1000) {
+    if (!this._recentLookups.length) return { text: "", names: [] };
+    const names = this._recentLookups.map(r => r.name);
+    const results = this.lookupMultiple([...new Set(names)], { maxResults: 10 });
+    if (!results.length) return { text: "", names };
+    const formatted = this.formatLookupResults(results, maxChars);
+    return { text: formatted.text, names, charsUsed: formatted.charsUsed };
+  }
+
+  /** Get recent lookup names (for injecting into query name extraction). */
+  getRecentNames() {
+    return this._recentLookups.map(r => r.name);
+  }
+
+  // ── Connected Entity Pulling (Enhancement 1) ────────────
+
+  /**
+   * Look up an entity by name AND pull all connected entities.
+   * For NPCs: follows location → Location entry, faction → Faction entry
+   * For Locations: pulls NPCs at this location (reverse index)
+   * For Factions: pulls faction members (reverse index)
+   * @param {string} name
+   * @param {Object} [options] - Same as lookupByName plus:
+   * @param {number} [options.maxConnected=5] - Max connected entities per primary result
+   * @param {boolean} [options.includeEnvoy=true] - Include Envoy conversation history
+   * @returns {{primary: Array, connected: Array, envoyContext: string}}
+   */
+  lookupWithConnections(name, options = {}) {
+    const { maxConnected = 5, includeEnvoy = true, ...lookupOpts } = options;
+    const primary = this.lookupByName(name, lookupOpts);
+    if (!primary.length) return { primary: [], connected: [], envoyContext: "" };
+
+    const connected = [];
+    const seen = new Set(primary.map(r => `${r.category}:${(r.entry.name ?? r.entry.topic ?? r.entry.title ?? "").toLowerCase()}`));
+
+    const addConnected = (results) => {
+      for (const r of results) {
+        const key = `${r.category}:${(r.entry.name ?? r.entry.topic ?? r.entry.title ?? "").toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        connected.push(r);
+        if (connected.length >= maxConnected * primary.length) return;
+      }
+    };
+
+    for (const p of primary) {
+      if (p.category === "NPC") {
+        // Follow NPC → Location
+        if (p.entry.location) {
+          addConnected(this.lookupByName(p.entry.location, { category: "Location", maxResults: 2 }));
+          // Also pull other NPCs at that location
+          const colocated = this.getNPCsAtLocation(p.entry.location);
+          addConnected(colocated.filter(c => c.entry.name !== p.entry.name).slice(0, 3).map(c => ({
+            category: "NPC", entry: c.entry, source: c.source, matchType: "connected"
+          })));
+        }
+        // Follow NPC → Faction
+        if (p.entry.faction) {
+          addConnected(this.lookupByName(p.entry.faction, { category: "Faction", maxResults: 2 }));
+        }
+      } else if (p.category === "Location") {
+        // Pull NPCs at this location
+        const npcsHere = this.getNPCsAtLocation(p.entry.name);
+        addConnected(npcsHere.slice(0, maxConnected).map(c => ({
+          category: "NPC", entry: c.entry, source: c.source, matchType: "connected"
+        })));
+      } else if (p.category === "Faction") {
+        // Pull faction members
+        const members = this.getFactionMembers(p.entry.name);
+        addConnected(members.slice(0, maxConnected).map(c => ({
+          category: "NPC", entry: c.entry, source: c.source, matchType: "connected"
+        })));
+      }
+    }
+
+    // Enhancement 5: Envoy conversation history
+    let envoyContext = "";
+    if (includeEnvoy) {
+      for (const p of primary) {
+        if (p.category === "NPC" && p.entry.name) {
+          envoyContext += this._getEnvoyContext(p.entry.name);
+        }
+      }
+    }
+
+    return { primary, connected, envoyContext };
+  }
+
+  /**
+   * Format connection results (primary + connected + envoy) into AI context.
+   * @param {{primary, connected, envoyContext}} result - From lookupWithConnections
+   * @param {number} [maxChars=4000]
+   * @returns {{ text: string, charsUsed: number }}
+   */
+  formatConnectionResults(result, maxChars = 4000) {
+    if (!result?.primary?.length) return { text: "", charsUsed: 0 };
+
+    // Budget: 70% primary, 20% connected, 10% envoy
+    const primaryBudget = Math.floor(maxChars * 0.70);
+    const connectedBudget = Math.floor(maxChars * 0.20);
+    const envoyBudget = Math.floor(maxChars * 0.10);
+
+    const primaryFmt = this.formatLookupResults(result.primary, primaryBudget);
+    let text = primaryFmt.text;
+    let charsUsed = primaryFmt.charsUsed;
+
+    // Connected entities
+    if (result.connected.length > 0) {
+      const connHeader = "\n── CONNECTED ENTITIES ──\n";
+      const connFmt = this.formatLookupResults(result.connected, connectedBudget - connHeader.length);
+      if (connFmt.charsUsed > 0) {
+        text += connHeader + connFmt.text;
+        charsUsed += connHeader.length + connFmt.charsUsed;
+      }
+    }
+
+    // Envoy conversation history
+    if (result.envoyContext) {
+      const remaining = maxChars - charsUsed;
+      const envoyTrimmed = result.envoyContext.slice(0, Math.min(remaining, envoyBudget));
+      if (envoyTrimmed.length > 10) {
+        text += "\n── LAST CONVERSATION ──\n" + envoyTrimmed + "\n";
+        charsUsed += envoyTrimmed.length + 25;
+      }
+    }
+
+    return { text, charsUsed };
+  }
+
+  // ── Envoy Integration (Enhancement 5) ──────────────────
+
+  /**
+   * Get conversation history from ACE Envoy for an NPC.
+   * Graceful fallback if Envoy not installed.
+   * @private
+   */
+  _getEnvoyContext(npcName) {
+    try {
+      const envoy = game.modules.get("ace-envoy");
+      if (!envoy?.active || !envoy.api) return "";
+      const memory = envoy.api.getConversationMemory?.(npcName);
+      if (!memory || typeof memory !== "string" || memory.length < 10) return "";
+      return memory;
+    } catch (err) {
+      console.warn(`${MODULE_ID} | Envoy context fetch failed for ${npcName}:`, err.message);
+      return "";
+    }
+  }
+
+  /** Get index statistics for debugging. */
+  getIndexStats() {
+    return {
+      lookupKeys: this._lookupIndex?.size ?? 0,
+      locations: this._reverseLocationIndex.size,
+      factions: this._reverseFactionIndex.size,
+      recentLookups: this._recentLookups.length,
+    };
   }
 
   // ── Context Building from Digests ────────────────────────

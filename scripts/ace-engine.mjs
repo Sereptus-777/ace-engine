@@ -1296,6 +1296,31 @@ Hooks.once("ready", async () => {
       getDigestEngine: () => digestEngine,
 
       /**
+       * Connected lookup: entity + location + faction + NPCs at location + Envoy history.
+       * @param {string} name - Entity name
+       * @param {Object} [options] - { maxConnected: 5, includeEnvoy: true, category, maxResults }
+       * @returns {{primary: Array, connected: Array, envoyContext: string}}
+       */
+      digestLookupWithConnections: (name, options) => {
+        return digestEngine?.lookupWithConnections(name, options) ?? { primary: [], connected: [], envoyContext: "" };
+      },
+
+      /** Get all NPCs at a given location (reverse index). */
+      getNPCsAtLocation: (locationName) => digestEngine?.getNPCsAtLocation(locationName) ?? [],
+
+      /** Get all NPC members of a faction (reverse index). */
+      getFactionMembers: (factionName) => digestEngine?.getFactionMembers(factionName) ?? [],
+
+      /** Get pre-loaded NPC data for the current scene (instant, no lookup). */
+      getPreloadedSceneNPC: (name) => sceneCtx?.getPreloadedNPC(name) ?? null,
+
+      /** Get recent digest lookup summaries for context continuity. */
+      getRecentDigestContext: () => digestEngine?.getRecentContext() ?? { text: "", names: [] },
+
+      /** Get index statistics for debugging. */
+      getDigestStats: () => digestEngine?.getIndexStats() ?? {},
+
+      /**
        * Get relevant images from the document library for multimodal AI.
        * Returns base64-encoded images matching the query keywords.
        * @param {string} userMessage - Query to match against image tags/labels
@@ -1774,6 +1799,8 @@ let _lastSceneName = null;  // track scene transitions for memory
 Hooks.on("canvasReady", () => {
   if (!game.user.isGM || !sceneCtx) return;
   sceneCtx.refresh();
+  // Enhancement 3: Pre-load digest entries for all NPC tokens on scene
+  sceneCtx.preloadSceneEntities();
   CanvasHighlight.clearAll();   // remove any lingering highlights from previous scene
   // Apply subtle gold glow to PC tokens so they're easy to spot
   if (game.settings.get(MODULE_ID, "pcGlow")) {

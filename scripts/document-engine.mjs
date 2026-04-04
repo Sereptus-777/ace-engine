@@ -721,13 +721,16 @@ export class DocumentEngine {
       // From the explicit npcName parameter (Envoy passes actor.name here)
       if (npcName) lookupNames.add(npcName);
 
+      // Enhancement 4: Inject recent context names for disambiguation
+      for (const recentName of this._digestEngine.getRecentNames()) {
+        lookupNames.add(recentName);
+      }
+
       // Safety net: extract capitalized proper names from raw query
-      // (catches names the classifier might miss)
       const properNamePattern = /[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}/g;
       let pnMatch;
       while ((pnMatch = properNamePattern.exec(userMessage)) !== null) {
         const candidate = pnMatch[0];
-        // Skip common English words that happen to be capitalized
         if (!["The", "This", "That", "What", "Where", "Who", "How", "Tell", "Can", "Does"].includes(candidate)) {
           lookupNames.add(candidate);
         }
@@ -738,12 +741,33 @@ export class DocumentEngine {
           ? Math.floor(contentBudget * 0.40)
           : Math.floor(contentBudget * 0.25);
 
-        const results = this._digestEngine.lookupMultiple([...lookupNames]);
-        if (results.length > 0) {
-          const formatted = this._digestEngine.formatLookupResults(results, lookupBudget);
-          directLookupCtx = formatted.text;
-          directLookupCharsUsed = formatted.charsUsed;
-          console.log(`ACE Search | Direct lookup: ${results.length} hits for [${[...lookupNames].join(", ")}] (${directLookupCharsUsed} chars)`);
+        // Enhancement 1: Use connected lookup for the primary name (npcName or first entity)
+        const primaryName = npcName || [...lookupNames][0];
+        const remainingNames = [...lookupNames].filter(n => n !== primaryName);
+
+        // Primary: full connected lookup with Envoy history
+        const connResult = this._digestEngine.lookupWithConnections(primaryName, { maxResults: 5, maxConnected: 5 });
+        if (connResult.primary.length > 0) {
+          const connFmt = this._digestEngine.formatConnectionResults(connResult, Math.floor(lookupBudget * 0.70));
+          directLookupCtx = connFmt.text;
+          directLookupCharsUsed = connFmt.charsUsed;
+        }
+
+        // Secondary: standard lookup for remaining names
+        if (remainingNames.length > 0) {
+          const secBudget = lookupBudget - directLookupCharsUsed;
+          if (secBudget > 100) {
+            const secResults = this._digestEngine.lookupMultiple(remainingNames);
+            if (secResults.length > 0) {
+              const secFmt = this._digestEngine.formatLookupResults(secResults, secBudget);
+              directLookupCtx += secFmt.text;
+              directLookupCharsUsed += secFmt.charsUsed;
+            }
+          }
+        }
+
+        if (directLookupCharsUsed > 0) {
+          console.log(`ACE Search | Direct lookup: ${connResult.primary.length} primary + ${connResult.connected.length} connected for "${primaryName}" + ${remainingNames.length} secondary (${directLookupCharsUsed} chars)`);
         }
       }
     }
