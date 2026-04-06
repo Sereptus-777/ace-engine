@@ -79,7 +79,7 @@ export class SimpleCalendarBridge {
   static isEnabled() {
     try {
       return game.settings.get(MODULE_ID, "syncSimpleCalendar") ?? false;
-    } catch { return false; }
+    } catch (err) { console.debug("ace-engine | SimpleCalendarBridge isEnabled setting read failed:", err); return false; }
   }
 
   /** Convenience: available AND enabled. */
@@ -292,7 +292,7 @@ export class SimpleCalendarBridge {
       // display.date is usually "Month Day, Year" format
       // display.time is "HH:MM:SS" format
       return display.date || null;
-    } catch { return null; }
+    } catch (err) { console.debug("ace-engine | SimpleCalendarBridge getDisplayDate failed:", err); return null; }
   }
 
   /**
@@ -305,7 +305,7 @@ export class SimpleCalendarBridge {
     try {
       const display = SimpleCalendar.api.currentDateTimeDisplay();
       return display?.time || null;
-    } catch { return null; }
+    } catch (err) { console.debug("ace-engine | SimpleCalendarBridge getDisplayTime failed:", err); return null; }
   }
 
   /**
@@ -321,7 +321,7 @@ export class SimpleCalendarBridge {
       const parts = [display.date];
       if (display.time) parts.push(display.time);
       return parts.join(" — ");
-    } catch { return null; }
+    } catch (err) { console.debug("ace-engine | SimpleCalendarBridge getFormattedDateTime failed:", err); return null; }
   }
 
   // ── Internal helpers ────────────────────────────────────────
@@ -339,7 +339,7 @@ export class SimpleCalendarBridge {
       // of (month * 30 + day) as a relative offset.  The absolute value
       // doesn't matter — we only need deltas.
       return year * 400 + month * 32 + dayOfYear;
-    } catch { return null; }
+    } catch (err) { console.debug("ace-engine | SimpleCalendarBridge _getScDayNumber failed:", err); return null; }
   }
 
   /** Cache the current SC day for delta tracking. */

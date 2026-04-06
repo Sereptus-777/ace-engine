@@ -169,7 +169,8 @@ export class VaultEngine {
       }
       this._ledgerCache = await res.json();
       return this._ledgerCache;
-    } catch {
+    } catch (err) {
+      console.warn("ace-engine | VaultEngine ledger file load failed:", err);
       this._ledgerCache = { version: 1, campaigns: [] };
       return this._ledgerCache;
     }

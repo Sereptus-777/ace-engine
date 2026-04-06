@@ -40,7 +40,7 @@ export class NpcMemoryReader {
           }
           if (lines.length > 1) return lines.join("\n");
         }
-      } catch { /* fall through to journal reader */ }
+      } catch (err) { console.debug("ace-engine | NpcMemoryReader envoy API getAllMemories failed:", err); }
     }
 
     // Fallback: read [AI Memory] journals
@@ -73,7 +73,7 @@ export class NpcMemoryReader {
           if (profile.secretLore)  parts.push(`Knowledge: ${profile.secretLore}`);
           return parts.join("\n") || "";
         }
-      } catch { /* fall through */ }
+      } catch (err) { console.debug("ace-engine | NpcMemoryReader envoy API getMemoryFor failed:", err); }
     }
 
     const memories = this._gatherMemories();
@@ -107,7 +107,7 @@ export class NpcMemoryReader {
               coveredNames.add(name);
             }
           }
-        } catch { /* skip */ }
+        } catch (err) { console.debug("ace-engine | NpcMemoryReader envoy API getSceneNpcMemories skip:", err); }
       }
     }
 

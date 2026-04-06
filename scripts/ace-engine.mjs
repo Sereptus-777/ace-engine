@@ -1333,7 +1333,7 @@ Hooks.once("ready", async () => {
         const images = await Promise.all(
           refs.map(async (r) => {
             try { return await loadImageAsBase64(r.path); }
-            catch { return null; }
+            catch (err) { console.debug("ace-engine | API vision image load failed:", err); return null; }
           })
         );
         return images.filter(Boolean);
@@ -2867,7 +2867,7 @@ async function _aceRollDamage(btn) {
   const dmgType = btn.dataset.damageType || "untyped";
   let roll;
   try { roll = await new Roll(formula).evaluate(); }
-  catch { ui.notifications?.error(`ACE: invalid formula "${formula}"`); return; }
+  catch (err) { console.warn("ace-engine | Roll damage formula evaluation failed:", err); ui.notifications?.error(`ACE: invalid formula "${formula}"`); return; }
 
   const typeLabel = dmgType !== "untyped" ? ` ${_escapeHtml(dmgType)}` : "";
   const body =
@@ -2894,7 +2894,7 @@ async function _aceRollHeal(btn) {
   const formula   = btn.dataset.formula;
   let roll;
   try { roll = await new Roll(formula).evaluate(); }
-  catch { ui.notifications?.error(`ACE: invalid formula "${formula}"`); return; }
+  catch (err) { console.warn("ace-engine | Roll heal formula evaluation failed:", err); ui.notifications?.error(`ACE: invalid formula "${formula}"`); return; }
 
   const body =
     `<div style="font-size:2em;color:#eddfc5;text-align:center;font-weight:bold;padding:4px 0;">+${roll.total}</div>` +

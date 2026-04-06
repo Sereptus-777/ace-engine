@@ -709,7 +709,7 @@ export class SceneContext {
           try {
             const roll = r instanceof Roll ? r : Roll.fromData(r);
             rollSummaries.push(`${roll.formula} = **${roll.total}**`);
-          } catch { /* skip unparseable rolls */ }
+          } catch (err) { console.debug("ace-engine | SceneContext skip unparseable roll:", err); }
         }
         if (rollSummaries.length) {
           const flavor = msg.flavor ? this._stripHtml(msg.flavor).trim() : "";
@@ -746,7 +746,7 @@ export class SceneContext {
         lines.push(`- **${trap.name ?? "Trap"}**: ${trap.description ?? "No description"}`);
       }
       return lines.join("\n");
-    } catch { return ""; }
+    } catch (err) { console.debug("ace-engine | SceneContext trap gathering failed:", err); return ""; }
   }
 
   // ── System-agnostic data extractors ───────────────────────

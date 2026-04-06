@@ -275,7 +275,7 @@ When suggesting these features, be natural — weave them into your advice. For 
     // Per-call override takes precedence (set by chat()/chatStream() options)
     if (this._maxTokensOverride) return this._maxTokensOverride;
     try { return game.settings.get(MODULE_ID, "maxResponseTokens"); }
-    catch { return 2048; }
+    catch (err) { console.warn("ace-engine | AIProvider maxResponseTokens setting read failed:", err); return 2048; }
   }
 
   // ── Ollama ────────────────────────────────────────────────

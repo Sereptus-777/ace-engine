@@ -53,7 +53,8 @@ export class VaultSearch {
       }
       this._discoveryCache = worlds;
       return worlds;
-    } catch {
+    } catch (err) {
+      console.warn("ace-engine | VaultSearch world discovery failed:", err);
       // Vault root doesn't exist yet — no archived worlds
       return [];
     }
@@ -69,7 +70,8 @@ export class VaultSearch {
       const res = await fetch(`${VAULT_ROOT}/${worldId}/latest/vault-manifest.json`);
       if (!res.ok) return null;
       return await res.json();
-    } catch {
+    } catch (err) {
+      console.warn("ace-engine | VaultSearch manifest load failed:", err);
       return null;
     }
   }
@@ -107,7 +109,7 @@ export class VaultSearch {
           const json = await res.json();
           data[key] = extract(json);
         }
-      } catch { /* missing store is fine */ }
+      } catch (err) { console.debug("ace-engine | VaultSearch store load skipped:", err); }
     }
 
     this._cache.set(worldId, data);

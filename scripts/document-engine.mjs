@@ -1578,7 +1578,8 @@ export class DocumentEngine {
         return data;
       }
       return null;
-    } catch {
+    } catch (err) {
+      console.debug("ace-engine | DocumentEngine cache file load failed:", err);
       return null; // no cache file — that's fine
     }
   }
@@ -1610,12 +1611,13 @@ export class DocumentEngine {
               filePath,
             });
           }
-        } catch { /* skip corrupted cache files */ }
+        } catch (err) { console.debug("ace-engine | DocumentEngine skip corrupted cache file:", err); }
       }
 
       console.log(`${MODULE_ID} | Document cache scan: found ${entries.length} cached document(s)`);
       return entries;
-    } catch {
+    } catch (err) {
+      console.debug("ace-engine | DocumentEngine cache scan failed (folder may not exist):", err);
       return []; // folder doesn't exist yet — no cache
     }
   }

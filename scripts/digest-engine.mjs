@@ -417,7 +417,8 @@ export class DigestEngine {
       const data = await resp.json();
       if (data?.version && data?.partials) return data;
       return null;
-    } catch {
+    } catch (err) {
+      console.warn("ace-engine | DigestEngine WIP file load failed:", err);
       return null;
     }
   }
@@ -429,7 +430,7 @@ export class DigestEngine {
       const fileName = `_wip_${docId}.json`;
       const file = new File(['{"done":true}'], fileName, { type: "application/json" });
       await _silentUpload("data", GLOBAL_DIGEST_DIR, file);
-    } catch { /* best effort */ }
+    } catch (err) { console.debug("ace-engine | DigestEngine WIP delete best-effort failed:", err); }
   }
 
   // ── JSON Parsing ─────────────────────────────────────────

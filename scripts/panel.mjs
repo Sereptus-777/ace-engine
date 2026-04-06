@@ -4054,7 +4054,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
           visionImages = await Promise.all(
             refs.map(async (r) => {
               try { return await loadImageAsBase64(r.path); }
-              catch { return null; }
+              catch (err) { console.debug("ace-engine | Panel vision image load failed:", err); return null; }
             })
           );
           visionImages = visionImages.filter(Boolean);
@@ -5434,7 +5434,7 @@ Appropriate loot, XP, and story rewards.
       try {
         const ledgerCtx = await this._vaultEngine.getLedgerContext(800);
         if (ledgerCtx) parts.push(ledgerCtx);
-      } catch { /* non-critical */ }
+      } catch (err) { console.debug("ace-engine | Panel ledger context fetch non-critical:", err); }
     }
 
     return parts.join("\n\n");
@@ -5514,7 +5514,7 @@ Appropriate loot, XP, and story rewards.
         try {
           const knowledge = this.reputation.getNpcKnowledge?.(null, null);
           if (knowledge?.promptText) parts.push(knowledge.promptText);
-        } catch { /* non-critical */ }
+        } catch (err) { console.debug("ace-engine | Panel reputation NPC knowledge non-critical:", err); }
       }
 
       // Cap to avoid bloating the prompt
@@ -5918,7 +5918,7 @@ Appropriate loot, XP, and story rewards.
       const dx = convo.npcTokenPos.x - convo.pcTokenPos.x;
       const dy = convo.npcTokenPos.y - convo.pcTokenPos.y;
       return Math.round((Math.hypot(dx, dy) / gridSizePx) * gridFt);
-    } catch { return null; }
+    } catch (err) { console.debug("ace-engine | Panel conversation proximity calculation failed:", err); return null; }
   }
 
   /**
@@ -6753,7 +6753,7 @@ Appropriate loot, XP, and story rewards.
             ],
           });
           this._compendiumIndexCache.set(pack.collection, { index, time: Date.now() });
-        } catch { continue; }
+        } catch (err) { console.debug("ace-engine | Panel compendium index build failed:", err); continue; }
       }
 
       // Exact match (case-insensitive)
