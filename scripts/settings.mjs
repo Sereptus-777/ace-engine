@@ -446,6 +446,7 @@ export class AceSettings {
     // ── Debug (client-scoped) ───────────────────────────────
     s("debugMode", {
       scope: "client",
+      config: false,
       name: "ACE.Settings.DebugMode.Name",
       hint: "ACE.Settings.DebugMode.Hint",
       type: Boolean,
@@ -605,7 +606,7 @@ export class AceSettings {
       if (!root) return;
 
       // Mask API key fields as password inputs
-      for (const key of ["apiKey", "elevenLabsApiKey"]) {
+      for (const key of ["apiKey", "digestApiKey", "elevenLabsApiKey"]) {
         const input = root.querySelector(`[name="${MODULE_ID}.${key}"]`);
         if (input && input.type !== "password") {
           input.type = "password";
