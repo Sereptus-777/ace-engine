@@ -1562,6 +1562,67 @@ Hooks.once("ready", async () => {
 
       /** Get the SceneIntelligence instance (for advanced use). */
       getSceneIntelligenceEngine: () => sceneIntelligence,
+
+      // ── Clean API v1 (Consumer-safe wrappers) ──────────────────
+      // These methods return DATA, not internal class instances.
+      // Consumer modules (Envoy, Forge) should prefer these over the
+      // getXxxEngine() instance-returning methods.
+      // When Engine internals change, only these wrappers need updating.
+
+      /** API version — consumers can check `api.VERSION >= 1` before calling v1 methods. */
+      VERSION: 1,
+
+      /** Resolve a faction key for an actor via the reputation engine.
+       *  Consumer-safe wrapper — avoids exposing the ReputationEngine instance.
+       *  @param {Actor} actor
+       *  @returns {string|null} Faction key, or null */
+      resolveFactionKey: (actor) => reputationEngine?.resolveFactionKey?.(actor) ?? null,
+
+      /** Apply a disposition change to an NPC token via the reputation engine.
+       *  Consumer-safe wrapper — avoids exposing the ReputationEngine instance.
+       *  @param {string} npcName - NPC name to find on canvas
+       *  @param {number} newDisp - New disposition value
+       *  @returns {Promise<void>} */
+      applyDispositionChange: async (npcName, newDisp) => {
+        return reputationEngine?.applyDispositionChange?.(npcName, newDisp);
+      },
+
+      /** Get a campaign NPC record (encounter count, kill status, notes).
+       *  Consumer-safe wrapper — avoids exposing the MemoryManager instance.
+       *  @param {string} name - NPC name
+       *  @returns {Object|null} NPC record, or null */
+      getNpcRecord: (name) => aceMemory?.npcs?.getRecord?.(name) ?? null,
+
+      /** Get all factions from the digest world graph.
+       *  Consumer-safe wrapper — avoids exposing the DigestEngine instance.
+       *  @returns {Array<Object>} Faction objects */
+      getWorldGraphFactions: () => {
+        try { return digestEngine?.getWorldGraph?.()?.factions ?? []; }
+        catch (_) { return []; }
+      },
+
+      /** Get all factions from the World Bible faction index.
+       *  Consumer-safe wrapper — avoids exposing WorldBible internals.
+       *  @returns {Array<Object>} Faction objects with name, type, _regionId, etc. */
+      getWorldBibleFactions: () => {
+        try {
+          if (!worldBible?._factionIndex?.size) return [];
+          return [...worldBible._factionIndex.values()];
+        } catch (_) { return []; }
+      },
+
+      /** Get the shared AI provider configuration (provider, apiKey, model).
+       *  Consumer-safe wrapper — avoids raw game.settings.get("ace-engine", ...) calls.
+       *  @returns {{ provider: string, apiKey: string, model: string }|null} */
+      getProviderConfig: () => {
+        try {
+          return {
+            provider: game.settings.get(MODULE_ID, "aiProvider"),
+            apiKey:   game.settings.get(MODULE_ID, "apiKey"),
+            model:    game.settings.get(MODULE_ID, "modelName"),
+          };
+        } catch (_) { return null; }
+      },
     };
   }
 
