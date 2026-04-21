@@ -56,6 +56,14 @@ export class AceSettings {
         ...data,
       });
 
+    // ── Module Master Switch ────────────────────────────────
+    s("moduleEnabled", {
+      name: "ACE Engine — Enabled",
+      hint: "Master on/off switch for the entire module. When OFF, Engine's panel, AI calls, digest/vault/reputation engines, and all subsystems are skipped. Requires a world reload to take effect.",
+      type: Boolean,
+      default: true,
+    });
+
     // ── AI Provider ─────────────────────────────────────────
     s("aiProvider", {
       name: "ACE.Settings.AiProvider.Name",

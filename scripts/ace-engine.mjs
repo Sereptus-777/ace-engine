@@ -247,10 +247,23 @@ let vaultSearch    = null;   // VaultSearch — cross-campaign query search
 let sceneIntelligence = null; // SceneIntelligence — per-scene deep knowledge cache
 let _aceReady      = false;  // true after all subsystems (AI, memory, etc.) are initialized
 
+// Read the master on/off switch — safe to call after settings are registered.
+function _aceEngineEnabled() {
+  try { return game.settings.get(MODULE_ID, "moduleEnabled") !== false; }
+  catch (_) { return true; }
+}
+
 // ── Initialization ─────────────────────────────────────────────
 Hooks.once("init", () => {
   console.log(`${MODULE_ID} | Initializing ACE`);
   AceSettings.register();
+
+  // Settings stay registered even when disabled so user can re-enable.
+  // All runtime systems below the gate are skipped.
+  if (!_aceEngineEnabled()) {
+    console.log(`${MODULE_ID} | Module disabled — skipping init subsystems.`);
+    return;
+  }
 
   game.keybindings.register(MODULE_ID, "openPanel", {
     name:     "Open ACE Panel",
@@ -457,6 +470,10 @@ async function _generateElevenLabsAudio(text, apiKey) {
 
 // ── Ready: initialize for ALL users (socket listener first) ────
 Hooks.once("ready", async () => {
+  if (!_aceEngineEnabled()) {
+    console.log(`${MODULE_ID} | Module disabled — skipping ready subsystems.`);
+    return;
+  }
   // ── Clean up stray CONFIG.debug.hooks left on by other modules (e.g. chat-images)
   if (CONFIG.debug?.hooks) CONFIG.debug.hooks = false;
 
