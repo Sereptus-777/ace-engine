@@ -25,6 +25,8 @@ import { VaultSearch }         from "./vault-search.mjs";
 import { SceneIntelligence }   from "./scene-intelligence.mjs";
 // Combat — Initiative Reorder (moved from ACE: Envoy, merger Phase 1A)
 import { injectReorderButtons } from "./combat/initiative-reorder.mjs";
+// NPC Chat — gated activation entry point (moved from ACE: Envoy, merger Phase 3)
+import { activateNpcChat }      from "./npc/activate.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -1778,9 +1780,17 @@ Hooks.once("ready", async () => {
   // Idempotent: marks completion via "envoyMigrated" world setting.
   // Safe whether or not envoy is still installed.
   setTimeout(() => {
-    migrateFromEnvoy().catch(err =>
-      console.warn(`${MODULE_ID} | Envoy migration failed:`, err)
-    );
+    migrateFromEnvoy()
+      .then(() => {
+        // After migration, activate the NPC chat subsystem if the gate is on.
+        // activateNpcChat is idempotent and gated on game.settings.get(MODULE_ID,
+        // "npcChatEnabled"); it bails harmlessly if the gate is false.
+        try { activateNpcChat(); }
+        catch (err) { console.warn(`${MODULE_ID} | NPC chat activation failed:`, err); }
+      })
+      .catch(err =>
+        console.warn(`${MODULE_ID} | Envoy migration failed:`, err)
+      );
   }, 3000);
 
   // ── Periodic auto-backup (every 30 minutes while Foundry is running) ──
