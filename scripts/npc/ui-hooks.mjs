@@ -658,6 +658,7 @@ export function registerUiHooks() {
                     <input type="text" id="ace-engine-voice-id-${actor.id}"
                            value="${voiceId}"
                            placeholder="Paste Voice ID, or blank for auto-detect"
+                           autocomplete="off" data-lpignore="true" data-1p-ignore="true"
                            style="flex:1;background:#1a1a2e;border:1px solid #444;
                                   border-radius:4px;color:#ccc;padding:4px 8px;font-size:0.85em;" />
                     <button type="button" id="ace-engine-test-${actor.id}"
@@ -680,6 +681,7 @@ export function registerUiHooks() {
                 </div>
                 <input type="text" id="ace-engine-phrase-${actor.id}"
                        placeholder='Test phrase, e.g. "I am ${actor.name}..."'
+                       autocomplete="off" data-lpignore="true" data-1p-ignore="true"
                        style="background:#1a1a2e;border:1px solid #444;border-radius:4px;
                               color:#ccc;padding:4px 8px;font-size:0.85em;" />
                 <p style="color:#666;font-size:0.75em;margin:0;font-style:italic;">

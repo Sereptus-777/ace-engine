@@ -1304,6 +1304,7 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 ${roleChipsHtml}
               </div>
               <input type="text" name="npcRoleCustom" placeholder="Or type a custom role..."
+                     autocomplete="off" data-lpignore="true" data-1p-ignore="true"
                      style="width:100%; margin-top:6px; padding:6px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#222; font-size:1.05em;">
             </div>
 
@@ -1317,6 +1318,7 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                   ${originDropdownHtml}
                 </select>
                 <input type="text" name="npcOriginCustom" placeholder="Specific location (optional)..."
+                       autocomplete="off" data-lpignore="true" data-1p-ignore="true"
                        style="flex:1; padding:6px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#222; font-size:1.05em;">
               </div>
             </div>
@@ -2072,7 +2074,7 @@ export async function showFactionAssignDialog(tokenDoc, existingFactions, creatu
             <hr style="margin: 8px 0; border-color: rgba(255,255,255,0.1);">
             <div style="margin-top: 4px;">
                 <label><strong>Role</strong> <small style="opacity: 0.6;">(optional — e.g. "bartender", "patrol leader", "patron")</small></label>
-                <input type="text" name="factionRole" value="" placeholder="Leave blank for AI to decide" style="width: 100%; margin-top: 4px;">
+                <input type="text" name="factionRole" value="" placeholder="Leave blank for AI to decide" autocomplete="off" data-lpignore="true" data-1p-ignore="true" style="width: 100%; margin-top: 4px;">
             </div>`;
 
         // Scene intelligence location hint
