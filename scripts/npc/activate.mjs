@@ -303,20 +303,28 @@ function _handleEngineNpcDeath({ actor, tokenDoc, changes, killerName }) {
 let _fallenFolderInflight = null;
 
 async function _getOrCreateAceNpcsFolder() {
+    // Match by name regardless of parent — there should only be ONE root-level
+    // "ACE NPCs" folder. Reuse it even if it has children we didn't create.
     const existing = game.folders?.find(f => f.name === "ACE NPCs" && f.type === "Actor");
     if (existing) return existing;
-    return Folder.create({ name: "ACE NPCs", type: "Actor", parent: null });
+    return Folder.create({ name: "ACE NPCs", type: "Actor", folder: null });
 }
 
 async function _getOrCreateFallenFolder(parentFolder) {
-    let fallen = game.folders?.find(f =>
-        f.name === "☠ Fallen" && f.type === "Actor" && f.folder?.id === parentFolder.id
-    );
-    if (fallen) return fallen;
+    // Defensive find: prefer one nested under ACE NPCs, but accept any
+    // ☠ Fallen folder if a previous run left orphans at the root (the
+    // schema-validator dropped `parent:` in V12+ and stranded duplicates).
+    const all = (game.folders ?? []).filter(f => f.name === "☠ Fallen" && f.type === "Actor");
+    const nested = all.find(f => f.folder?.id === parentFolder.id);
+    if (nested) return nested;
+    if (all.length) return all[0]; // reuse the first orphan rather than make another
+    // V12+ uses `folder:` for the parent field on the Folder data schema.
+    // Earlier versions used `parent:` which is silently dropped now → orphan
+    // at root. Use the correct field.
     return Folder.create({
         name:   "☠ Fallen",
         type:   "Actor",
-        parent: parentFolder.id,
+        folder: parentFolder.id,
         color:  "#8b0000",
     });
 }
