@@ -61,6 +61,13 @@ export function activateNpcChat() {
     console.log(`${TAG} | Activating NPC chat hooks.`);
 
     _registerHooks();
+
+    // UI hooks (token HUD chat button, scene voice region, party face, etc.)
+    // Lazy import to avoid circular dependency (ui-hooks reads npcChatState
+    // from this file).
+    import("./ui-hooks.mjs").then(({ registerUiHooks }) => {
+        registerUiHooks();
+    }).catch(err => console.error(`${TAG} | UI hooks load failed:`, err));
 }
 
 /** Expose internal state for the engine api block (so other modules / macros
