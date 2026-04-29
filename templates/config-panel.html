@@ -1,30 +1,33 @@
-<div class="ace-config-form">
+<div class="ace-cfg-root">
 
-    {{!-- ── Tab strip ─────────────────────────────────────────── --}}
-    <nav class="ace-cfg-tabs" role="tablist">
+    {{!-- ── Left rail: tab list ───────────────────────────────── --}}
+    <ul class="ace-cfg-tablist" role="tablist">
         {{#each tabs}}
-        <button type="button"
-                class="ace-cfg-tab {{#if active}}active{{/if}}"
-                data-action="switchTab"
-                data-tab="{{id}}"
-                role="tab"
-                aria-selected="{{#if active}}true{{else}}false{{/if}}"
-                title="{{label}}">
-            <i class="{{icon}}"></i>
-            <span>{{label}}</span>
-        </button>
+        <li class="ace-cfg-tab {{#if active}}active{{/if}}"
+            data-action="switchTab"
+            data-tab="{{id}}"
+            role="tab"
+            aria-selected="{{#if active}}true{{else}}false{{/if}}"
+            title="{{label}}">
+            <span class="ace-cfg-tab-icon"><i class="{{icon}}"></i></span>
+            <span class="ace-cfg-tab-label">{{label}}</span>
+        </li>
         {{/each}}
-    </nav>
+    </ul>
 
-    {{!-- ── Active tab body ───────────────────────────────────── --}}
+    {{!-- ── Right pane: header + settings ────────────────────── --}}
     {{#each tabs}}
     {{#if active}}
-    <section class="ace-cfg-pane" data-tab="{{id}}">
+    <div class="ace-cfg-pane" data-tab="{{id}}">
 
         <header class="ace-cfg-pane-header">
-            <h2><i class="{{icon}}"></i> {{label}}</h2>
-            {{#if intro}}<p class="ace-cfg-intro">{{intro}}</p>{{/if}}
+            <span class="ace-cfg-pane-icon"><i class="{{icon}}"></i></span>
+            <h2>{{label}}</h2>
         </header>
+
+        {{#if intro}}
+        <p class="ace-cfg-intro">{{intro}}</p>
+        {{/if}}
 
         <div class="ace-cfg-settings">
             {{#each settings}}
@@ -102,22 +105,22 @@
             {{/each}}
         </div>
 
-    </section>
+    </div>
     {{/if}}
     {{/each}}
 
-    {{!-- ── Footer with Save / Cancel / Reset ─────────────────── --}}
-    <footer class="ace-cfg-footer">
-        <button type="button" class="ace-cfg-btn ace-cfg-btn-reset" data-action="resetTab">
-            <i class="fas fa-undo"></i> Reset This Tab
-        </button>
-        <div class="ace-cfg-footer-spacer"></div>
-        <button type="button" class="ace-cfg-btn ace-cfg-btn-cancel" data-action="cancel">
-            Cancel
-        </button>
-        <button type="button" class="ace-cfg-btn ace-cfg-btn-save" data-action="saveAll">
-            <i class="fas fa-save"></i> Save Changes
-        </button>
-    </footer>
-
 </div>
+
+{{!-- ── Footer (outside the two-column root so it spans full width) ─── --}}
+<footer class="ace-cfg-footer">
+    <button type="button" class="ace-cfg-btn ace-cfg-btn-reset" data-action="resetTab">
+        <i class="fas fa-undo"></i> Reset This Tab
+    </button>
+    <div class="ace-cfg-footer-spacer"></div>
+    <button type="button" class="ace-cfg-btn ace-cfg-btn-cancel" data-action="cancel">
+        Cancel
+    </button>
+    <button type="button" class="ace-cfg-btn ace-cfg-btn-save" data-action="saveAll">
+        <i class="fas fa-save"></i> Save Changes
+    </button>
+</footer>

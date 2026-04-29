@@ -6489,258 +6489,512 @@ li.ace-toolbar-btn:hover {
 /* Social Profile styles moved to ace-envoy */
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   CONFIGURATION PANEL — functional baseline (gunmetal styling layered later)
+   CONFIGURATION PANEL — Brass Theme (ported from ACE: QOL)
    File: scripts/config-panel.mjs + templates/config-panel.html
+   Asset map (modules/ace-engine/assets/ui/brass-frame/):
+     brass-brushed-surface.png  — header/footer/button surfaces
+     dark-steel-backing.png     — body background
+     brass-slave-watermark.png  — body watermark (optional)
+     vertical-rail-divider.png  — spine between tab list and pane
+     horizontal-divider.png     — between setting rows + above footer
+   Tab icons use Font Awesome (engine's tabs don't map cleanly to QOL's
+   combat-themed medallion icons — FA renders gold-tinted via filter).
    ═══════════════════════════════════════════════════════════════════════════ */
 
-.ace-config-panel.ace-engine .window-content {
-  display: flex;
-  flex-direction: column;
+/* Outer frame — brass title bar override */
+.ace-config-panel {
+  border: 1px solid #2a1a05 !important;
+  box-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.85),
+    0 0 0 1px rgba(184, 148, 58, 0.5) !important;
+}
+.ace-config-panel .window-header {
+  background:
+    linear-gradient(180deg, rgba(255, 240, 200, 0.25) 0%, transparent 40%, rgba(0, 0, 0, 0.40) 100%),
+    url("modules/ace-engine/assets/ui/brass-frame/brass-brushed-surface.png") repeat !important;
+  background-blend-mode: overlay, normal !important;
+  border-bottom: 3px solid #2a1a05 !important;
+  border-left: 1px solid rgba(255, 230, 150, 0.45) !important;
+  border-right: 1px solid rgba(255, 230, 150, 0.45) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 250, 220, 0.55),
+    inset 0 -2px 4px rgba(60, 40, 5, 0.4),
+    0 4px 8px rgba(0, 0, 0, 0.5) !important;
+  padding: 6px 22px !important;
+  min-height: 38px !important;
+}
+.ace-config-panel .window-header .window-title,
+.ace-config-panel .window-header h4,
+.ace-config-panel .window-header h1,
+.ace-config-panel .window-header h2 {
+  font-family: "Cinzel Decorative", "Cinzel", serif !important;
+  color: #000 !important;
+  font-weight: 700 !important;
+  font-size: 18px !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  -webkit-text-stroke: 0 !important;
+  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.55) !important;
+}
+.ace-config-panel .window-header i,
+.ace-config-panel .window-header .header-button,
+.ace-config-panel .window-header button {
+  color: #000 !important;
+  font-size: 18px !important;
+  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.5) !important;
+  filter: drop-shadow(0 1px 0 rgba(255, 240, 200, 0.4));
+}
+.ace-config-panel .window-header .header-button:hover,
+.ace-config-panel .window-header button:hover {
+  color: #4a2a05 !important;
+  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.7) !important;
 }
 
-.ace-config-form {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background: var(--ace-bg-primary, #0a0a0c);
-  color: var(--ace-text-primary, #e8e6e0);
+/* Window content body — dark steel canvas */
+.ace-config-panel .window-content {
+  background:
+    linear-gradient(180deg, rgba(184, 148, 58, 0.06) 0%, transparent 20%, transparent 80%, rgba(0, 0, 0, 0.4) 100%),
+    url("modules/ace-engine/assets/ui/brass-frame/dark-steel-backing.png") repeat,
+    #0a0a0c !important;
+  color: #e8d8a8 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  position: relative;
+  display: flex !important;
+  flex-direction: column !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(184, 148, 58, 0.25),
+    inset 0 0 32px rgba(0, 0, 0, 0.55);
 }
 
-/* ── Tab strip ─────────────────────────────────────────────────────── */
+/* ── Two-column layout: tab rail + pane ────────────────────────────── */
 
-.ace-cfg-tabs {
+.ace-cfg-root {
+  position: relative;
   display: flex;
+  flex-direction: row;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background: transparent;
+  border: none;
+}
+
+/* ── Left rail: tab list ──────────────────────────────────────────── */
+
+.ace-cfg-tablist {
+  position: relative;
+  width: 220px;
   flex-shrink: 0;
-  background: var(--ace-bg-secondary, #111114);
-  border-bottom: 1px solid var(--ace-border, #2a2a2e);
-  padding: 4px 6px 0 6px;
-  gap: 2px;
-  overflow-x: auto;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.45) 0%, rgba(0, 0, 0, 0.08) 100%),
+    url("modules/ace-engine/assets/ui/brass-frame/dark-steel-backing.png") repeat;
+  margin: 0;
+  padding: 6px 4px;
+  overflow-y: auto;
+  list-style: none;
 }
 
+/* Brass scrollbar for the tab list */
+.ace-cfg-tablist::-webkit-scrollbar         { width: 8px; }
+.ace-cfg-tablist::-webkit-scrollbar-track   { background: rgba(0, 0, 0, 0.4); }
+.ace-cfg-tablist::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(184, 148, 58, 0.6), rgba(120, 90, 30, 0.6));
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+}
+.ace-cfg-tablist::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(255, 220, 130, 0.7), rgba(180, 140, 40, 0.7));
+}
+
+/* Vertical brass rail — divider between tab list and pane */
+.ace-cfg-tablist::after {
+  content: "";
+  position: absolute;
+  top: -4px; right: -10px; bottom: -4px;
+  width: 22px;
+  background: url("modules/ace-engine/assets/ui/brass-frame/vertical-rail-divider.png") no-repeat center;
+  background-size: 22px 100%;
+  pointer-events: none;
+  z-index: 5;
+  filter: drop-shadow(2px 0 5px rgba(0, 0, 0, 0.8));
+}
+
+/* Each tab row */
 .ace-cfg-tab {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
-  color: var(--ace-text-secondary, #9a9890);
-  font-family: 'Rajdhani', sans-serif;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  gap: 10px;
+  padding: 6px 10px;
+  margin: 3px 2px;
+  font-family: "Rajdhani", "Signika", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: #d4b878;
   cursor: pointer;
-  white-space: nowrap;
-  transition: color 0.15s, background 0.15s;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+  transition: background 0.12s ease, color 0.12s ease, transform 0.1s ease;
+  list-style: none;
 }
-
 .ace-cfg-tab:hover {
-  color: var(--ace-accent, #d4af37);
-  background: rgba(212, 175, 55, 0.08);
+  background: linear-gradient(90deg, rgba(184, 148, 58, 0.20), rgba(184, 148, 58, 0.05) 90%);
+  color: #ffd878;
+  transform: translateX(2px);
 }
-
 .ace-cfg-tab.active {
-  color: var(--ace-accent, #d4af37);
-  background: var(--ace-bg-primary, #0a0a0c);
-  border-color: var(--ace-border-light, #3a3a40);
-  border-bottom-color: var(--ace-bg-primary, #0a0a0c);
-  position: relative;
-  top: 1px;
+  background: linear-gradient(90deg, rgba(184, 148, 58, 0.30), rgba(184, 148, 58, 0.05) 95%);
+  color: #ffe89a;
+  border-color: rgba(255, 230, 150, 0.5);
+  box-shadow:
+    inset 0 0 12px rgba(0, 0, 0, 0.4),
+    0 0 8px rgba(255, 200, 100, 0.35);
+  text-shadow: 0 0 6px rgba(255, 200, 100, 0.6), 0 1px 1px rgba(0, 0, 0, 0.9);
 }
 
-.ace-cfg-tab i {
-  font-size: 14px;
+/* Tab icon — Font Awesome rendered in a brass medallion circle */
+.ace-cfg-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  background:
+    radial-gradient(ellipse at 30% 30%, rgba(255, 230, 150, 0.55), rgba(120, 90, 30, 0.85) 70%),
+    rgba(40, 28, 8, 0.9);
+  border: 1px solid rgba(255, 230, 150, 0.6);
+  border-radius: 50%;
+  color: #2a1a05;
+  font-size: 16px;
+  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 250, 220, 0.5),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.4),
+    0 2px 4px rgba(0, 0, 0, 0.6);
 }
+.ace-cfg-tab.active .ace-cfg-tab-icon {
+  background:
+    radial-gradient(ellipse at 30% 30%, rgba(255, 240, 180, 0.7), rgba(180, 130, 40, 0.95) 70%),
+    rgba(60, 40, 8, 0.95);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 250, 220, 0.65),
+    0 0 10px rgba(255, 200, 100, 0.65),
+    0 2px 4px rgba(0, 0, 0, 0.6);
+}
+.ace-cfg-tab-label { flex: 1; }
 
-/* ── Pane (the visible tab body) ───────────────────────────────────── */
+/* ── Right pane ─────────────────────────────────────────────────── */
 
 .ace-cfg-pane {
   flex: 1;
-  overflow-y: auto;
-  padding: 18px 22px 16px 22px;
-}
-
-.ace-cfg-pane-header {
-  margin-bottom: 16px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--ace-border, #2a2a2e);
-}
-
-.ace-cfg-pane-header h2 {
-  margin: 0 0 6px 0;
-  color: var(--ace-accent, #d4af37);
-  font-family: 'Cinzel Decorative', 'Cinzel', serif;
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.ace-cfg-pane-header h2 i {
-  font-size: 18px;
-}
-
-.ace-cfg-intro {
-  margin: 0;
-  color: var(--ace-text-secondary, #9a9890);
-  font-size: 13px;
-  line-height: 1.5;
-  font-style: italic;
-}
-
-/* ── Settings rows ─────────────────────────────────────────────────── */
-
-.ace-cfg-settings {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  overflow: hidden;
 }
 
+/* Pane header — brass surface bar with engraved title + medallion */
+.ace-cfg-pane-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 10px 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 240, 200, 0.25) 0%, transparent 35%, rgba(0, 0, 0, 0.35) 100%),
+    url("modules/ace-engine/assets/ui/brass-frame/brass-brushed-surface.png") repeat;
+  background-blend-mode: overlay, normal;
+  border-top: 1px solid rgba(255, 230, 150, 0.55);
+  border-bottom: 3px solid #2a1a05;
+  border-left: 1px solid rgba(255, 230, 150, 0.45);
+  border-right: 1px solid rgba(255, 230, 150, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 250, 220, 0.45),
+    inset 0 -2px 4px rgba(60, 40, 5, 0.35),
+    inset 1px 0 0 rgba(255, 250, 220, 0.35),
+    inset -1px 0 0 rgba(255, 250, 220, 0.35),
+    0 4px 10px rgba(0, 0, 0, 0.55);
+  min-height: 78px;
+  flex-shrink: 0;
+}
+.ace-cfg-pane-header::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -8px;
+  height: 12px;
+  background: url("modules/ace-engine/assets/ui/brass-frame/horizontal-divider.png") no-repeat center;
+  background-size: 100% 100%;
+  pointer-events: none;
+  z-index: 4;
+}
+.ace-cfg-pane-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
+  background:
+    radial-gradient(ellipse at 30% 30%, rgba(255, 245, 200, 0.7), rgba(180, 130, 40, 0.9) 70%),
+    rgba(60, 40, 8, 0.95);
+  border: 2px solid rgba(255, 230, 150, 0.7);
+  border-radius: 50%;
+  color: #2a1a05;
+  font-size: 26px;
+  text-shadow: 0 2px 0 rgba(255, 240, 200, 0.55);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 250, 220, 0.6),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.5),
+    0 0 14px rgba(255, 200, 100, 0.5),
+    0 3px 5px rgba(0, 0, 0, 0.65);
+}
+.ace-cfg-pane-header h2 {
+  font-family: "Cinzel Decorative", "Cinzel", serif;
+  font-size: 26px;
+  font-weight: 700;
+  color: #000;
+  margin: 0;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  text-shadow:
+    0 1px 0 rgba(255, 240, 200, 0.6),
+    0 -1px 1px rgba(0, 0, 0, 0.25);
+}
+
+/* Pane body — scrollable dark-steel canvas */
+.ace-cfg-pane > .ace-cfg-intro,
+.ace-cfg-pane > .ace-cfg-settings {
+  position: relative;
+  z-index: 2;
+}
+.ace-cfg-pane {
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(184, 148, 58, 0.04), transparent 60%),
+    radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.35)),
+    url("modules/ace-engine/assets/ui/brass-frame/dark-steel-backing.png") repeat;
+}
+.ace-cfg-intro {
+  margin: 16px 22px 6px 22px;
+  color: #c9b890;
+  font-size: 14px;
+  font-style: italic;
+  line-height: 1.5;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+}
+.ace-cfg-settings {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 22px 16px 22px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Brass scrollbar for the pane body */
+.ace-cfg-settings::-webkit-scrollbar         { width: 10px; }
+.ace-cfg-settings::-webkit-scrollbar-track   { background: rgba(0, 0, 0, 0.55); border-radius: 5px; }
+.ace-cfg-settings::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(184, 148, 58, 0.7), rgba(120, 90, 30, 0.7));
+  border-radius: 5px;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+}
+.ace-cfg-settings::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(255, 220, 130, 0.8), rgba(180, 140, 40, 0.8));
+}
+
+/* Setting row — horizontal divider PNG between rows */
 .ace-cfg-row {
+  padding: 12px 4px 18px 4px;
+  background-image: url("modules/ace-engine/assets/ui/brass-frame/horizontal-divider.png");
+  background-repeat: no-repeat;
+  background-position: bottom center;
+  background-size: 100% 10px;
   display: grid;
-  grid-template-columns: 200px 1fr;
+  grid-template-columns: 220px 1fr;
   grid-template-areas:
     "label input"
     "hint  hint";
   gap: 6px 14px;
-  padding: 10px 12px;
-  background: var(--ace-bg-secondary, #111114);
-  border: 1px solid var(--ace-border, #2a2a2e);
-  border-radius: 4px;
   align-items: center;
 }
+.ace-cfg-row:last-of-type { background-image: none; }
 
 .ace-cfg-row label {
   grid-area: label;
-  color: var(--ace-text-primary, #e8e6e0);
-  font-size: 13px;
-  font-weight: 600;
+  font-family: "Rajdhani", "Signika", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  color: #f0e0b4;
+  letter-spacing: 0.3px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
   margin: 0;
 }
-
 .ace-cfg-input {
   grid-area: input;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-
 .ace-cfg-hint {
   grid-area: hint;
-  margin: 4px 0 0 0;
-  color: var(--ace-text-muted, #777);
-  font-size: 11px;
-  line-height: 1.4;
+  margin: 6px 0 0 0;
+  font-size: 14px;
+  color: #c9b890;
+  line-height: 1.45;
+  font-style: italic;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
 }
 
-/* ── Inputs ────────────────────────────────────────────────────────── */
-
+/* Inputs — dark inset on dark steel, brass border on focus */
 .ace-cfg-input input[type="text"],
 .ace-cfg-input input[type="password"],
 .ace-cfg-input input[type="number"],
 .ace-cfg-input select,
 .ace-cfg-input textarea {
-  width: 100%;
-  padding: 6px 10px;
-  background: var(--ace-bg-input, #08080a);
-  border: 1px solid var(--ace-border-light, #3a3a40);
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0.40)),
+    rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(184, 148, 58, 0.55);
+  color: #f0e0b4;
+  padding: 5px 10px;
   border-radius: 3px;
-  color: var(--ace-text-primary, #e8e6e0);
-  font-family: 'Rajdhani', sans-serif;
-  font-size: 13px;
+  font-family: "Rajdhani", "Signika", sans-serif;
+  font-size: 15px;
+  min-width: 240px;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.65),
+    0 1px 0 rgba(184, 148, 58, 0.18);
   box-sizing: border-box;
 }
-
+.ace-cfg-input input[type="number"] { min-width: 100px; }
 .ace-cfg-input input:focus,
 .ace-cfg-input select:focus,
 .ace-cfg-input textarea:focus {
   outline: none;
-  border-color: var(--ace-accent, #d4af37);
-  box-shadow: 0 0 0 1px var(--ace-accent-glow, rgba(212, 175, 55, 0.3));
+  border-color: #ffaa44;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.65),
+    0 0 8px rgba(255, 170, 68, 0.55);
 }
-
 .ace-cfg-input input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--ace-accent, #d4af37);
+  width: 20px;
+  height: 20px;
+  accent-color: #ffaa44;
   cursor: pointer;
 }
-
 .ace-cfg-range {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
 }
-
 .ace-cfg-range input[type="range"] {
   flex: 1;
-  accent-color: var(--ace-accent, #d4af37);
+  accent-color: #ffaa44;
+  height: 18px;
 }
-
 .ace-cfg-range input[type="number"] {
-  width: 90px;
+  width: 100px;
   flex-shrink: 0;
+  min-width: 0;
 }
 
-/* ── Footer ────────────────────────────────────────────────────────── */
-
+/* ── Footer — brass surface bar ─────────────────────────────────── */
 .ace-cfg-footer {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  padding: 12px 18px;
-  background: var(--ace-bg-secondary, #111114);
-  border-top: 1px solid var(--ace-border, #2a2a2e);
-  gap: 8px;
+  padding: 10px 18px;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.35) 0%, transparent 25%, rgba(255, 240, 200, 0.18) 100%),
+    url("modules/ace-engine/assets/ui/brass-frame/brass-brushed-surface.png") repeat;
+  background-blend-mode: overlay, normal;
+  border-top: 3px solid #2a1a05;
+  border-bottom: 1px solid rgba(255, 230, 150, 0.4);
+  border-left: 1px solid rgba(255, 230, 150, 0.45);
+  border-right: 1px solid rgba(255, 230, 150, 0.45);
+  box-shadow:
+    inset 0 -1px 0 rgba(255, 250, 220, 0.4),
+    inset 0 2px 4px rgba(60, 40, 5, 0.35),
+    inset 1px 0 0 rgba(255, 250, 220, 0.35),
+    inset -1px 0 0 rgba(255, 250, 220, 0.35),
+    0 -4px 10px rgba(0, 0, 0, 0.55);
+  gap: 10px;
+  min-height: 56px;
+  position: relative;
 }
-
-.ace-cfg-footer-spacer {
-  flex: 1;
+.ace-cfg-footer::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: -8px;
+  height: 12px;
+  background: url("modules/ace-engine/assets/ui/brass-frame/horizontal-divider.png") no-repeat center;
+  background-size: 100% 100%;
+  pointer-events: none;
 }
+.ace-cfg-footer-spacer { flex: 1; }
 
-.ace-cfg-btn {
-  padding: 8px 18px;
-  background: var(--ace-bg-tertiary, #1a1a1e);
-  border: 1px solid var(--ace-border-light, #3a3a40);
+/* All footer buttons get the brass treatment */
+.ace-cfg-btn,
+.ace-cfg-footer button {
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.30), transparent 40%, rgba(0, 0, 0, 0.30)),
+    url("modules/ace-engine/assets/ui/brass-frame/brass-brushed-surface.png") repeat;
+  background-blend-mode: overlay, normal;
+  background-size: auto, 100px;
+  border: 1px solid rgba(184, 148, 58, 0.7);
+  color: #000;
+  font-family: "Rajdhani", "Signika", sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.3px;
+  padding: 6px 14px;
   border-radius: 3px;
-  color: var(--ace-text-primary, #e8e6e0);
-  font-family: 'Rajdhani', sans-serif;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   cursor: pointer;
-  transition: all 0.15s;
+  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 240, 200, 0.45),
+    0 2px 3px rgba(0, 0, 0, 0.55);
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
-
-.ace-cfg-btn:hover {
-  border-color: var(--ace-accent, #d4af37);
-  color: var(--ace-accent, #d4af37);
+.ace-cfg-btn i,
+.ace-cfg-footer button i { color: #000; text-shadow: 0 1px 0 rgba(255, 240, 200, 0.5); }
+.ace-cfg-btn:hover,
+.ace-cfg-footer button:hover {
+  color: #4a2a05;
+  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.7);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 240, 200, 0.55),
+    0 0 10px rgba(255, 200, 100, 0.7),
+    0 2px 3px rgba(0, 0, 0, 0.55);
 }
-
 .ace-cfg-btn-save {
-  background: rgba(212, 175, 55, 0.12);
-  border-color: var(--ace-accent, #d4af37);
-  color: var(--ace-accent, #d4af37);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 240, 200, 0.55),
+    0 0 8px rgba(255, 200, 100, 0.55),
+    0 2px 3px rgba(0, 0, 0, 0.55);
 }
-
-.ace-cfg-btn-save:hover {
-  background: rgba(212, 175, 55, 0.22);
-}
-
 .ace-cfg-btn-reset {
-  color: var(--ace-text-muted, #777);
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.40));
+  border-color: rgba(120, 90, 30, 0.7);
+  color: #c9b890;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
 }
-
+.ace-cfg-btn-reset i { color: #c9b890; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85); }
 .ace-cfg-btn-reset:hover {
-  color: var(--ace-warning, #ffab00);
-  border-color: var(--ace-warning, #ffab00);
+  color: #ffaa44;
+  border-color: #ffaa44;
+  text-shadow: 0 0 6px rgba(255, 170, 68, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 240, 200, 0.2),
+    0 0 8px rgba(255, 170, 68, 0.4),
+    0 2px 3px rgba(0, 0, 0, 0.55);
 }
 
 /* ─── INITIATIVE REORDER ARROWS (moved from ACE: Envoy, Phase 1A) ─────── */
