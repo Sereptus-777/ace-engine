@@ -125,7 +125,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
     static DEFAULT_OPTIONS = {
         id:     "ace-engine-app",
-        window: { title: "ACE: Engine", resizable: true },
+        window: { title: "ACE: Engine", resizable: true, minimizable: true },
         position: { width: 400, height: 600 },
         classes:  [MODULE_ID],
     };
