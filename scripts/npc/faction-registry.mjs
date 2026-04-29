@@ -2283,6 +2283,12 @@ async function showSmartSetupDialog(actorName, creatureBase, recommendations, cr
     const renameNote = isNonSentient ? " (beasts keep species name)" : "";
     const factionHidden = (currentTier === "bio-only") ? "display:none;" : "";
 
+    // Default for the auto-link checkbox: read the global setting. Matches the
+    // checkbox on the Customize dialog so both popups behave the same way.
+    let autoLinkDefault = true;
+    try { autoLinkDefault = game.settings.get(MODULE_ID, "enableAutoLink") ?? true; } catch (_) {}
+    const autoLinkChecked = autoLinkDefault ? "checked" : "";
+
     const content = `
         <div style="font-family:sans-serif;">
             <div class="ace-smart-faction-section" style="${factionHidden}">
@@ -2292,7 +2298,7 @@ async function showSmartSetupDialog(actorName, creatureBase, recommendations, cr
                 </div>
             </div>
             <hr style="border-color:#ccc; margin:10px 0;">
-            <div style="display:flex; align-items:center; gap:14px; margin-bottom:8px;">
+            <div style="display:flex; align-items:center; gap:14px; margin-bottom:8px; flex-wrap:wrap;">
                 <label style="display:flex; align-items:center; gap:8px; font-size:15px; color:#111; font-weight:700; white-space:nowrap;">
                     AI Generation:
                     <select name="ace-drop-tier" style="background:#2a2a2e; color:#d4af37; border:1px solid #555; border-radius:4px; padding:5px 10px; font-size:15px; font-weight:600;">
@@ -2304,6 +2310,11 @@ async function showSmartSetupDialog(actorName, creatureBase, recommendations, cr
                 <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:15px; color:#111; font-weight:700;">
                     <input type="checkbox" name="ace-rename-toggle" ${renameChecked} ${renameDisabled} style="accent-color:#d4af37; width:18px; height:18px;">
                     Rename NPC${renameNote}
+                </label>
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:15px; color:#111; font-weight:700;"
+                       title="Save this NPC as a persistent linked actor in the sidebar so the same identity survives across sessions. Leave unchecked for disposable tokens.">
+                    <input type="checkbox" name="ace-autolink-toggle" ${autoLinkChecked} style="accent-color:#d4af37; width:18px; height:18px;">
+                    Save as persistent NPC
                 </label>
             </div>
         </div>`;
@@ -2319,8 +2330,9 @@ async function showSmartSetupDialog(actorName, creatureBase, recommendations, cr
                     callback: (html) => {
                         const idx = parseInt(html.find("input[name='ace-faction-pick']:checked").val(), 10) || 0;
                         const rename = !!html.find("input[name='ace-rename-toggle']").prop("checked");
+                        const autoLink = !!html.find("input[name='ace-autolink-toggle']").prop("checked");
                         const tier = html.find("select[name='ace-drop-tier']").val() || currentTier;
-                        resolve({ choice: "accept", selectedIndex: idx, rename, tier });
+                        resolve({ choice: "accept", selectedIndex: idx, rename, autoLink, tier });
                     }
                 },
                 customize: {
@@ -2328,14 +2340,15 @@ async function showSmartSetupDialog(actorName, creatureBase, recommendations, cr
                     label: "Customize\u2026",
                     callback: (html) => {
                         const rename = !!html.find("input[name='ace-rename-toggle']").prop("checked");
+                        const autoLink = !!html.find("input[name='ace-autolink-toggle']").prop("checked");
                         const tier = html.find("select[name='ace-drop-tier']").val() || currentTier;
-                        resolve({ choice: "customize", selectedIndex: 0, rename, tier });
+                        resolve({ choice: "customize", selectedIndex: 0, rename, autoLink, tier });
                     }
                 },
                 skip: {
                     icon: '<i class="fas fa-forward"></i>',
                     label: "Skip All",
-                    callback: () => resolve({ choice: "skip", selectedIndex: -1, rename: false, tier: "off" })
+                    callback: () => resolve({ choice: "skip", selectedIndex: -1, rename: false, autoLink: false, tier: "off" })
                 }
             },
             default: "accept",
@@ -2556,6 +2569,10 @@ export async function processTokenFaction(tokenDoc) {
         // Store rename preference and tier override for bio-generator downstream
         if (setup && !setup.rename) tokenDoc._aceSkipRename = true;
         if (setup?.tier) tokenDoc._aceDropTier = setup.tier;
+        // Propagate the smart-dialog's auto-link choice. If the user later goes
+        // through "Customize…", that dialog's autoLink checkbox overrides this
+        // value (handled below where result.autoLink is read).
+        if (setup?.autoLink !== undefined) tokenDoc._aceAutoLink = setup.autoLink;
 
         if (!setup || setup.choice === "skip") {
             // Skip All — no faction, no auto-assign, bio still runs unless tier=off
