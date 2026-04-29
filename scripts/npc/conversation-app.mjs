@@ -266,6 +266,29 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             this._listenersAttached = true;
         }
 
+        // ── Inject minimize button in header ───────────────────────────────
+        // Foundry V13 ApplicationV2's default minimize control doesn't render
+        // here for some reason (engine's main panel works around the same way).
+        // Add a manual one that calls this.minimize() — runs every render so
+        // the button reappears after re-render.
+        const header = el.querySelector(".window-header, header");
+        if (header && !header.querySelector(".ace-engine-btn-minimize")) {
+            const minBtn = document.createElement("button");
+            minBtn.className = "header-control ace-engine-btn-minimize";
+            minBtn.type = "button";
+            minBtn.title = "Minimize";
+            minBtn.innerHTML = '<i class="fas fa-minus"></i>';
+            minBtn.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                this.minimize();
+            });
+            // Insert before the close button so it sits next to it
+            const closeBtn = header.querySelector("button.close, button[data-action='close'], .header-control:last-child");
+            if (closeBtn) header.insertBefore(minBtn, closeBtn);
+            else header.appendChild(minBtn);
+        }
+
         // ── GM-only controls ──────────────────────────────────────────────
         if (game.user.isGM) {
             // Update send button tooltip — GM sends as NPC, not to AI
