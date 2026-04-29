@@ -23,7 +23,8 @@ import { WorldBibleEngine }    from "./world-bible-engine.mjs";
 import { VaultEngine }         from "./vault-engine.mjs";
 import { VaultSearch }         from "./vault-search.mjs";
 import { SceneIntelligence }   from "./scene-intelligence.mjs";
-// Social Profile Engine moved to ace-envoy (standalone module, no cross-dependency)
+// Combat — Initiative Reorder (moved from ACE: Envoy, merger Phase 1A)
+import { injectReorderButtons } from "./combat/initiative-reorder.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -2087,6 +2088,12 @@ Hooks.on("updateCombat", async (combat, changed, options, userId) => {
       }
     }
   }
+});
+
+// ── Initiative Reorder Arrows (moved from ACE: Envoy, Phase 1A) ───────
+Hooks.on("renderCombatTracker", (tracker, html) => {
+  if (!_aceEngineEnabled()) return;
+  injectReorderButtons(tracker, html);
 });
 
 Hooks.on("updateActor", (actor, changes) => {

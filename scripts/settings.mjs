@@ -546,6 +546,14 @@ export class AceSettings {
       type: Boolean,
       default: true,
     });
+
+    // ── Combat (moved from ACE: Envoy — merger Phase 1A) ────
+    s("initiativeReorder", {
+      name: "Initiative Reorder Arrows",
+      hint: "Add up/down arrow buttons to the combat tracker so the GM can rearrange initiative order with a click.",
+      type: Boolean,
+      default: true,
+    });
   }
 
   /** Signup / API key URLs per provider */

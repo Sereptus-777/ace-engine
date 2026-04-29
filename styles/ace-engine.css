@@ -6487,3 +6487,29 @@ li.ace-toolbar-btn:hover {
 }
 
 /* Social Profile styles moved to ace-envoy */
+
+/* ─── INITIATIVE REORDER ARROWS (moved from ACE: Envoy, Phase 1A) ─────── */
+
+.ace-engine-init-arrows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.ace-engine-init-up,
+.ace-engine-init-down {
+  background: transparent;
+  border: none;
+  color: var(--ace-text-secondary, #9a9890);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  transition: color 0.15s ease;
+}
+.ace-engine-init-up:hover,
+.ace-engine-init-down:hover {
+  color: var(--ace-accent, #d4af37);
+}
