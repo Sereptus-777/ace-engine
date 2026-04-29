@@ -516,6 +516,12 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         let _micRestarts   = 0;       // prevent infinite restart loops
 
         recognition.onresult = (event) => {
+            // Guard: drop late results that fire AFTER we've explicitly aborted
+            // recognition (e.g. user clicked Send while still mid-speech). Without
+            // this, the browser's queued onresult events overwrite the cleared
+            // input field and the just-sent text reappears in the textarea.
+            if (!this._recognition || this._recognition !== recognition) return;
+
             _micRestarts = 0;  // successful result = reset restart counter
 
             // Rebuild full transcript from scratch each event (no accumulator)
