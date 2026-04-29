@@ -6710,25 +6710,28 @@ li.ace-toolbar-btn:hover {
 }
 
 /* ── Portrait / Video Area ───────────────────────────────────── */
+/* Dominates the panel — aspect-ratio constraint removed so the area
+   grows vertically to consume whatever space the chat log + controls
+   leave. The <img> inside uses object-fit: contain so the portrait /
+   WebP stays centered without distortion. */
 .ace-engine-video-area {
   position: relative;
   width: 100%;
-  aspect-ratio: 1 / 1;
-  max-height: 500px;        /* dominates the layout — FaceTime style */
+  flex: 1 1 auto;           /* take ALL remaining vertical space */
+  min-height: 320px;        /* don't shrink to nothing on resize */
   background: var(--ace-bg-primary);
   border-bottom: 2px solid var(--ace-accent);
   box-shadow: 0 2px 8px rgba(212, 175, 55, 0.15);
-  flex-shrink: 0;
   overflow: hidden;
 }
 
-/* Chat log: fixed-ish height so the portrait stays dominant.
-   flex: 0 0 auto + min-height keeps the chat scroll area from
-   eating the picture. */
+/* Chat log: small strip — full conversation lives in the main Foundry
+   chat sidebar anyway. Just enough to see the last exchange in-app. */
 .ace-engine-container > .ace-engine-log {
-  flex: 0 1 auto;
-  min-height: 140px;
-  max-height: 240px;
+  flex: 0 0 auto;
+  height: 100px;
+  min-height: 80px;
+  max-height: 120px;
 }
 
 #ace-engine-portrait {
