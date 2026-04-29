@@ -163,7 +163,9 @@ export class CategoryStore {
 
     try {
       await _silentUpload("data", backupDir, file);
-      console.log(`${MODULE_ID} | ${this.category}: backup created (${bkName}).`);
+      // Demoted from log to debug — auto-backup runs every 30 minutes across
+      // ~8 categories, so this used to flood the console.
+      console.debug(`${MODULE_ID} | ${this.category}: backup created (${bkName}).`);
     } catch (err) {
       console.error(`${MODULE_ID} | ${this.category}: backup failed:`, err);
       return; // Don't try to prune if backup creation itself failed
@@ -192,7 +194,11 @@ export class CategoryStore {
           } catch (_) { /* ignore cleanup errors */ }
         }
         if (toDelete.length) {
-          console.log(`${MODULE_ID} | ${this.category}: ${toDelete.length} old backup(s) eligible for cleanup (keeping ${maxBackups} newest).`);
+          // Demoted from log to debug — Foundry has no file-delete API for
+          // data files, so this message is informational only (the count
+          // grows forever until the user manually deletes the folder). No
+          // value spamming the console with it every backup cycle.
+          console.debug(`${MODULE_ID} | ${this.category}: ${toDelete.length} old backup(s) eligible for manual cleanup (keeping ${maxBackups} newest).`);
         }
       }
     } catch (_) { /* prune is best-effort */ }

@@ -1045,11 +1045,13 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
   async autoBackup() {
     const now = Date.now();
     if (this._lastAutoBackup && (now - this._lastAutoBackup) < 300_000) {
-      console.log(`${MODULE_ID} | Auto-backup skipped (last was ${Math.round((now - this._lastAutoBackup) / 1000)}s ago).`);
+      // Demoted from log to debug — routine background operation, no need
+      // to spam the console with skip notifications.
+      console.debug(`${MODULE_ID} | Auto-backup skipped (last was ${Math.round((now - this._lastAutoBackup) / 1000)}s ago).`);
       return;
     }
     this._lastAutoBackup = now;
-    console.log(`${MODULE_ID} | Auto-backup triggered…`);
+    console.debug(`${MODULE_ID} | Auto-backup triggered…`);
     await this.backup(null, 10);
   }
 

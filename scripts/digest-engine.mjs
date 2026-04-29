@@ -1235,7 +1235,8 @@ export class DigestEngine {
 
     try {
       await _silentUpload("data", BACKUP_DIR, file);
-      console.log(`${MODULE_ID} | Digest backup created: ${fileName} ` +
+      // Demoted from log to debug — runs every 30 min, was spamming console.
+      console.debug(`${MODULE_ID} | Digest backup created: ${fileName} ` +
         `(${digestIds.length} digests, ${(payload.length / 1024).toFixed(0)} KB)`);
     } catch (err) {
       console.error(`${MODULE_ID} | Digest backup failed:`, err);
@@ -1257,7 +1258,7 @@ export class DigestEngine {
           const tombstone = new File(['{"pruned":true}'], oldName, { type: "application/json" });
           await _silentUpload("data", BACKUP_DIR, tombstone);
         }
-        console.log(`${MODULE_ID} | Pruned ${toDelete.length} old digest backup(s), keeping ${maxBackups}.`);
+        console.debug(`${MODULE_ID} | Pruned ${toDelete.length} old digest backup(s), keeping ${maxBackups}.`);
       }
     } catch (err) {
       console.warn(`${MODULE_ID} | Digest backup pruning failed:`, err);
