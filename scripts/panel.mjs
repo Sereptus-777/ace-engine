@@ -223,7 +223,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     position: {
       width:  590,
       height: 740,
-      top:    80,
+      top:    20,
       left:   200,   // Safe default — _onRender moves it to the right side
     },
     actions: {
@@ -8892,7 +8892,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
 
       const finishedDoc = store.getDocument(docId);
       const docName = finishedDoc?.displayName;
-      ui.notifications.info(`ACE | Processed: ${docName} (${chunks.length} chunks)`);
+      ui.notifications.info(`ACE | Processed: ${docName} (${txtChunks.length} chunks)`);
 
       // Cache extraction globally for cross-world reuse
       if (finishedDoc) {

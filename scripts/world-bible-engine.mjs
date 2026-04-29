@@ -156,12 +156,13 @@ Return ONLY valid JSON with this exact structure:
       "id": "snake_case_unique_id",
       "name": "Full Name",
       "type": "military|arcane|religious|criminal|mercantile|political|secret_society|guild|tribal|knightly_order",
+      "alignment": "Lawful Good|Neutral Good|Chaotic Good|Lawful Neutral|True Neutral|Chaotic Neutral|Lawful Evil|Neutral Evil|Chaotic Evil|Unaligned",
       "scope": "local|national|regional|continental",
       "nation": "nation_id or null if multi-national",
       "headquarters": "city_id or general location",
       "leader": "Name and Title",
       "purpose": "1 sentence core mission/goal",
-      "description": "2-3 sentences covering history, methods, reputation",
+      "description": "4-6 sentences covering founding history, organizational structure, methods, reputation, and current activities",
       "allies": ["faction_or_nation_ids"],
       "enemies": ["faction_or_nation_ids"],
       "presence": ["city_ids_where_active"]
@@ -314,11 +315,12 @@ Return ONLY valid JSON:
       "id": "snake_case_id",
       "name": "Full Name",
       "type": "secret_society|mercenary|criminal|religious|political|mercantile|knightly_order|arcane",
+      "alignment": "Lawful Good|Neutral Good|Chaotic Good|Lawful Neutral|True Neutral|Chaotic Neutral|Lawful Evil|Neutral Evil|Chaotic Evil|Unaligned",
       "scope": "continental",
       "headquarters": "Primary base city or 'decentralized'",
       "leader": "Name and Title (current, post-Sundering)",
       "purpose": "1 sentence core mission",
-      "description": "3-4 sentences — history, methods, reputation, current activities",
+      "description": "4-6 sentences — founding history, organizational structure, methods, reputation, current activities, and notable members or events",
       "allies": ["faction_ids"],
       "enemies": ["faction_ids"],
       "presence": ["major city_ids where they operate"],
@@ -2458,7 +2460,7 @@ Analyze the following text and extract ANY specific world knowledge mentioned. R
 {
   "locations": [{ "name": "...", "type": "city|town|village|temple|fortress|landmark|region", "description": "one sentence", "parent": "larger region if mentioned" }],
   "npcs": [{ "name": "...", "role": "title or occupation", "location": "where they are", "description": "one sentence" }],
-  "factions": [{ "name": "...", "type": "guild|order|government|cult|military|merchant|criminal", "description": "one sentence", "base": "location if mentioned" }]
+  "factions": [{ "name": "...", "type": "guild|order|government|cult|military|merchant|criminal", "alignment": "LG|NG|CG|LN|TN|CN|LE|NE|CE|Unaligned", "description": "2-3 sentences — history, methods, reputation", "leader": "Name and Title or null", "base": "location if mentioned" }]
 }
 
 Rules:

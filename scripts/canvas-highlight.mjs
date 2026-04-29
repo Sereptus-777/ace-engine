@@ -109,57 +109,35 @@ export class CanvasHighlight {
   static applyPcGlow(token) {
     if (!token?.actor?.hasPlayerOwner || token.actor.type !== "character") return;
 
-    // Already glowing — skip unless the shadow was lost to a re-render
+    // Already has a disc — skip unless lost to a re-render
     if (this.#pcGlowFilters.has(token.id)) {
       const entry = this.#pcGlowFilters.get(token.id);
       if (entry?.shadow && token.children?.includes(entry.shadow)) return;
-      // Shadow was lost (re-render) — clean up and re-apply
       this.removePcGlow(token);
     }
 
-    // Find the owning player's color
+    // Owner's chosen color — falls back to a default red if no owner found.
     const owner = game.users?.find(u => !u.isGM && token.actor.testUserPermission(u, "OWNER"));
     const hexColor = owner?.color?.toString?.() ?? owner?.color ?? "#e51c1c";
     const hexInt = parseInt(hexColor.replace("#", ""), 16);
 
     const size = Math.max(token.w ?? 100, token.h ?? 100);
+    const radius = size * 0.55;   // slightly larger than the token so it peeks out as a ring
+    const center = size / 2;
 
-    // Create a soft radial glow underneath the token art
-    const shadow = new PIXI.Graphics();
-    shadow.beginFill(hexInt, 0.45);
-    shadow.drawCircle(size / 2, size / 2, size * 0.52);
-    shadow.endFill();
+    // Solid disc underneath the token — static, no blur, no pulse.
+    // Filled body + darker outline for contrast against varied map backgrounds.
+    const disc = new PIXI.Graphics();
+    disc.lineStyle(3, 0x000000, 0.55);      // thin dark outline for contrast
+    disc.beginFill(hexInt, 0.85);
+    disc.drawCircle(center, center, radius);
+    disc.endFill();
 
-    // Blur it for a soft drop-shadow look
-    try {
-      const blur = new PIXI.filters.BlurFilter(12, 4);
-      shadow.filters = [blur];
-    } catch (_) {
-      // If blur not available, the solid fill still works as a visible marker
-    }
+    // Render BEHIND the token art
+    try { token.addChildAt(disc, 0); }
+    catch (_) { token.addChild(disc); }
 
-    // Insert at index 0 so it renders BEHIND the token art
-    try {
-      token.addChildAt(shadow, 0);
-    } catch (_) {
-      token.addChild(shadow);
-    }
-
-    // Gentle breathing animation — pulse alpha between 0.25 and 0.55
-    let t = Math.random() * Math.PI * 2;  // offset so tokens don't sync
-    const breathe = () => {
-      t += 0.025;
-      try {
-        shadow.alpha = 0.4 + 0.2 * Math.sin(t);
-      } catch (_) {
-        cancelAnimationFrame(token._acePcGlowAnim);
-        return;
-      }
-      token._acePcGlowAnim = requestAnimationFrame(breathe);
-    };
-    token._acePcGlowAnim = requestAnimationFrame(breathe);
-
-    this.#pcGlowFilters.set(token.id, { shadow });
+    this.#pcGlowFilters.set(token.id, { shadow: disc });
   }
 
   /** Convert hex color string to [r, g, b] floats (0–1). */

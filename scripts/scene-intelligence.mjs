@@ -183,8 +183,15 @@ function _extractFactionsFromBible(worldBible, location, keywords) {
         type: f.type || f.category || "organization",
         status: "active",
         source: "world_bible",
-        description: (f.description || f.notes || "").slice(0, 120),
+        description: f.description || f.notes || "",
+        purpose: f.purpose || "",
         leader: f.leader || f.Leader || null,
+        alignment: f.alignment || "",
+        allies: f.allies || [],
+        enemies: f.enemies || [],
+        scope: f.scope || "",
+        presence: f.presence || [],
+        headquarters: f.headquarters || "",
       });
     }
 
@@ -203,8 +210,15 @@ function _extractFactionsFromBible(worldBible, location, keywords) {
           type: f.type || f.category || "organization",
           status: "active",
           source: "world_bible",
-          description: (f.description || f.notes || "").slice(0, 120),
+          description: f.description || f.notes || "",
+          purpose: f.purpose || "",
           leader: f.leader || f.Leader || null,
+          alignment: f.alignment || "",
+          allies: f.allies || [],
+          enemies: f.enemies || [],
+          scope: f.scope || "",
+          presence: f.presence || [],
+          headquarters: f.headquarters || "",
         });
       }
     }
@@ -300,10 +314,14 @@ function _extractFactionsFromDigests(digestEngine, location, keywords) {
         factions.push({
           name,
           type: f.type || "organization",
+          alignment: f.alignment || "",
           status: "active",
           source: "digest",
-          description: (f.goals || f.description || "").slice(0, 120),
-          leader: f.allies || null, // digests store allies, not leader separately
+          description: f.description || f.goals || "",
+          purpose: f.goals || "",
+          leader: f.leader || null,
+          allies: f.allies || "",
+          enemies: f.enemies || "",
           _matchedVia: matchedVia,
           _score: score,
           // Preserve digest fields for scoring

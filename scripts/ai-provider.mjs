@@ -48,23 +48,25 @@ export class AiProvider {
     messages = this._applyVisionImages(messages, images);
 
     try {
+      let result;
       const activeProvider = this._providerOverride || this.config.provider;
       switch (activeProvider) {
         case "ollama":
-          return await this._chatOllama(messages);
+          result = await this._chatOllama(messages); break;
         case "lmstudio":
-          return await this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`);
+          result = await this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`); break;
         case "openai":
-          return await this._chatOpenAICompat(messages, "https://api.openai.com/v1/chat/completions");
+          result = await this._chatOpenAICompat(messages, "https://api.openai.com/v1/chat/completions"); break;
         case "openrouter":
-          return await this._chatOpenAICompat(messages, "https://openrouter.ai/api/v1/chat/completions");
+          result = await this._chatOpenAICompat(messages, "https://openrouter.ai/api/v1/chat/completions"); break;
         case "anthropic":
-          return await this._chatAnthropic(messages);
+          result = await this._chatAnthropic(messages); break;
         case "custom":
-          return await this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`);
+          result = await this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`); break;
         default:
           throw new Error(`Unknown AI provider: ${activeProvider}`);
       }
+      return this._stripThinking(result);
     } finally {
       this._maxTokensOverride = null;
       this._timeoutOverride = null;
@@ -330,7 +332,7 @@ When suggesting these features, be natural — weave them into your advice. For 
         if (token) { fullText += token; onChunk(token); }
       } catch { /* incomplete final line */ }
     }
-    return fullText;
+    return this._stripThinking(fullText);
   }
 
   // ── OpenAI-compatible ─────────────────────────────────────
@@ -401,7 +403,7 @@ When suggesting these features, be natural — weave them into your advice. For 
         if (token) { fullText += token; onChunk(token); }
       } catch { /* incomplete final line */ }
     }
-    return fullText;
+    return this._stripThinking(fullText);
   }
 
   // ── Anthropic ─────────────────────────────────────────────
@@ -509,7 +511,7 @@ When suggesting these features, be natural — weave them into your advice. For 
         }
       } catch { /* incomplete final line */ }
     }
-    return fullText;
+    return this._stripThinking(fullText);
   }
 
   // ── Helpers ───────────────────────────────────────────────
@@ -580,6 +582,31 @@ When suggesting these features, be natural — weave them into your advice. For 
     if (resp.ok) return;
     const rawBody = await resp.text().catch(() => "");
     throw new Error(this._friendlyHttpError(resp.status, rawBody, providerName));
+  }
+
+  // ── Thinking Token Stripper ───────────────────────────────
+  //
+  // Qwen 3.x (and some other reasoning models) wrap chain-of-thought
+  // reasoning in <think>…</think> tags when called via the Ollama/OpenAI
+  // API. The thinking block contains the model's internal planning
+  // ("Okay, the user wants me to…") and must NOT appear in NPC bios,
+  // narration, chat responses, or any user-facing output.
+  //
+  // This is safe to apply to ALL providers — if no <think> tags are
+  // present, the regex is a no-op.
+
+  /**
+   * Strip chain-of-thought reasoning blocks from an AI response.
+   * @param {string} text - Raw AI response text
+   * @returns {string} Clean text with thinking blocks removed
+   */
+  _stripThinking(text) {
+    if (!text) return text ?? "";
+    // Primary: <think>...</think> tags (Qwen 3.x API format)
+    let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+    // Fallback: "Thinking...\n...\n...done thinking." (CLI leakage, rare)
+    cleaned = cleaned.replace(/^Thinking\.\.\.\n[\s\S]*?\.\.\.done thinking\.\n?/im, "");
+    return cleaned.trim();
   }
 
 }

@@ -47,7 +47,7 @@ Return ONLY valid JSON with these categories (include empty arrays for categorie
 {
   "npcs": [{"name": "...", "role": "...", "location": "...", "faction": "...", "knowledge_level": "common|local|faction|secret", "notes": "..."}],
   "locations": [{"name": "...", "type": "...", "parent_location": "...", "region": "...", "key_details": "...", "knowledge_level": "common|local|secret", "encounters": "..."}],
-  "factions": [{"name": "...", "type": "...", "territory": "...", "goals": "...", "allies": "...", "enemies": "...", "knowledge_level": "common|faction|secret"}],
+  "factions": [{"name": "...", "type": "...", "alignment": "Lawful Good|Neutral Good|Chaotic Good|Lawful Neutral|True Neutral|Chaotic Neutral|Lawful Evil|Neutral Evil|Chaotic Evil|Unaligned", "territory": "...", "leader": "Name and Title or null", "goals": "...", "description": "3-5 sentences — founding history, methods, reputation, structure, and current activities", "allies": "...", "enemies": "...", "knowledge_level": "common|faction|secret"}],
   "plotHooks": [{"title": "...", "description": "...", "trigger": "...", "knowledge_level": "common|local|faction|secret"}],
   "encounters": [{"name": "...", "location": "...", "creatures": "...", "difficulty": "..."}],
   "items": [{"name": "...", "type": "...", "description": "...", "location": "...", "knowledge_level": "common|local|secret"}],
@@ -59,7 +59,7 @@ Rules:
 - Be thorough — each distinct entity gets its own entry
 - For NPCs: capture role (ally, villain, quest-giver, shopkeeper, etc.), faction membership if any, and key personality traits
 - For locations: set parent_location to the containing location (e.g. a tavern's parent is its town), region to the broad area
-- For factions: capture territory as comma-separated location names where they operate
+- For factions: capture territory as comma-separated location names where they operate. ALWAYS include alignment (moral/ethical stance of the organization). Include the leader's name and title if known. The description should be RICH — 3-5 sentences covering founding history, organizational structure, methods, reputation, and current activities. Goals is a separate 1-2 sentence field for their active mission.
 - knowledge_level determines who in the game world would know about this:
   "common" = widely known in the region (rulers, major landmarks, public events, geography)
   "local" = known to people in that specific location (local businesses, neighborhood gossip, town politics)
