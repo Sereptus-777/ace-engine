@@ -1145,34 +1145,44 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     async _setFlagSafe(key, value) {
-        // Voice flags are always on the actor (ActorDelta for unlinked tokens).
-        // Memory/conversation flags go to the TokenDocument so each unlinked
-        // copy has its own conversation history.
-        const ACTOR_FLAGS = new Set(["voiceId", "voiceSettings", "voiceAccent", "voiceGender", "voiceMuted",
-                                      "personality", "nameRevealed", "bioGenerated"]);
-        const useActor = ACTOR_FLAGS.has(key);
-
-        const tokenId = (this.tokenDocument && !this.tokenDocument.actorLink)
-                      ? this.tokenDocument.id : null;
-        // For unlinked tokens: actor flags → tokenDocument.actor (synthetic), other flags → tokenDocument
-        const target = tokenId
-            ? (useActor ? (this.tokenDocument.actor || this.actor) : this.tokenDocument)
-            : this.actor;
+        // All NPC chat flags (memoryLog, voice, personality, gmNotes, faction
+        // assignment, etc.) target the synthetic actor:
+        //   - Linked tokens   → tokenDocument.actor === base actor (shared)
+        //   - Unlinked tokens → tokenDocument.actor === base + ActorDelta layer
+        //                       (per-instance, read+write hit the same delta)
+        // Previously memoryLog wrote to tokenDocument flags but was read from
+        // tokenDocument.actor — different storage. That caused unlinked
+        // instances to all share the base actor's stale memoryLog because
+        // their writes silently went into a TokenDocument flag the constructor
+        // never looked at. Routing every flag through the synthetic actor
+        // makes write and read symmetric and ties history to the on-canvas
+        // identity (the renamed token + its delta) instead of the base
+        // creature template.
+        const target = (this.tokenDocument && !this.tokenDocument.actorLink && this.tokenDocument.actor)
+                     ? this.tokenDocument.actor
+                     : this.actor;
 
         if (value === null || value === undefined) {
             if (game.user.isGM) {
                 return target.unsetFlag(MODULE_ID, key);
             }
+            // Player path: ask the GM to apply on our behalf via socket.
+            // tokenId tells the receiver to resolve the synthetic actor for
+            // unlinked tokens; null means hit the base actor directly.
+            const tokenId = (this.tokenDocument && !this.tokenDocument.actorLink)
+                          ? this.tokenDocument.id : null;
             game.socket.emit(`module.${MODULE_ID}`, {
-                action: "unsetFlag", actorId: this.actor.id, tokenId: useActor ? null : tokenId, key
+                action: "unsetFlag", actorId: this.actor.id, tokenId, key
             });
             return;
         }
         if (game.user.isGM) {
             return target.setFlag(MODULE_ID, key, value);
         }
+        const tokenId = (this.tokenDocument && !this.tokenDocument.actorLink)
+                      ? this.tokenDocument.id : null;
         game.socket.emit(`module.${MODULE_ID}`, {
-            action: "setFlag", actorId: this.actor.id, tokenId: useActor ? null : tokenId, key, value
+            action: "setFlag", actorId: this.actor.id, tokenId, key, value
         });
     }
 
