@@ -1,0 +1,26 @@
+<div class="ace-engine-container">
+    <div class="ace-engine-video-area">
+        <img id="ace-engine-portrait" src="{{actorImg}}" crossorigin="anonymous" />
+        <canvas id="ace-engine-canvas"></canvas>
+
+        <div id="ace-engine-thinking" class="ace-engine-thinking" style="display:none;">
+            <i class="fas fa-circle-notch fa-spin"></i> Thinking...
+        </div>
+    </div>
+
+    <div id="ace-engine-npc-name" class="ace-engine-npc-name">{{actorName}}</div>
+
+    <div id="ace-engine-log" class="ace-engine-log"></div>
+
+    <div class="ace-engine-controls">
+        <textarea id="ace-engine-input" placeholder="Type to speak, or press the mic to talk freely..." autocomplete="off" rows="1"></textarea>
+        <div class="ace-engine-btn-row">
+            <button id="ace-engine-voice" title="Voice Input"><i class="fas fa-microphone"></i></button>
+            <button id="ace-engine-send" title="Send to AI"><i class="fas fa-paper-plane"></i></button>
+            <button id="ace-engine-pause" title="Pause / Resume audio"><i class="fas fa-pause"></i></button>
+            {{#if isGM}}
+            <button id="ace-engine-stop-all" title="Stop conversation for everyone"><i class="fas fa-stop"></i></button>
+            {{/if}}
+        </div>
+    </div>
+</div>

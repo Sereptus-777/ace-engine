@@ -6513,3 +6513,1265 @@ li.ace-toolbar-btn:hover {
 .ace-engine-init-down:hover {
   color: var(--ace-accent, #d4af37);
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ENVOY MERGER — Bulk CSS Import (Phase 3)
+   Imported from ace-envoy/css/style.css with class renames ace-envoy-* -> ace-engine-*.
+   Some rules may be unused in engine; cleanup pass deferred to a future commit.
+   ═══════════════════════════════════════════════════════════════════════════ */
+/* Google Fonts — Cinzel Decorative (title) + Rajdhani (body) + Orbitron (headings) */
+@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&family=Rajdhani:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&display=swap');
+
+/* ============================================================
+   ACE: Envoy — Conversation Window Styles
+   Tech-luxe aesthetic: black velvet, photorealistic gold trim
+   Matches ACE Engine panel theme
+   ============================================================ */
+
+/* ── Root — Custom Properties & Base Font ────────────────────── */
+.ace-engine {
+  /* ── Tech-Luxe Palette — Black Velvet & Polished Gold ── */
+  --ace-bg-primary:       #0a0a0c;
+  --ace-bg-secondary:     #111114;
+  --ace-bg-tertiary:      #1a1a1e;
+  --ace-bg-input:         #08080a;
+  --ace-text-primary:     #e8e6e0;
+  --ace-text-secondary:   #9a9890;
+  --ace-text-muted:       #555550;
+  --ace-accent:           #d4af37;
+  --ace-accent-glow:      rgba(212, 175, 55, 0.35);
+  --ace-accent-secondary: #8a5bbf;
+  --ace-border:           #2a2a2e;
+  --ace-border-light:     #3a3a40;
+  --ace-success:          #00e676;
+  --ace-warning:          #ffab00;
+  --ace-danger:           #ff1744;
+  --ace-radius:           3px;
+  --ace-radius-sm:        2px;
+  --ace-shadow:           0 4px 30px rgba(0, 0, 0, 0.9);
+
+  font-family: 'Rajdhani', 'Segoe UI', 'Helvetica Neue', sans-serif;
+  font-size: 15px;
+  color: var(--ace-text-primary);
+
+  border: none !important;
+  border-radius: 4px !important;
+  box-shadow:
+    0 0 30px rgba(0, 0, 0, 0.9),
+    0 4px 40px rgba(0, 0, 0, 0.8) !important;
+  outline: none !important;
+}
+
+/* ── Gold Header Bar — Photorealistic Polished Gold ──────────── */
+.ace-engine .window-header,
+.ace-engine header,
+.ace-engine .application-header {
+  background:
+    linear-gradient(to bottom,
+      #f5e6a3 0%,
+      #e8d48a 4%,
+      #d4af37 12%,
+      #c9a028 22%,
+      #b8922a 35%,
+      #d4af37 48%,
+      #e0c050 52%,
+      #c9a028 58%,
+      #a88520 70%,
+      #96760a 82%,
+      #7a6008 92%,
+      #6a5010 100%
+    ) !important;
+  border-bottom: 1px solid #4a3808 !important;
+  box-shadow:
+    0 2px 12px rgba(0, 0, 0, 0.8),
+    0 1px 4px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 248, 200, 0.7),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.4) !important;
+  min-height: 42px !important;
+}
+
+/* Window title — bold black engraved on polished gold */
+.ace-engine .window-title,
+.ace-engine .application-title {
+  color: #000000 !important;
+  font-family: 'Cinzel Decorative', 'Cinzel', 'Palatino Linotype', serif !important;
+  font-size: 15px !important;
+  font-weight: 900 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  text-shadow:
+    0 1px 0 rgba(255, 245, 180, 0.5),
+    0 -1px 0 rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Window icon — black on gold */
+.ace-engine .window-icon,
+.ace-engine .window-title i:first-child {
+  color: #000000 !important;
+  text-shadow: 0 1px 0 rgba(255, 245, 180, 0.4) !important;
+  font-size: 16px !important;
+}
+
+/* Header control buttons — dark icons on gold bar */
+.ace-engine a.header-button,
+.ace-engine button.header-control,
+.ace-engine a.close {
+  color: #3a2a10 !important;
+}
+
+.ace-engine a.header-button:hover,
+.ace-engine button.header-control:hover,
+.ace-engine a.close:hover {
+  color: #1a0e02 !important;
+}
+
+/* ── Window Content — Black Velvet + Gold Rails ─────────────── */
+.ace-engine .window-content {
+  background: linear-gradient(170deg, #0c0c0e 0%, #0a0a0c 40%, #080810 100%) !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  position: relative;
+  border-bottom: 6px solid;
+  border-image:
+    linear-gradient(to right,
+      #7a6008 0%, #b8922a 15%, #d4af37 30%,
+      #e8d48a 48%, #f0e0a0 52%,
+      #d4af37 70%, #b8922a 85%, #7a6008 100%
+    ) 1 !important;
+  border-radius: 0 !important;
+}
+
+/* Gold side rails — left */
+.ace-engine .window-content::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  z-index: 100;
+  pointer-events: none;
+  background:
+    linear-gradient(to right,
+      #7a6008 0%,
+      #96760a 8%,
+      #b8922a 20%,
+      #d4af37 35%,
+      #e8d48a 48%,
+      #f0e0a0 52%,
+      #d4af37 65%,
+      #b8922a 80%,
+      #96760a 92%,
+      #7a6008 100%
+    );
+  box-shadow:
+    inset 0 0 2px rgba(255, 245, 180, 0.3),
+    0 0 6px rgba(212, 175, 55, 0.2);
+}
+
+/* Gold side rails — right */
+.ace-engine .window-content::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 6px;
+  z-index: 100;
+  pointer-events: none;
+  background:
+    linear-gradient(to right,
+      #7a6008 0%,
+      #96760a 8%,
+      #b8922a 20%,
+      #d4af37 35%,
+      #e8d48a 48%,
+      #f0e0a0 52%,
+      #d4af37 65%,
+      #b8922a 80%,
+      #96760a 92%,
+      #7a6008 100%
+    );
+  box-shadow:
+    inset 0 0 2px rgba(255, 245, 180, 0.3),
+    0 0 6px rgba(212, 175, 55, 0.2);
+}
+
+/* ── Container — Inset for Rails ─────────────────────────────── */
+.ace-engine-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: transparent;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+/* ── Portrait / Video Area ───────────────────────────────────── */
+.ace-engine-video-area {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: 220px;
+  background: var(--ace-bg-primary);
+  border-bottom: 2px solid var(--ace-accent);
+  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.15);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+#ace-engine-portrait {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+#ace-engine-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* ── NPC Name Strip (below portrait) ───────────────────────── */
+.ace-engine-npc-name {
+  width: 100%;
+  padding: 5px 12px;
+  background: linear-gradient(180deg, rgba(10, 10, 12, 0.95), rgba(17, 17, 20, 0.95));
+  border-bottom: 1px solid rgba(212, 175, 55, 0.35);
+  color: var(--ace-accent, #d4af37);
+  font-family: 'Cinzel Decorative', 'Cinzel', 'Palatino', serif;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 0.06em;
+  text-shadow: 0 0 8px rgba(212, 175, 55, 0.3);
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+/* ── Thinking Indicator ──────────────────────────────────────── */
+#ace-engine-thinking {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 10, 12, 0.88);
+  border: 1px solid var(--ace-accent);
+  border-radius: var(--ace-radius);
+  padding: 6px 16px;
+  color: var(--ace-accent);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  z-index: 10;
+}
+
+#ace-engine-thinking i {
+  color: var(--ace-accent);
+  filter: drop-shadow(0 0 6px var(--ace-accent-glow));
+}
+
+/* ── Chat Log ────────────────────────────────────────────────── */
+.ace-engine-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  background: linear-gradient(170deg, #0c0c0e 0%, #0a0a0c 40%, #080810 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 160px;
+}
+
+/* Scrollbar */
+.ace-engine-log::-webkit-scrollbar {
+  width: 6px;
+}
+.ace-engine-log::-webkit-scrollbar-track {
+  background: var(--ace-bg-primary);
+}
+.ace-engine-log::-webkit-scrollbar-thumb {
+  background: var(--ace-border-light);
+  border-radius: 3px;
+}
+.ace-engine-log::-webkit-scrollbar-thumb:hover {
+  background: var(--ace-accent);
+}
+
+/* ── Message Bubbles ─────────────────────────────────────────── */
+/* Force text selection on — Foundry's core CSS may disable it on app windows */
+.ace-engine-log,
+.ace-engine-log * {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  cursor: auto;
+}
+
+.ace-engine-message {
+  display: flex;
+  width: 100%;
+  animation: ace-engine-fadeIn 0.2s ease;
+}
+
+.ace-engine-user { justify-content: flex-end; }
+.ace-engine-assistant { justify-content: flex-start; }
+
+.ace-engine-bubble {
+  max-width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--ace-radius);
+  font-size: 15px;
+  line-height: 1.55;
+  font-family: inherit;
+  color: var(--ace-text-primary);
+}
+
+/* User messages — lighter bg, offset left */
+.ace-engine-user .ace-engine-bubble {
+  background: rgba(30, 30, 36, 0.75);
+  border: 1px solid var(--ace-border-light);
+  margin-left: 24px;
+}
+
+/* AI/NPC messages — dark bg, gold left accent */
+.ace-engine-assistant .ace-engine-bubble {
+  background: rgba(14, 14, 18, 0.85);
+  border: 1px solid var(--ace-border);
+  border-left: 3px solid var(--ace-accent);
+}
+
+/* System messages */
+.ace-engine-system .ace-engine-bubble {
+  background: rgba(20, 20, 26, 0.6);
+  border: 1px solid var(--ace-border);
+  color: var(--ace-text-secondary);
+  font-style: italic;
+  font-size: 13px;
+  text-align: center;
+}
+
+@keyframes ace-engine-fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Controls Bar (Input Area) ───────────────────────────────── */
+.ace-engine-controls {
+  display: flex !important;
+  flex-direction: column;
+  padding: 8px 12px 12px;
+  background: linear-gradient(to bottom, #111114 0%, #0c0c0e 100%);
+  gap: 6px;
+  border-top: 1px solid rgba(212, 175, 55, 0.25);
+  flex-shrink: 0;
+}
+
+.ace-engine-btn-row {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+/* Input field — near-black, gold focus ring (textarea for word-wrap) */
+#ace-engine-input {
+  width: 100%;
+  background: var(--ace-bg-input);
+  color: var(--ace-text-primary);
+  border: 1px solid var(--ace-border);
+  border-radius: var(--ace-radius);
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 15px;
+  outline: none;
+  resize: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+  min-height: 38px;
+  max-height: 100px;
+  overflow-y: auto;
+  word-wrap: break-word;
+  line-height: 1.4;
+}
+
+#ace-engine-input:focus {
+  border-color: var(--ace-accent);
+  box-shadow: 0 0 0 2px var(--ace-accent-glow);
+}
+
+#ace-engine-input::placeholder {
+  color: #807e75;
+  font-style: italic;
+}
+
+/* ── Send Button — Gold ──────────────────────────────────────── */
+#ace-engine-send {
+  width: 44px;
+  height: 38px;
+  background: linear-gradient(to bottom, #d4af37 0%, #b8922a 50%, #96760a 100%);
+  border: 1px solid #d4af37;
+  color: #0a0a0c;
+  font-weight: 700;
+  text-shadow: 0 1px 0 rgba(255, 245, 180, 0.4);
+  border-radius: var(--ace-radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 16px;
+}
+
+#ace-engine-send:hover {
+  background: linear-gradient(to bottom, #e8d48a 0%, #d4af37 50%, #b8922a 100%);
+  box-shadow: 0 0 14px rgba(212, 175, 55, 0.5);
+}
+
+/* ── Mic / Voice Button ──────────────────────────────────────── */
+#ace-engine-voice {
+  width: 44px;
+  height: 38px;
+  background: linear-gradient(to bottom, #1e1e22 0%, #141416 100%);
+  border: 1px solid var(--ace-border-light);
+  color: var(--ace-text-secondary);
+  border-radius: var(--ace-radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 16px;
+}
+
+#ace-engine-voice:hover {
+  background: linear-gradient(to bottom, #2a2a30 0%, #1e1e22 100%);
+  border-color: var(--ace-accent);
+  color: var(--ace-accent);
+  box-shadow: 0 0 8px rgba(212, 175, 55, 0.15);
+}
+
+/* Active / Recording state — red pulse */
+#ace-engine-voice.active {
+  background: rgba(255, 23, 68, 0.12);
+  border-color: var(--ace-danger);
+  color: var(--ace-danger);
+  box-shadow: 0 0 12px rgba(255, 23, 68, 0.3);
+  animation: ace-engine-mic-glow 1.2s ease-in-out infinite;
+}
+
+@keyframes ace-engine-mic-glow {
+  0%, 100% { box-shadow: 0 0 6px rgba(255, 23, 68, 0.3); }
+  50%      { box-shadow: 0 0 18px rgba(255, 23, 68, 0.6); }
+}
+
+/* ── GM Buttons in Unified Controls ──────────────────────────── */
+
+/* Puppet speak — purple accent (GM only) */
+#ace-engine-puppet-send {
+  width: 38px;
+  height: 38px;
+  background: linear-gradient(to bottom, #1e1e22 0%, #141416 100%);
+  border: 1px solid var(--ace-accent-secondary);
+  color: var(--ace-accent-secondary);
+  border-radius: var(--ace-radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 16px;
+}
+
+#ace-engine-puppet-send:hover {
+  background: rgba(138, 91, 191, 0.15);
+  box-shadow: 0 0 8px rgba(138, 91, 191, 0.35);
+}
+
+/* Pause / Resume — BIG button, matches mic size, red when active */
+#ace-engine-pause {
+  width: 44px;
+  height: 42px;
+  background: rgba(220, 40, 40, 0.12);
+  border: 2px solid rgba(220, 60, 60, 0.5);
+  color: #e04050;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 8px rgba(220, 50, 50, 0.2);
+}
+
+#ace-engine-pause:hover {
+  color: #ff4455;
+  background: rgba(220, 50, 50, 0.22);
+  border-color: #ff4455;
+  box-shadow: 0 0 16px rgba(255, 60, 60, 0.4);
+  transform: scale(1.05);
+}
+
+/* Paused state — green resume */
+#ace-engine-pause.ace-engine-paused {
+  background: rgba(93, 184, 138, 0.15);
+  border-color: rgba(93, 184, 138, 0.6);
+  color: #5db88a;
+  box-shadow: 0 0 10px rgba(93, 184, 138, 0.3);
+}
+#ace-engine-pause.ace-engine-paused:hover {
+  background: rgba(93, 184, 138, 0.25);
+  box-shadow: 0 0 18px rgba(93, 184, 138, 0.5);
+}
+
+/* Stop all — red danger accent */
+#ace-engine-stop-all {
+  width: 38px;
+  height: 38px;
+  background: rgba(255, 23, 68, 0.08);
+  border: 1px solid var(--ace-danger);
+  color: var(--ace-danger);
+  border-radius: var(--ace-radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 16px;
+}
+
+#ace-engine-stop-all:hover {
+  background: rgba(255, 23, 68, 0.15);
+  box-shadow: 0 0 8px rgba(255, 23, 68, 0.25);
+}
+
+/* ── Canvas — Token HUD & Chat Bubble Icons ──────────────────── */
+.ai-token-controls img {
+  transition: transform 0.15s, filter 0.15s;
+}
+
+.ai-token-controls img:hover {
+  transform: scale(1.15);
+  filter: drop-shadow(0 0 8px rgba(212, 175, 55, 0.6)) !important;
+}
+
+.ace-engine-bubble-icon {
+  border-radius: 50%;
+  transition: all 0.3s ease;
+}
+
+.ace-engine-bubble-icon:hover {
+  filter: drop-shadow(0 0 8px rgba(212, 175, 55, 0.6)) !important;
+  transform: translateX(-50%) scale(1.15) !important;
+}
+
+/* ── Gold Divider — reusable utility ─────────────────────────── */
+.ace-engine-gold-divider {
+  height: 3px;
+  flex-shrink: 0;
+  background:
+    linear-gradient(to right,
+      #7a6008 0%,
+      #96760a 10%,
+      #b8922a 25%,
+      #d4af37 40%,
+      #e8d48a 50%,
+      #d4af37 60%,
+      #b8922a 75%,
+      #96760a 90%,
+      #7a6008 100%
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 248, 200, 0.5),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+/* ── Player Token HUD — hide ALL default elements ────────────────────────
+   When a player right-clicks an NPC, we add .ace-engine-player-hud to the
+   HUD wrapper. CSS !important rules ensure nothing leaks through, even if
+   Foundry renders elements after our hook fires.                         */
+.ace-engine-player-hud > *:not(.ai-token-controls) {
+    display:    none !important;
+    visibility: hidden !important;
+    opacity:    0 !important;
+    pointer-events: none !important;
+    width:  0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+}
+
+/* Also catch deeply nested Foundry HUD parts (v12 + v13 compat) */
+.ace-engine-player-hud .col,
+.ace-engine-player-hud .col.left,
+.ace-engine-player-hud .col.middle,
+.ace-engine-player-hud .col.right,
+.ace-engine-player-hud .control-icon,
+.ace-engine-player-hud .attribute,
+.ace-engine-player-hud .bar,
+.ace-engine-player-hud .bar1,
+.ace-engine-player-hud .bar2,
+.ace-engine-player-hud .status-effects,
+.ace-engine-player-hud .elevation,
+.ace-engine-player-hud .nameplate,
+.ace-engine-player-hud .left,
+.ace-engine-player-hud .right,
+.ace-engine-player-hud .center,
+/* V13 core: movement palette + toggle button + elevation + all palettes */
+.ace-engine-player-hud [data-action="elevation"],
+.ace-engine-player-hud [data-action="togglePalette"],
+.ace-engine-player-hud .palette,
+.ace-engine-player-hud .palette.movement-actions,
+.ace-engine-player-hud .palette.status-effects,
+.ace-engine-player-hud [data-action="toggleMovement"],
+.ace-engine-player-hud [data-palette="movementActions"],
+.ace-engine-player-hud [data-palette="effects"],
+.ace-engine-player-hud [data-action="movementAction"],
+.ace-engine-player-hud .movement-action-control,
+.ace-engine-player-hud .control-icon[data-action="toggle-movement"],
+.ace-engine-player-hud .control-icon.movement,
+.ace-engine-player-hud [data-action="combat"],
+.ace-engine-player-hud [data-action="target"],
+.ace-engine-player-hud [data-action="sort"],
+.ace-engine-player-hud [data-action="config"],
+.ace-engine-player-hud [data-action="visibility"],
+/* token-info-icons module: speed/AC/perception icons inside HUD */
+.ace-engine-player-hud .token-info,
+.ace-engine-player-hud .token-info-icon {
+    display:    none !important;
+    visibility: hidden !important;
+    width:      0 !important;
+    height:     0 !important;
+    overflow:   hidden !important;
+    opacity:    0 !important;
+    pointer-events: none !important;
+}
+
+/* Make the HUD wrapper transparent so no background box shows */
+.ace-engine-player-hud {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* ── Player NPC Chat — pulsing chat icon ─────────────────────────────── */
+.ace-engine-player-chat {
+    animation: ace-engine-chat-pulse 2s ease-in-out infinite;
+}
+
+@keyframes ace-engine-chat-pulse {
+    0%, 100% { filter: drop-shadow(0 0 6px rgba(201,168,76,0.8)) drop-shadow(0 0 3px black); }
+    50%      { filter: drop-shadow(0 0 12px rgba(201,168,76,1))   drop-shadow(0 0 5px black); }
+}
+
+/* ── Hide Third-Party Token HUD Overlays (Token Action HUD, etc.) ────────
+   When a player interacts with an NPC token, we add .ace-engine-hide-tah to
+   <body>. CSS rules do the hiding — no timing issues, no selector races.
+   Works regardless of when TAH renders or re-renders.
+   Multiple selector layers ensure coverage across TAH versions and
+   Foundry v12/v13 ApplicationV2 wrapper differences.                       */
+
+/* Layer 1: TAH container (known IDs and classes) */
+body.ace-engine-hide-tah #token-action-hud-app,
+body.ace-engine-hide-tah [id*='token-action-hud'],
+body.ace-engine-hide-tah .token-action-hud-core-app,
+body.ace-engine-hide-tah [class*='tah-style'],
+/* Layer 2: TAH internal elements (catches v13 ApplicationV2 wrappers) */
+body.ace-engine-hide-tah #tah-character-name,
+body.ace-engine-hide-tah #tah-collapse-expand,
+body.ace-engine-hide-tah #tah-buttons,
+body.ace-engine-hide-tah .tah-groups,
+body.ace-engine-hide-tah .tah-tab-group,
+body.ace-engine-hide-tah .tah-actions,
+/* Layer 3: Any element whose class starts with "tah-" */
+body.ace-engine-hide-tah [class^='tah-'],
+body.ace-engine-hide-tah [class*=' tah-'],
+/* Layer 4: token-info-icons (speed/AC/perception/eye icons) */
+body.ace-engine-hide-tah .token-info.col,
+body.ace-engine-hide-tah .token-info-icon,
+body.ace-engine-hide-tah .token-info-icon.control-icon,
+/* Layer 5: V13 core — ALL token HUD controls (elevation, movement, status, etc.) */
+body.ace-engine-hide-tah #token-hud [data-action="elevation"],
+body.ace-engine-hide-tah #token-hud [data-action="togglePalette"],
+body.ace-engine-hide-tah #token-hud .palette,
+body.ace-engine-hide-tah #token-hud .palette.movement-actions,
+body.ace-engine-hide-tah #token-hud .palette.status-effects,
+body.ace-engine-hide-tah #token-hud [data-action="toggleMovement"],
+body.ace-engine-hide-tah #token-hud [data-palette="movementActions"],
+body.ace-engine-hide-tah #token-hud [data-palette="effects"],
+body.ace-engine-hide-tah #token-hud [data-action="movementAction"],
+body.ace-engine-hide-tah #token-hud .movement-action-control,
+body.ace-engine-hide-tah #token-hud .control-icon[data-action="toggle-movement"],
+body.ace-engine-hide-tah #token-hud .control-icon.movement,
+body.ace-engine-hide-tah #token-hud [data-action="combat"],
+body.ace-engine-hide-tah #token-hud [data-action="target"],
+body.ace-engine-hide-tah #token-hud [data-action="sort"],
+body.ace-engine-hide-tah #token-hud [data-action="config"],
+body.ace-engine-hide-tah #token-hud [data-action="visibility"],
+body.ace-engine-hide-tah #token-hud .col,
+body.ace-engine-hide-tah #token-hud .col.left,
+body.ace-engine-hide-tah #token-hud .col.middle,
+body.ace-engine-hide-tah #token-hud .col.right,
+body.ace-engine-hide-tah #token-hud .control-icon,
+body.ace-engine-hide-tah #token-hud .attribute,
+body.ace-engine-hide-tah #token-hud .bar1,
+body.ace-engine-hide-tah #token-hud .bar2 {
+    display:    none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    width:  0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+    opacity: 0 !important;
+}
+
+/* ── ACE: Biography Section in Actor Sheet ───────────────────── */
+.ace-engine-bio {
+    border: 2px solid rgba(212, 175, 55, 0.6);
+    border-radius: 8px;
+    background: linear-gradient(135deg, rgba(10, 10, 12, 0.85), rgba(17, 17, 20, 0.95));
+    padding: 0 12px 12px;
+    margin-bottom: 10px;
+    box-shadow: 0 0 8px rgba(212, 175, 55, 0.15), inset 0 0 20px rgba(0, 0, 0, 0.3);
+}
+.ace-engine-bio p {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    color: #ccc;
+    margin: 6px 0;
+}
+.ace-bio-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: 'Orbitron', 'Rajdhani', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #d4af37;
+    background: linear-gradient(90deg, rgba(212, 175, 55, 0.25), rgba(212, 175, 55, 0.08), transparent);
+    border-bottom: 2px solid rgba(212, 175, 55, 0.5);
+    padding: 8px 12px;
+    margin: 0 -12px 8px;
+    border-radius: 6px 6px 0 0;
+    text-shadow: 0 0 6px rgba(212, 175, 55, 0.3);
+}
+
+.ace-bio-btn-group {
+    display: flex;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.ace-bio-copy {
+    background: none;
+    border: 1px solid rgba(212, 175, 55, 0.3);
+    border-radius: 4px;
+    color: #d4af37;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 3px 8px;
+    opacity: 0.85;
+    transition: all 0.2s ease;
+}
+.ace-bio-copy:hover {
+    color: #f0d060 !important;
+    opacity: 1 !important;
+    border-color: rgba(212, 175, 55, 0.6);
+    background: rgba(212, 175, 55, 0.1);
+    box-shadow: 0 0 4px rgba(212, 175, 55, 0.3);
+}
+.ace-bio-copy:focus { outline: none; }
+
+.ace-bio-reset {
+    background: none;
+    border: 1px solid rgba(200, 60, 60, 0.4);
+    border-radius: 4px;
+    color: #cc5555;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 3px 8px;
+    opacity: 0.9;
+    transition: all 0.2s ease;
+}
+.ace-bio-reset:hover {
+    color: #ff5555 !important;
+    opacity: 1 !important;
+    border-color: rgba(220, 60, 60, 0.7);
+    background: rgba(220, 60, 60, 0.15);
+    box-shadow: 0 0 6px rgba(220, 60, 60, 0.35);
+}
+.ace-bio-reset:focus { outline: none; }
+
+.ace-bio-history {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(212, 175, 55, 0.25);
+    color: #999;
+    font-size: 0.82em;
+}
+
+/* ── Bio-Generation Shimmer — future DOM overlay support ──────── */
+@keyframes ace-engine-bio-shimmer {
+    0%   { box-shadow: 0 0 6px rgba(212, 175, 55, 0.3); }
+    50%  { box-shadow: 0 0 20px rgba(212, 175, 55, 0.8); }
+    100% { box-shadow: 0 0 6px rgba(212, 175, 55, 0.3); }
+}
+
+/* Subtle Check styles removed — check suggestions now route to GM chat,
+   not as buttons inside conversation bubbles. The GM-only card uses
+   ACE Engine's chat card styling (ace-engine.css). */
+
+/* ─── INITIATIVE REORDER ARROWS ─────────────────────────────────────────── */
+
+.ace-engine-init-arrows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.ace-engine-init-up,
+.ace-engine-init-down {
+  background: transparent;
+  border: none;
+  color: var(--ace-text-secondary, #9a9890);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  transition: color 0.15s ease;
+}
+.ace-engine-init-up:hover,
+.ace-engine-init-down:hover {
+  color: var(--ace-accent, #d4af37);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   NPC CONFIG DIALOG — AI Setup redesign
+   Summary card + Quick Notes + Collapsible Advanced section
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.ace-npc-config-dialog .window-content {
+  background: #0e0e10 !important;
+  padding: 12px !important;
+  overflow-y: auto !important;
+  max-height: 80vh;
+}
+
+.ace-npc-config {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 8px;
+}
+
+/* ── Summary Card ──────────────────────────────────────────────────────── */
+.ace-npc-summary {
+  background: linear-gradient(135deg, #141418 0%, #1a1a1e 100%);
+  border: 1px solid #2a2a2e;
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ace-npc-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ── Gender Toggle ─────────────────────────────────────────────────── */
+.ace-gender-toggle {
+  display: inline-flex;
+  border: 1px solid #2a2a2e;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.ace-gender-btn {
+  background: transparent;
+  border: none;
+  color: #555550;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: all 0.15s ease;
+  border-right: 1px solid #2a2a2e;
+}
+.ace-gender-btn:last-child { border-right: none; }
+.ace-gender-btn:hover { color: #9a9890; background: rgba(255,255,255,0.03); }
+.ace-gender-btn.active {
+  color: #d4af37;
+  background: rgba(212, 175, 55, 0.12);
+}
+.ace-gender-btn.active[data-gender="male"] { color: #7ab8e0; background: rgba(100, 160, 220, 0.12); }
+.ace-gender-btn.active[data-gender="female"] { color: #e07ab8; background: rgba(220, 100, 180, 0.12); }
+
+.ace-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.82em;
+  font-weight: 600;
+  text-transform: capitalize;
+  letter-spacing: 0.03em;
+}
+.ace-badge i { font-size: 0.85em; }
+.ace-badge-accent {
+  background: rgba(212, 175, 55, 0.15);
+  color: #d4af37;
+  border: 1px solid rgba(212, 175, 55, 0.3);
+}
+.ace-badge-gender {
+  background: rgba(100, 160, 220, 0.12);
+  color: #7ab8e0;
+  border: 1px solid rgba(100, 160, 220, 0.25);
+}
+.ace-badge-disabled {
+  background: rgba(200, 60, 60, 0.15);
+  color: #cf6060;
+  border: 1px solid rgba(200, 60, 60, 0.3);
+}
+
+.ace-npc-field-label {
+  font-size: 0.82em;
+  font-weight: 600;
+  color: #9a9890;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 3px;
+}
+.ace-npc-field-label i {
+  margin-right: 4px;
+  color: #d4af37;
+}
+
+.ace-npc-field-value {
+  font-size: 0.95em;
+  color: #e8e6e0;
+  line-height: 1.45;
+}
+
+.ace-npc-personality-display {
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 4px;
+  border-left: 3px solid #d4af37;
+}
+.ace-npc-personality-display.ace-npc-empty {
+  border-left-color: #3a3a40;
+}
+
+.ace-muted {
+  color: #555550 !important;
+  font-style: italic;
+}
+
+/* Voice row */
+.ace-npc-voice-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ace-npc-voice-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ace-npc-voice-id {
+  flex: 1;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8em;
+  color: #9a9890;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 4px 8px;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────────── */
+.ace-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 1px solid #3a3a40;
+  border-radius: 4px;
+  background: #1a1a1e;
+  color: #e8e6e0;
+  cursor: pointer;
+  font-size: 0.9em;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+.ace-btn:hover {
+  background: #2a2a30;
+  border-color: #d4af37;
+  color: #d4af37;
+}
+.ace-btn-sm {
+  padding: 3px 8px;
+  font-size: 0.85em;
+}
+.ace-btn-gold {
+  background: linear-gradient(135deg, #2a2510 0%, #1e1a0a 100%);
+  border-color: rgba(212, 175, 55, 0.4);
+  color: #d4af37;
+}
+.ace-btn-gold:hover {
+  background: linear-gradient(135deg, #3a3518 0%, #2e2a12 100%);
+  border-color: #d4af37;
+  box-shadow: 0 0 8px rgba(212, 175, 55, 0.25);
+}
+
+/* ── Quick Notes Section ───────────────────────────────────────────────── */
+.ace-npc-quick-note {
+  background: linear-gradient(135deg, #141418 0%, #1a1a1e 100%);
+  border: 1px solid #2a2a2e;
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
+.ace-npc-note-input-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.ace-npc-note-input-row input {
+  flex: 1;
+  background: #08080a;
+  border: 1px solid #2a2a2e;
+  color: #e8e6e0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.ace-npc-note-input-row input::placeholder {
+  color: #807e75;
+}
+
+/* All placeholders in the NPC config dialog — readable on dark backgrounds */
+.ace-npc-config input::placeholder,
+.ace-npc-config textarea::placeholder {
+  color: #807e75;
+}
+.ace-npc-note-input-row input:focus {
+  border-color: #d4af37;
+  outline: none;
+}
+
+.ace-npc-notes-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.ace-note-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 8px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 3px;
+  border-left: 2px solid rgba(212, 175, 55, 0.4);
+}
+.ace-note-text {
+  flex: 1;
+  font-size: 0.88em;
+  color: #d0cec5;
+  line-height: 1.4;
+}
+.ace-note-delete {
+  background: transparent;
+  border: none;
+  color: #555550;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 0.8em;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+.ace-note-delete:hover {
+  color: #cf6060;
+}
+
+/* ── Advanced Section ──────────────────────────────────────────────────── */
+.ace-npc-advanced {
+  border: 1px solid #2a2a2e;
+  border-radius: 6px;
+  background: #111114;
+}
+
+.ace-npc-advanced-toggle {
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 0.92em;
+  font-weight: 600;
+  color: #9a9890;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 0.15s;
+}
+.ace-npc-advanced-toggle::-webkit-details-marker { display: none; }
+.ace-npc-advanced-toggle::before {
+  content: '\f054';
+  font-family: 'Font Awesome 5 Free';
+  font-weight: 900;
+  font-size: 0.7em;
+  transition: transform 0.2s;
+}
+.ace-npc-advanced[open] > .ace-npc-advanced-toggle::before {
+  transform: rotate(90deg);
+}
+.ace-npc-advanced-toggle:hover {
+  color: #d4af37;
+}
+
+.ace-npc-advanced-content {
+  padding: 4px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid #2a2a2e;
+}
+
+.ace-npc-advanced-content .form-group {
+  margin: 0;
+}
+.ace-npc-advanced-content label {
+  font-size: 0.9em;
+  font-weight: 600;
+  color: #c0bdb5;
+  margin-bottom: 4px;
+  display: block;
+}
+.ace-npc-advanced-content label i {
+  color: #d4af37;
+  margin-right: 4px;
+  width: 16px;
+}
+.ace-npc-advanced-content textarea,
+.ace-npc-advanced-content input[type="text"],
+.ace-npc-advanced-content input[type="number"],
+.ace-npc-advanced-content select {
+  width: 100%;
+  background: #08080a;
+  border: 1px solid #2a2a2e;
+  color: #e8e6e0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: inherit;
+}
+.ace-npc-advanced-content textarea:focus,
+.ace-npc-advanced-content input:focus,
+.ace-npc-advanced-content select:focus {
+  border-color: #d4af37;
+  outline: none;
+}
+.ace-npc-advanced-content .hint {
+  font-size: 0.78em;
+  color: #555550;
+  margin: 3px 0 0;
+  line-height: 1.3;
+}
+
+.ace-npc-advanced-content .ace-npc-voice-override-row {
+  display: flex;
+  gap: 6px;
+}
+.ace-npc-advanced-content .ace-npc-voice-override-row input {
+  flex: 1;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────── */
+.ace-npc-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+/* ── NPC Identity Dialog ─────────────────────────────── */
+.ace-npc-identity-dialog {
+  min-height: 200px !important;
+}
+.ace-npc-identity-dialog .window-content {
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  height: 100% !important;
+  padding: 0 !important;
+}
+.ace-npc-identity-dialog .dialog-content {
+  flex: 1 1 auto !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  min-height: 0 !important;
+  padding: 8px 12px;
+}
+.ace-npc-identity-dialog .dialog-buttons {
+  flex: 0 0 auto !important;
+  padding: 8px 12px !important;
+  border-top: 2px solid rgba(212, 175, 55, 0.3) !important;
+  background: rgba(30, 30, 34, 0.98) !important;
+}
+
+/* ── Faction dropdown visibility fix ─────────────────────── */
+/* Override cibola8 theme (.cibola8 select{color:#fff}) and any
+   other dark-theme module that blanks out select text.
+   Triple-class specificity + !important guarantees the win. */
+.ace-npc-identity-dialog select[name="factionChoice"],
+.cibola8 .ace-npc-identity-dialog select[name="factionChoice"],
+.app.dialog .ace-npc-identity-dialog select[name="factionChoice"] {
+  background: #fff !important;
+  color: #111 !important;
+  -webkit-text-fill-color: #111 !important;
+  font-size: 1.1em !important;
+  font-weight: 600 !important;
+  padding: 12px 10px !important;
+  border: 1px solid #bbb !important;
+  border-radius: 4px !important;
+  line-height: 1.4 !important;
+  -webkit-appearance: menulist !important;
+  appearance: menulist !important;
+}
+.ace-npc-identity-dialog select[name="factionChoice"] option,
+.cibola8 .ace-npc-identity-dialog select[name="factionChoice"] option {
+  background: #fff !important;
+  color: #111 !important;
+  -webkit-text-fill-color: #111 !important;
+  font-weight: 600 !important;
+  padding: 6px 10px !important;
+}
+.ace-npc-identity-dialog select[name="factionChoice"] optgroup,
+.cibola8 .ace-npc-identity-dialog select[name="factionChoice"] optgroup {
+  background: #f0ead6 !important;
+  color: #555 !important;
+  -webkit-text-fill-color: #555 !important;
+  font-weight: bold !important;
+  font-style: italic !important;
+}
+/* Also fix origin dropdown against theme overrides */
+.ace-npc-identity-dialog select[name="npcOrigin"],
+.cibola8 .ace-npc-identity-dialog select[name="npcOrigin"] {
+  background: #fff !important;
+  color: #111 !important;
+  -webkit-text-fill-color: #111 !important;
+}
