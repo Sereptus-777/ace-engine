@@ -874,11 +874,15 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     async _saveMemorySafe(history) { return this._setFlagSafe("memoryLog", history); }
 
     // ── Speaking-synced animated portrait ──────────────────────────────────
-    // Probes the configured GIF folder for {token.name}.webp, then
-    // {actor.name}.webp. If found, listens for the npcDialogueStart/End hooks
-    // and swaps the portrait <img> src between the static fallback and the
-    // animated WebP. Plays only during dialogue segments — not narrator-voiced
-    // *emotes* or silent listening.
+    // Probes the configured WebP folder in this cascade:
+    //   1. {folder}/{token.name}.webp     — most specific (the named instance)
+    //   2. {folder}/{actor.name}.webp     — creature template (e.g. "Goblin")
+    //   3. {folder}/{subtype}.webp        — family (e.g. "goblinoid"), lowercase
+    //   4. {folder}/{type}.webp           — broad type (e.g. "humanoid"), lowercase
+    //   5. (no swap) static portrait / token image stays
+    // Listens for npcDialogueStart/End hooks and swaps the portrait <img> src
+    // between the static fallback and the WebP. Plays only during dialogue
+    // segments — not narrator-voiced *emotes* or silent listening.
 
     async _initSpeakingPortrait() {
         if (!this._portraitImg) return;
@@ -887,38 +891,43 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         this._staticPortraitSrc = this._portraitImg.src;
 
         const folderRaw = (() => {
-            try { return game.settings.get(MODULE_ID, "npcGifFolder"); }
-            catch (_) { return "NPCs/gifs/"; }
+            try { return game.settings.get(MODULE_ID, "npcWebpFolder"); }
+            catch (_) { return "NPCs/webps/"; }
         })();
-        const folder = (folderRaw || "NPCs/gifs/").replace(/^\/+|\/+$/g, "");
+        const folder = (folderRaw || "NPCs/webps/").replace(/^\/+|\/+$/g, "");
 
-        const tokenName = this.tokenDocument?.name || "";
-        const actorName = this.actor?.name || "";
+        const tokenName = (this.tokenDocument?.name || "").trim();
+        const actorName = (this.actor?.name || "").trim();
+        const subtype   = (this.actor?.system?.details?.type?.subtype || "").trim().toLowerCase();
+        const type      = (this.actor?.system?.details?.type?.value   || "").trim().toLowerCase();
 
-        // Lookup priority: token name → actor name. Each candidate is encoded
-        // for spaces / special chars in the path.
+        // Build the 4-level lookup cascade. Token + actor names keep their
+        // natural casing; subtype + type are lowercase per dnd5e data.
         const candidates = [];
         const seen = new Set();
-        for (const name of [tokenName, actorName]) {
-            if (!name || seen.has(name)) continue;
-            seen.add(name);
+        for (const name of [tokenName, actorName, subtype, type]) {
+            if (!name) continue;
+            const key = name.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
             candidates.push(`${folder}/${encodeURIComponent(name)}.webp`);
         }
 
         for (const path of candidates) {
             // eslint-disable-next-line no-await-in-loop
             if (await this._fileExists(path)) {
-                this._speakingGifSrc = path;
-                console.log(`ACE: Engine | Conversation | Speaking GIF found: ${decodeURIComponent(path)}`);
+                this._speakingWebpSrc = path;
+                console.log(`ACE: Engine | Conversation | Speaking WebP found: ${decodeURIComponent(path)}`);
                 break;
             }
         }
 
-        if (!this._speakingGifSrc) {
-            console.log(`ACE: Engine | Conversation | No speaking GIF for ${tokenName || actorName} (looked in ${folder}/)`);
+        if (!this._speakingWebpSrc) {
+            const tried = candidates.map(p => decodeURIComponent(p.split("/").pop())).join(", ") || "(none — actor has no name/type data)";
+            console.log(`ACE: Engine | Conversation | No speaking WebP for ${tokenName || actorName} (tried: ${tried})`);
         }
 
-        // Always wire hooks — even when no GIF is found — so the system stays
+        // Always wire hooks — even when no WebP is found — so the system stays
         // ready if the user drops a file in mid-session and reopens the chat.
         this._dialogueStartHookId = Hooks.on("ace-engine.npcDialogueStart", (data) => this._onDialogueStart(data));
         this._dialogueEndHookId   = Hooks.on("ace-engine.npcDialogueEnd",   (data) => this._onDialogueEnd(data));
@@ -935,12 +944,12 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     _onDialogueStart({ actorName } = {}) {
-        if (!this._speakingGifSrc || !this._portraitImg) return;
+        if (!this._speakingWebpSrc || !this._portraitImg) return;
         // Match against this conversation's actor — TTS engine fires the hook
         // with the actor name passed in by speakResponse(). Skip events from
         // other conversations.
         if (actorName && actorName !== this.actor?.name) return;
-        this._portraitImg.src = this._speakingGifSrc;
+        this._portraitImg.src = this._speakingWebpSrc;
     }
 
     _onDialogueEnd({ actorName } = {}) {

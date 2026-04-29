@@ -587,11 +587,11 @@ export class AceSettings {
     // Living World Faction System. Code is registered but dormant until
     // the NPC chat subsystem is wired into engine init/ready hooks.
 
-    s("npcGifFolder", {
-      name: "NPC Conversation GIF Folder",
-      hint: "Foundry-data-relative path to a folder containing animated portraits (.webp) for NPCs. Files matching the token name play first ('Gorzak Soulgnawer.webp'), then the actor name ('Gorzak.webp'). Plays only while the NPC speaks dialogue; falls back to the actor portrait or token image when silent. Recipe: 512×512, 8-10 fps, 2-4 sec loop, q75-80, target <500KB per file.",
+    s("npcWebpFolder", {
+      name: "NPC Conversation WebP Folder",
+      hint: "Foundry-data-relative path to a folder of animated portraits (.webp) for NPCs. Lookup cascade: token name → actor name → creature subtype → creature type, then falls back to the static portrait / token image. Plays only during dialogue (not narrator emotes). Recipe: 512×512, 8-10 fps, 2-4 sec loop, q75-80, <500KB per file. Type/subtype names are lowercase (goblinoid.webp, humanoid.webp, beast.webp, undead.webp, etc.).",
       type: String,
-      default: "NPCs/gifs/",
+      default: "NPCs/webps/",
     });
 
     s("npcChatEnabled", {
