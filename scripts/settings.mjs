@@ -408,6 +408,19 @@ export class AceSettings {
       range: { min: 0, max: 1, step: 0.05 },
     });
 
+    // ── Voice Provider (NPC chat — moved from ACE: Envoy) ──
+    s("voiceProvider", {
+      scope: "client",
+      name: "NPC Voice Provider",
+      hint: "Choose which voice engine to use for NPC speech in conversations. ElevenLabs requires an API key. Browser TTS is free but lower quality.",
+      type: String,
+      choices: {
+        elevenlabs: "ElevenLabs (Recommended)",
+        browser:    "Browser TTS (Free)",
+      },
+      default: "browser",
+    });
+
     // ── Browser TTS (client-scoped) ─────────────────────────
     s("browserVoiceName", {
       scope: "client",
