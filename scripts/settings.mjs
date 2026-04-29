@@ -567,6 +567,151 @@ export class AceSettings {
       type: Boolean,
       default: true,
     });
+
+    s("autoDistributeXP", {
+      name: "Auto-distribute XP on Kill",
+      hint: "When an NPC dies, automatically divide its XP among all PCs in the encounter and post the award to chat.",
+      type: Boolean,
+      default: true,
+    });
+
+    s("autoCleanupDead", {
+      name: "Auto-Move Dead NPCs to ☠ Fallen Folder",
+      hint: "When a persistent (linked) NPC dies, automatically move their actor from the sidebar into a \"☠ Fallen\" folder under ACE NPCs. Keeps your Actors sidebar clean.",
+      type: Boolean,
+      default: true,
+    });
+
+    // ── NPC Chat — moved from ACE: Envoy (merger Phase 2) ───
+    // These settings control bio generation, NPC conversations, and the
+    // Living World Faction System. Code is registered but dormant until
+    // the NPC chat subsystem is wired into engine init/ready hooks.
+
+    s("npcChatEnabled", {
+      name: "Enable NPC Chat (FaceTime-style conversations)",
+      hint: "Master toggle for the NPC chat subsystem (bio generation, conversation UI, voice, faction memory). When OFF, none of the NPC chat hooks fire even if engine is enabled.",
+      type: Boolean,
+      default: false,  // dormant by default — flipped true after migration verified
+    });
+
+    s("enableSocialProfiles", {
+      name: "NPC Social Profiles",
+      hint: "Generate a 6-dimension social profile (hierarchy, loyalty, disposition, standing, wealth, circumstances) per NPC during bio generation. Rule-based — no extra API calls.",
+      type: Boolean,
+      default: true,
+    });
+
+    s("enableAutoLink", {
+      name: "Auto-Save NPCs as Persistent Actors",
+      hint: "When enabled, newly dropped tokens are automatically converted to linked actors and filed in a scene-named folder in your Actors sidebar.",
+      type: Boolean,
+      default: true,
+    });
+
+    s("autoGenerateBio", {
+      name: "Auto-generate NPC Biographies",
+      hint: "When a GM drags an NPC token onto a scene, AI generates a backstory based on creature Intelligence. Linked actors save to the actor sheet; unlinked tokens get unique per-instance bios.",
+      type: Boolean,
+      default: true,
+    });
+
+    s("tokenDropAI", {
+      name: "Token Drop AI Level",
+      hint: "Controls how much AI processing runs when you drag an NPC onto a scene. Full = faction + bio + name + items. Bio Only = bio + name, no faction popup. Faction Only = faction popup, no bio or items. Off = nothing, vanilla token drop.",
+      type: String,
+      choices: {
+        "full":         "Full (faction + bio + items)",
+        "bio-only":     "Bio Only (bio + name, no faction)",
+        "faction-only": "Faction Only (faction popup, no bio)",
+        "off":          "Off (vanilla drop, no AI)",
+      },
+      default: "full",
+    });
+
+    s("npcKnowledgeBudget", {
+      name: "NPC Knowledge Budget (Base)",
+      hint: "Base character budget for world knowledge injected into NPC conversation prompts. The budget for an average INT 10 commoner. Higher = NPCs know more about the world but responses may be slower.",
+      type: Number,
+      default: 2000,
+      range: { min: 500, max: 20000, step: 500 },
+    });
+
+    s("npcIntelligenceScaling", {
+      name: "NPC Intelligence Scaling",
+      hint: "When enabled, an NPC's Intelligence score scales their knowledge budget. High-INT NPCs (sages, wizards, ancient dragons) receive more world knowledge; low-INT creatures (beasts, zombies) receive less.",
+      type: Boolean,
+      default: true,
+    });
+
+    s("npcKnowledgeCap", {
+      name: "NPC Knowledge Cap",
+      hint: "Absolute maximum characters of world knowledge any single NPC can receive, regardless of Intelligence. Safety valve to prevent very high-INT NPCs from getting enormous prompts.",
+      type: Number,
+      default: 12000,
+      range: { min: 2000, max: 50000, step: 1000 },
+    });
+
+    s("enableFactions", {
+      name: "Living World Factions",
+      hint: "Every NPC dropped onto a scene is assigned to a named faction — gangs, tribes, garrisons, guilds, settlements, etc. The AI generates faction identity (name, leader, purpose, shared lore) and injects it into both biographies and conversations.",
+      type: Boolean,
+      default: true,
+    });
+
+    s("factionSpyChance", {
+      name: "Spy/Deserter Chance (1 in N)",
+      hint: "When assigning faction, there is a 1-in-N chance the NPC is secretly from a DIFFERENT faction (spy, deserter, captured, or turncoat). Set to 0 to disable. Does not apply to constructs, undead, or beasts.",
+      type: Number,
+      default: 200,
+      range: { min: 0, max: 1000, step: 10 },
+    });
+
+    s("factionWildcardChance", {
+      name: "Wild Card Outsider Chance (1 in N)",
+      hint: "1-in-N chance a dropped NPC is a far-flung outsider from a completely different region of the world — a Calishite merchant in Barovia, a dwarf wandering north. Set to 0 to disable.",
+      type: Number,
+      default: 200,
+      range: { min: 0, max: 1000, step: 10 },
+    });
+
+    s("defaultVoiceRegion", {
+      name: "Default Voice Region",
+      hint: "Default regional accent pool for NPCs when no scene-specific region is set. Affects commoners, humans, and races without a fixed accent.",
+      type: String,
+      choices: {
+        "default":      "Sword Coast / Generic (British)",
+        "barovia":      "Barovia / Ravenloft (Eastern European)",
+        "calimshan":    "Calimshan (Middle Eastern)",
+        "chult":        "Chult (African)",
+        "kara_tur":     "Kara-Tur (East Asian)",
+        "icewind_dale": "Icewind Dale / Nordic (Scandinavian)",
+        "underdark":    "Underdark (Scandinavian/German)",
+      },
+      default: "default",
+    });
+
+    // ── NPC Chat — Hidden internal data stores ──────────────
+
+    s("factionRegistry", {
+      scope: "world", config: false, type: Object, default: {},
+    });
+
+    s("factionMemory", {
+      scope: "world", config: false, type: Object, default: {},
+    });
+
+    s("voiceLibraryCache", {
+      scope: "world", config: false, type: Object, default: {},
+    });
+
+    s("partyFace", {
+      scope: "world", config: false, type: String, default: "",
+    });
+
+    // ── Migration tracking — true once migrateFromEnvoy() has run ────
+    s("envoyMigrated", {
+      scope: "world", config: false, type: Boolean, default: false,
+    });
   }
 
   /** Signup / API key URLs per provider */

@@ -254,6 +254,99 @@ function _aceEngineEnabled() {
   catch (_) { return true; }
 }
 
+// ── Envoy → Engine Migration (one-time, runs at first ready after Phase 3) ──
+// Copies user data from ace-envoy namespace into ace-engine namespace:
+//   1. Settings (provider keys, voice IDs, faction tuning, etc.)
+//   2. NPC actor flags (factionId, voiceId, personality, memoryLog, etc.)
+//   3. World data stores (factionRegistry, factionMemory, voiceLibraryCache)
+//
+// Idempotent: marks completion via the "envoyMigrated" world setting and
+// skips on subsequent runs. Safe to call even if envoy is no longer installed.
+async function migrateFromEnvoy() {
+  if (!game.user.isGM) return;
+
+  let already = false;
+  try { already = game.settings.get(MODULE_ID, "envoyMigrated"); } catch (_) {}
+  if (already) return;
+
+  console.log(`${MODULE_ID} | Checking for ACE: Envoy data to migrate...`);
+
+  // ── 1) Migrate world-scoped settings ace-envoy.X → ace-engine.Y ─────
+  const SETTINGS_MAP = {
+    // Same name on both sides
+    "enableAutoLink":          "enableAutoLink",
+    "enableSocialProfiles":    "enableSocialProfiles",
+    "autoGenerateBio":         "autoGenerateBio",
+    "tokenDropAI":             "tokenDropAI",
+    "npcKnowledgeBudget":      "npcKnowledgeBudget",
+    "npcIntelligenceScaling":  "npcIntelligenceScaling",
+    "npcKnowledgeCap":         "npcKnowledgeCap",
+    "autoDistributeXP":        "autoDistributeXP",
+    "autoCleanupDead":         "autoCleanupDead",
+    "initiativeReorder":       "initiativeReorder",
+    "enableFactions":          "enableFactions",
+    "factionSpyChance":        "factionSpyChance",
+    "factionWildcardChance":   "factionWildcardChance",
+    "factionRegistry":         "factionRegistry",
+    "factionMemory":           "factionMemory",
+    "partyFace":               "partyFace",
+    "defaultVoiceRegion":      "defaultVoiceRegion",
+    "voiceLibraryCache":       "voiceLibraryCache",
+    "voiceProvider":           "voiceProvider",
+    // Renamed
+    "narratorVoiceId":         "narratorVoiceOverrideId",  // envoy's narrator voice → engine's override id
+    "elevenLabsKey":           "elevenLabsApiKey",
+    "elevenLabsModel":         "elevenLabsModel",
+  };
+
+  let settingsMigrated = 0;
+  for (const [from, to] of Object.entries(SETTINGS_MAP)) {
+    try {
+      const value = game.settings.get("ace-envoy", from);
+      if (value !== undefined && value !== null && value !== "") {
+        await game.settings.set(MODULE_ID, to, value);
+        settingsMigrated++;
+      }
+    } catch (_) { /* setting doesn't exist on envoy side — skip */ }
+  }
+  if (settingsMigrated) {
+    console.log(`${MODULE_ID} | Envoy migration: copied ${settingsMigrated} setting(s)`);
+  }
+
+  // ── 2) Migrate NPC actor flags ace-envoy.* → ace-engine.* ─────────────
+  let flagsMigrated = 0;
+  for (const actor of game.actors ?? []) {
+    if (actor.type !== "npc") continue;
+    const envoyFlags = actor.flags?.["ace-envoy"];
+    if (!envoyFlags || typeof envoyFlags !== "object") continue;
+
+    // Don't double-migrate if engine flags already exist
+    if (actor.flags?.[MODULE_ID]?.factionId) continue;
+
+    const updates = {};
+    for (const [k, v] of Object.entries(envoyFlags)) {
+      if (k === "factionMemory") continue; // world setting, handled above
+      updates[`flags.${MODULE_ID}.${k}`] = v;
+    }
+    if (Object.keys(updates).length) {
+      try { await actor.update(updates); flagsMigrated++; }
+      catch (e) { console.warn(`${MODULE_ID} | Envoy flag migration failed for ${actor.name}:`, e); }
+    }
+  }
+  if (flagsMigrated) {
+    console.log(`${MODULE_ID} | Envoy migration: copied flags for ${flagsMigrated} NPC(s)`);
+  }
+
+  // ── 3) Mark complete + notify GM if anything was migrated ────────────
+  await game.settings.set(MODULE_ID, "envoyMigrated", true);
+  if (settingsMigrated || flagsMigrated) {
+    ui.notifications?.info(
+      `ACE Engine — Migrated from Envoy: ${settingsMigrated} setting(s), ${flagsMigrated} NPC(s).`,
+      { permanent: false }
+    );
+  }
+}
+
 // ── Initialization ─────────────────────────────────────────────
 Hooks.once("init", () => {
   console.log(`${MODULE_ID} | Initializing ACE`);
@@ -1680,6 +1773,15 @@ Hooks.once("ready", async () => {
   // ── Auto-discover PCs, scene NPCs, and [AI Memory] journals ────
   // Run after a short delay so the canvas has time to fully initialize
   setTimeout(() => _autoDiscoverAndSync(), 2000);
+
+  // ── Envoy → Engine one-time data migration ─────────────────────
+  // Idempotent: marks completion via "envoyMigrated" world setting.
+  // Safe whether or not envoy is still installed.
+  setTimeout(() => {
+    migrateFromEnvoy().catch(err =>
+      console.warn(`${MODULE_ID} | Envoy migration failed:`, err)
+    );
+  }, 3000);
 
   // ── Periodic auto-backup (every 30 minutes while Foundry is running) ──
   if (aceMemory) {
