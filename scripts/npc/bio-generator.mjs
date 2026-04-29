@@ -68,6 +68,29 @@ let _processing = false;
 const _pendingActorIds = new Set();  // Dedup linked actors in queue/in-flight
 
 /**
+ * Run item flavor + loot generation only — bypasses the bio paragraph and
+ * faction popup. Used when the master "Always Check Items & Loot on Token
+ * Drop" setting is ON but bio generation is disabled (autoGenerateBio off,
+ * or the per-drop dialog picked "Faction Only" / similar).
+ *
+ * Existing creature-type rules in the loot pipeline still apply — beasts /
+ * oozes / plants / mindless creatures are filtered out as usual.
+ *
+ * @param {TokenDocument} tokenDocument
+ */
+export async function runItemAndLootOnly(tokenDocument) {
+    if (!tokenDocument?.actor) return;
+    try {
+        await _generateItemBios(tokenDocument);
+        await _generateLoot(tokenDocument);
+        await _generateRealLoot(tokenDocument);
+        _playShimmer(tokenDocument);
+    } catch (err) {
+        console.warn(`${TAG} | Items + loot only generation failed for ${tokenDocument.actor.name}:`, err);
+    }
+}
+
+/**
  * Queue a token for biography generation.
  * Called from the createToken hook in main.js.
  * @param {TokenDocument} tokenDocument
@@ -1076,9 +1099,20 @@ async function _generateBio(tokenDocument) {
         }
     }
 
-    // If faction-only, we're done — no bio, no social profile, no items
+    // If faction-only, skip bio + social profile. But the master toggle says
+    // items + loot still run regardless of the bio decision, so honor it here.
     if (tier === "faction-only") {
         console.log(`${TAG} | Tier is faction-only — skipping bio for ${actor.name}`);
+        let alwaysItemsLoot = true;
+        try { alwaysItemsLoot = game.settings.get(MODULE_ID, "alwaysRunItemAndLoot") !== false; }
+        catch (_) {}
+        if (alwaysItemsLoot) {
+            _generateItemBios(tokenDocument)
+                .then(() => _generateLoot(tokenDocument))
+                .then(() => _generateRealLoot(tokenDocument))
+                .then(() => _playShimmer(tokenDocument))
+                .catch(err => console.warn(`${TAG} | Items + loot (faction-only path) failed:`, err));
+        }
         return;
     }
 

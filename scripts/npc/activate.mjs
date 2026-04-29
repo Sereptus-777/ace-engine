@@ -92,17 +92,36 @@ function _registerHooks() {
             setTimeout(() => onTokenCreated(tokenDocument), 50);
         }).catch(err => console.error(`${TAG} | Voice Engine load failed:`, err));
 
-        // Bio generation (gated on autoGenerateBio + tokenDropAI tier)
+        // Read the three relevant settings up-front
+        let bioEnabled = true;
+        let alwaysItemsLoot = true;
+        let tier = "full";
         try {
-            if (!game.settings.get(MODULE_ID, "autoGenerateBio")) return;
-            const tier = game.settings.get(MODULE_ID, "tokenDropAI") ?? "full";
-            if (tier === "off") return;
-        } catch (_) { return; }
+            bioEnabled = game.settings.get(MODULE_ID, "autoGenerateBio") !== false;
+            alwaysItemsLoot = game.settings.get(MODULE_ID, "alwaysRunItemAndLoot") !== false;
+            tier = game.settings.get(MODULE_ID, "tokenDropAI") ?? "full";
+        } catch (_) { /* defaults */ }
 
-        import("./bio-generator.mjs").then(({ queueBioGeneration }) => {
-            tokenDocument._aceManualDrop = true;
-            setTimeout(() => queueBioGeneration(tokenDocument), 100);
-        }).catch(err => console.error(`${TAG} | Bio-generator load failed:`, err));
+        // tier = "off" is the explicit "leave this token alone" — vanilla drop.
+        // Honors per-drop popup choice too, since that override sets the same
+        // setting via the Smart Token Drop dialog.
+        if (tier === "off") return;
+
+        if (bioEnabled) {
+            // Normal path — full bio + items + loot pipeline
+            import("./bio-generator.mjs").then(({ queueBioGeneration }) => {
+                tokenDocument._aceManualDrop = true;
+                setTimeout(() => queueBioGeneration(tokenDocument), 100);
+            }).catch(err => console.error(`${TAG} | Bio-generator load failed:`, err));
+        } else if (alwaysItemsLoot) {
+            // Bio is off globally but master toggle says items + loot should
+            // still check every NPC. Skip the bio paragraph + faction popup,
+            // run only the item flavor + loot generation.
+            import("./bio-generator.mjs").then(({ runItemAndLootOnly }) => {
+                setTimeout(() => runItemAndLootOnly(tokenDocument), 100);
+            }).catch(err => console.error(`${TAG} | Items+loot only load failed:`, err));
+        }
+        // else: bio off + master toggle off = legacy quiet behavior, nothing runs
     });
 
     // ── Scene scan for missing voices/bios ──────────────────────────────

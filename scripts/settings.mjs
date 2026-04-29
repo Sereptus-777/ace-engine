@@ -635,6 +635,13 @@ export class AceSettings {
       default: "full",
     });
 
+    s("alwaysRunItemAndLoot", {
+      name: "Always Check Items & Loot on Token Drop",
+      hint: "When ON, every dropped NPC gets item flavor text and loot generation regardless of whether you generated a bio. Pick 'Off' on the drop popup (or set Token Drop AI Level to 'Off') to skip everything for a specific NPC. When OFF, items + loot only run when the bio runs (legacy behavior — quieter worlds, less to interact with). Existing creature rules still apply: beasts/oozes/plants/mindless creatures don't carry items regardless.",
+      type: Boolean,
+      default: true,
+    });
+
     s("npcKnowledgeBudget", {
       name: "NPC Knowledge Budget (Base)",
       hint: "Base character budget for world knowledge injected into NPC conversation prompts. The budget for an average INT 10 commoner. Higher = NPCs know more about the world but responses may be slower.",
