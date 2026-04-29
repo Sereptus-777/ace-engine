@@ -587,6 +587,13 @@ export class AceSettings {
     // Living World Faction System. Code is registered but dormant until
     // the NPC chat subsystem is wired into engine init/ready hooks.
 
+    s("npcGifFolder", {
+      name: "NPC Conversation GIF Folder",
+      hint: "Foundry-data-relative path to a folder containing animated portraits (.webp) for NPCs. Files matching the token name play first ('Gorzak Soulgnawer.webp'), then the actor name ('Gorzak.webp'). Plays only while the NPC speaks dialogue; falls back to the actor portrait or token image when silent. Recipe: 512×512, 8-10 fps, 2-4 sec loop, q75-80, target <500KB per file.",
+      type: String,
+      default: "NPCs/gifs/",
+    });
+
     s("npcChatEnabled", {
       name: "Enable NPC Chat (FaceTime-style conversations)",
       hint: "Master toggle for the NPC chat subsystem (bio generation, conversation UI, voice, faction memory). When OFF, none of the NPC chat hooks fire even if engine is enabled.",

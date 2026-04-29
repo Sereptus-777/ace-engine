@@ -474,7 +474,15 @@ class TTSEngine {
                         }
 
                         if (dialogueText) {
+                            // Fire dialogue-start hook so listeners (e.g. ConversationApp's
+                            // animated WebP portrait) can sync to the spoken segment only,
+                            // not the narrator-voiced *emote* segments.
+                            try { Hooks.callAll("ace-engine.npcDialogueStart", { actorName }); } catch (_) {}
+
                             const r = await this.speak(dialogueText, npcVoiceId, npcVoiceSettings, voicePitch);
+
+                            try { Hooks.callAll("ace-engine.npcDialogueEnd", { actorName }); } catch (_) {}
+
                             if (r === "invalid") return "invalid";
                             if (r !== "ok" && r !== "empty") {
                                 console.warn(`TTS | Dialogue segment failed (${r}) — skipping.`);
@@ -525,6 +533,9 @@ class TTSEngine {
             }
         } finally {
             this._speakLock = false;
+            // Safety: ensure dialogueEnd fires even if TTS was interrupted (stop button,
+            // segment error, etc.) so the animated portrait doesn't get stuck "speaking".
+            try { Hooks.callAll("ace-engine.npcDialogueEnd", { actorName }); } catch (_) {}
         }
     }
 }

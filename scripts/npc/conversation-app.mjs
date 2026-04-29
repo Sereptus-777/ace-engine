@@ -126,7 +126,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     static DEFAULT_OPTIONS = {
         id:     "ace-engine-app",
         window: { title: "ACE: Engine", resizable: true, minimizable: true },
-        position: { width: 400, height: 600 },
+        position: { width: 600, height: 850 },
         classes:  [MODULE_ID],
     };
 
@@ -241,6 +241,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         this._micBtn            = el.querySelector("#ace-engine-voice");
         this._thinkingIndicator = el.querySelector("#ace-engine-thinking");
         this._nameLabel         = el.querySelector("#ace-engine-npc-name");
+        this._portraitImg       = el.querySelector("#ace-engine-portrait");
 
         this._thinkingIndicator.style.display = "none";
 
@@ -256,6 +257,12 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 this._inputField.style.height = "auto";
                 this._inputField.style.height = Math.min(this._inputField.scrollHeight, 100) + "px";
             });
+
+            // ── Animated portrait: probe for a token-name / actor-name .webp ──
+            // Plays only while the NPC speaks dialogue. Falls through silently
+            // when no file is present (current static portrait stays).
+            this._initSpeakingPortrait();
+
             this._listenersAttached = true;
         }
 
@@ -866,6 +873,82 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
     async _saveMemorySafe(history) { return this._setFlagSafe("memoryLog", history); }
 
+    // ── Speaking-synced animated portrait ──────────────────────────────────
+    // Probes the configured GIF folder for {token.name}.webp, then
+    // {actor.name}.webp. If found, listens for the npcDialogueStart/End hooks
+    // and swaps the portrait <img> src between the static fallback and the
+    // animated WebP. Plays only during dialogue segments — not narrator-voiced
+    // *emotes* or silent listening.
+
+    async _initSpeakingPortrait() {
+        if (!this._portraitImg) return;
+
+        // Cache the static portrait src so we can swap back on dialogue end
+        this._staticPortraitSrc = this._portraitImg.src;
+
+        const folderRaw = (() => {
+            try { return game.settings.get(MODULE_ID, "npcGifFolder"); }
+            catch (_) { return "NPCs/gifs/"; }
+        })();
+        const folder = (folderRaw || "NPCs/gifs/").replace(/^\/+|\/+$/g, "");
+
+        const tokenName = this.tokenDocument?.name || "";
+        const actorName = this.actor?.name || "";
+
+        // Lookup priority: token name → actor name. Each candidate is encoded
+        // for spaces / special chars in the path.
+        const candidates = [];
+        const seen = new Set();
+        for (const name of [tokenName, actorName]) {
+            if (!name || seen.has(name)) continue;
+            seen.add(name);
+            candidates.push(`${folder}/${encodeURIComponent(name)}.webp`);
+        }
+
+        for (const path of candidates) {
+            // eslint-disable-next-line no-await-in-loop
+            if (await this._fileExists(path)) {
+                this._speakingGifSrc = path;
+                console.log(`ACE: Engine | Conversation | Speaking GIF found: ${decodeURIComponent(path)}`);
+                break;
+            }
+        }
+
+        if (!this._speakingGifSrc) {
+            console.log(`ACE: Engine | Conversation | No speaking GIF for ${tokenName || actorName} (looked in ${folder}/)`);
+        }
+
+        // Always wire hooks — even when no GIF is found — so the system stays
+        // ready if the user drops a file in mid-session and reopens the chat.
+        this._dialogueStartHookId = Hooks.on("ace-engine.npcDialogueStart", (data) => this._onDialogueStart(data));
+        this._dialogueEndHookId   = Hooks.on("ace-engine.npcDialogueEnd",   (data) => this._onDialogueEnd(data));
+    }
+
+    /** Promise-based file probe via Image preload (works for any browser-loadable asset). */
+    _fileExists(path) {
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload  = () => resolve(true);
+            img.onerror = () => resolve(false);
+            img.src = path;
+        });
+    }
+
+    _onDialogueStart({ actorName } = {}) {
+        if (!this._speakingGifSrc || !this._portraitImg) return;
+        // Match against this conversation's actor — TTS engine fires the hook
+        // with the actor name passed in by speakResponse(). Skip events from
+        // other conversations.
+        if (actorName && actorName !== this.actor?.name) return;
+        this._portraitImg.src = this._speakingGifSrc;
+    }
+
+    _onDialogueEnd({ actorName } = {}) {
+        if (!this._portraitImg || !this._staticPortraitSrc) return;
+        if (actorName && actorName !== this.actor?.name) return;
+        this._portraitImg.src = this._staticPortraitSrc;
+    }
+
     /**
      * On the first conversation with a generic NPC (unlinked token), parse the
      * character's name from their bio and rename the canvas token so players
@@ -980,6 +1063,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (this._micSendTimer) { clearTimeout(this._micSendTimer); this._micSendTimer = null; }
         if (this._recognition) { try { this._recognition.stop(); } catch(_) {} this._recognition = null; }
         if (this._sceneChangeHookId != null) { Hooks.off("canvasReady", this._sceneChangeHookId); this._sceneChangeHookId = null; }
+        if (this._dialogueStartHookId != null) { Hooks.off("ace-engine.npcDialogueStart", this._dialogueStartHookId); this._dialogueStartHookId = null; }
+        if (this._dialogueEndHookId != null)   { Hooks.off("ace-engine.npcDialogueEnd",   this._dialogueEndHookId);   this._dialogueEndHookId   = null; }
         this._lockPlayerToken(false);
         ttsEngine.stop();
 
