@@ -2,7 +2,19 @@
 // ACE — AI Campaign Engine — Settings Registration
 // ============================================================
 
-import { MODULE_ID } from "./ace-engine.mjs";
+import { MODULE_ID }      from "./ace-engine.mjs";
+import { AceConfigPanel } from "./config-panel.mjs";
+
+// ── First-page settings visibility ──────────────────────────
+// Settings whose keys are in this set stay visible on Foundry's standard
+// Configure Settings page. Everything else lives in the popup config panel.
+// To add or remove a setting from the main page: edit this set and the
+// AceConfigPanel TABS map.
+const VISIBLE_IN_MAIN_CONFIG = new Set([
+    "moduleEnabled",   // master on/off — quick reach
+    "aiProvider",      // need to set provider before key
+    "apiKey",          // primary AI key — masked as password
+]);
 
 const DEFAULT_SYSTEM_PROMPT = `You are ACE, an expert AI Game Master assistant for tabletop RPGs running in Foundry VTT.
 
@@ -49,12 +61,28 @@ Format responses with light markdown for readability. Use bold for key terms, na
 
 export class AceSettings {
   static register() {
+    // Default config:false — only the keys in VISIBLE_IN_MAIN_CONFIG show up on
+    // Foundry's standard Configure Settings page. Settings can still override
+    // this via explicit `config: ...` in their own data block (used for
+    // hidden internal stores like factionRegistry, voiceLibraryCache, etc.).
     const s = (key, data) =>
       game.settings.register(MODULE_ID, key, {
         scope: "world",
-        config: true,
+        config: VISIBLE_IN_MAIN_CONFIG.has(key),
         ...data,
       });
+
+    // ── "Open Configuration" menu button ──────────────────────────
+    // Sits at the top of the module's settings section, opens the popup
+    // config panel where every other setting lives.
+    game.settings.registerMenu(MODULE_ID, "openConfigPanel", {
+      name:       "ACE Engine — Configuration Panel",
+      label:      "Open Configuration",
+      hint:       "Open the full configuration panel — AI provider, voice, NPC chat, combat, memory, documents, and more.",
+      icon:       "fas fa-sliders-h",
+      type:       AceConfigPanel,
+      restricted: true,
+    });
 
     // ── Module Master Switch ────────────────────────────────
     s("moduleEnabled", {

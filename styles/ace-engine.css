@@ -6488,6 +6488,261 @@ li.ace-toolbar-btn:hover {
 
 /* Social Profile styles moved to ace-envoy */
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONFIGURATION PANEL — functional baseline (gunmetal styling layered later)
+   File: scripts/config-panel.mjs + templates/config-panel.html
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.ace-config-panel.ace-engine .window-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.ace-config-form {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--ace-bg-primary, #0a0a0c);
+  color: var(--ace-text-primary, #e8e6e0);
+}
+
+/* ── Tab strip ─────────────────────────────────────────────────────── */
+
+.ace-cfg-tabs {
+  display: flex;
+  flex-shrink: 0;
+  background: var(--ace-bg-secondary, #111114);
+  border-bottom: 1px solid var(--ace-border, #2a2a2e);
+  padding: 4px 6px 0 6px;
+  gap: 2px;
+  overflow-x: auto;
+}
+
+.ace-cfg-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: var(--ace-text-secondary, #9a9890);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
+}
+
+.ace-cfg-tab:hover {
+  color: var(--ace-accent, #d4af37);
+  background: rgba(212, 175, 55, 0.08);
+}
+
+.ace-cfg-tab.active {
+  color: var(--ace-accent, #d4af37);
+  background: var(--ace-bg-primary, #0a0a0c);
+  border-color: var(--ace-border-light, #3a3a40);
+  border-bottom-color: var(--ace-bg-primary, #0a0a0c);
+  position: relative;
+  top: 1px;
+}
+
+.ace-cfg-tab i {
+  font-size: 14px;
+}
+
+/* ── Pane (the visible tab body) ───────────────────────────────────── */
+
+.ace-cfg-pane {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px 16px 22px;
+}
+
+.ace-cfg-pane-header {
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ace-border, #2a2a2e);
+}
+
+.ace-cfg-pane-header h2 {
+  margin: 0 0 6px 0;
+  color: var(--ace-accent, #d4af37);
+  font-family: 'Cinzel Decorative', 'Cinzel', serif;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ace-cfg-pane-header h2 i {
+  font-size: 18px;
+}
+
+.ace-cfg-intro {
+  margin: 0;
+  color: var(--ace-text-secondary, #9a9890);
+  font-size: 13px;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+/* ── Settings rows ─────────────────────────────────────────────────── */
+
+.ace-cfg-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ace-cfg-row {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  grid-template-areas:
+    "label input"
+    "hint  hint";
+  gap: 6px 14px;
+  padding: 10px 12px;
+  background: var(--ace-bg-secondary, #111114);
+  border: 1px solid var(--ace-border, #2a2a2e);
+  border-radius: 4px;
+  align-items: center;
+}
+
+.ace-cfg-row label {
+  grid-area: label;
+  color: var(--ace-text-primary, #e8e6e0);
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.ace-cfg-input {
+  grid-area: input;
+}
+
+.ace-cfg-hint {
+  grid-area: hint;
+  margin: 4px 0 0 0;
+  color: var(--ace-text-muted, #777);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* ── Inputs ────────────────────────────────────────────────────────── */
+
+.ace-cfg-input input[type="text"],
+.ace-cfg-input input[type="password"],
+.ace-cfg-input input[type="number"],
+.ace-cfg-input select,
+.ace-cfg-input textarea {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--ace-bg-input, #08080a);
+  border: 1px solid var(--ace-border-light, #3a3a40);
+  border-radius: 3px;
+  color: var(--ace-text-primary, #e8e6e0);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.ace-cfg-input input:focus,
+.ace-cfg-input select:focus,
+.ace-cfg-input textarea:focus {
+  outline: none;
+  border-color: var(--ace-accent, #d4af37);
+  box-shadow: 0 0 0 1px var(--ace-accent-glow, rgba(212, 175, 55, 0.3));
+}
+
+.ace-cfg-input input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--ace-accent, #d4af37);
+  cursor: pointer;
+}
+
+.ace-cfg-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ace-cfg-range input[type="range"] {
+  flex: 1;
+  accent-color: var(--ace-accent, #d4af37);
+}
+
+.ace-cfg-range input[type="number"] {
+  width: 90px;
+  flex-shrink: 0;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────── */
+
+.ace-cfg-footer {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 12px 18px;
+  background: var(--ace-bg-secondary, #111114);
+  border-top: 1px solid var(--ace-border, #2a2a2e);
+  gap: 8px;
+}
+
+.ace-cfg-footer-spacer {
+  flex: 1;
+}
+
+.ace-cfg-btn {
+  padding: 8px 18px;
+  background: var(--ace-bg-tertiary, #1a1a1e);
+  border: 1px solid var(--ace-border-light, #3a3a40);
+  border-radius: 3px;
+  color: var(--ace-text-primary, #e8e6e0);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ace-cfg-btn:hover {
+  border-color: var(--ace-accent, #d4af37);
+  color: var(--ace-accent, #d4af37);
+}
+
+.ace-cfg-btn-save {
+  background: rgba(212, 175, 55, 0.12);
+  border-color: var(--ace-accent, #d4af37);
+  color: var(--ace-accent, #d4af37);
+}
+
+.ace-cfg-btn-save:hover {
+  background: rgba(212, 175, 55, 0.22);
+}
+
+.ace-cfg-btn-reset {
+  color: var(--ace-text-muted, #777);
+}
+
+.ace-cfg-btn-reset:hover {
+  color: var(--ace-warning, #ffab00);
+  border-color: var(--ace-warning, #ffab00);
+}
+
 /* ─── INITIATIVE REORDER ARROWS (moved from ACE: Envoy, Phase 1A) ─────── */
 
 .ace-engine-init-arrows {
