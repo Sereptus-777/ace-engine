@@ -1113,14 +1113,19 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                     source:     "player",
                     playerName: closingPlayerName
                 });
-                const { unlockNPC, isLockedByMe, openConversations } = window._aceEnvoy ?? {};
-                if (unlockNPC && isLockedByMe?.(this.actor.id)) {
-                    setTimeout(() => unlockNPC(this.actor.id), 3000);
+                // Release the lock if it's mine — give a short grace period so the
+                // GM can see the close happen before the slot reopens.
+                const myLock = npcLocks.get(this.actor.id);
+                if (myLock?.userId === game.user.id) {
+                    setTimeout(() => {
+                        if (npcLocks.get(this.actor.id)?.userId === game.user.id) {
+                            npcLocks.delete(this.actor.id);
+                        }
+                    }, 3000);
                 }
-                openConversations?.delete(this._convoKey);
+                openConversations.delete(this._convoKey);
             } else if (game.user.isGM) {
-                const { openConversations } = window._aceEnvoy ?? {};
-                openConversations?.delete(this._convoKey);
+                openConversations.delete(this._convoKey);
             } else {
                 game.socket.emit(`module.${MODULE_ID}`, {
                     action: "stopAudio", targetUserId: game.user.id
@@ -1128,9 +1133,13 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             }
         }
 
-        // Safety net: always clean up stale openConversations reference
-        const { openConversations: _oc } = window._aceEnvoy ?? {};
-        if (_oc?.get(this._convoKey) === this) _oc.delete(this._convoKey);
+        // Safety net: always clean up stale openConversations reference, even if
+        // _gmForced or some other path bailed early. Without this, reopening the
+        // chat with the same NPC silently fails because the Map still references
+        // a closed app.
+        if (openConversations.get(this._convoKey) === this) {
+            openConversations.delete(this._convoKey);
+        }
 
         return super.close(options);
     }
