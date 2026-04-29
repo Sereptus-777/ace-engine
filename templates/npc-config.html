@@ -1,0 +1,134 @@
+<form class="ace-npc-config">
+
+    {{!-- ═══ SUMMARY CARD — Compact, auto-populated ═══ --}}
+    <div class="ace-npc-summary">
+
+        {{!-- Accent badge + Gender toggle --}}
+        <div class="ace-npc-badges">
+            {{#if voiceAccent}}
+            <span class="ace-badge ace-badge-accent"><i class="fas fa-globe"></i> {{voiceAccent}}</span>
+            {{/if}}
+            <div class="ace-gender-toggle" id="ace-gender-toggle">
+                <button type="button" class="ace-gender-btn {{#if isMale}}active{{/if}}" data-gender="male" title="Male voice"><i class="fas fa-mars"></i></button>
+                <button type="button" class="ace-gender-btn {{#if isFemale}}active{{/if}}" data-gender="female" title="Female voice"><i class="fas fa-venus"></i></button>
+                <button type="button" class="ace-gender-btn {{#if isNone}}active{{/if}}" data-gender="" title="No preference"><i class="fas fa-genderless"></i></button>
+            </div>
+            {{#if chatDisabled}}
+            <span class="ace-badge ace-badge-disabled"><i class="fas fa-ban"></i> Chat Off</span>
+            {{/if}}
+        </div>
+
+        {{!-- Personality display --}}
+        {{#if personality}}
+        <div class="ace-npc-personality-display">
+            <div class="ace-npc-field-label"><i class="fas fa-theater-masks"></i> Personality</div>
+            <div class="ace-npc-field-value">{{personality}}</div>
+        </div>
+        {{else}}
+        <div class="ace-npc-personality-display ace-npc-empty">
+            <div class="ace-npc-field-label"><i class="fas fa-theater-masks"></i> Personality</div>
+            <div class="ace-npc-field-value ace-muted">Auto-generated when token is dropped on scene</div>
+        </div>
+        {{/if}}
+
+        {{!-- Voice ID with compact test --}}
+        <div class="ace-npc-voice-row">
+            <div class="ace-npc-field-label"><i class="fas fa-microphone"></i> Voice</div>
+            <div class="ace-npc-voice-controls">
+                <code class="ace-npc-voice-id" title="{{voiceId}}">{{#if voiceId}}{{voiceId}}{{else}}<span class="ace-muted">Not assigned</span>{{/if}}</code>
+                <button type="button" id="ai-test-voice" class="ace-btn ace-btn-sm" title="Test voice"><i class="fas fa-play"></i></button>
+                <button type="button" id="ai-stop-voice" class="ace-btn ace-btn-sm" title="Stop"><i class="fas fa-stop"></i></button>
+            </div>
+        </div>
+    </div>
+
+    {{!-- ═══ QUICK NOTE — Fast GM knowledge injection ═══ --}}
+    <div class="ace-npc-quick-note">
+        <div class="ace-npc-field-label"><i class="fas fa-sticky-note"></i> GM Notes <span class="ace-muted" style="font-weight:normal; font-size:0.85em;">— injected as NPC knowledge</span></div>
+        <div class="ace-npc-note-input-row">
+            <input type="text" id="ace-note-input" placeholder="Add a note... (e.g. &quot;Knows about the hidden tomb under the church&quot;)" />
+            <button type="button" id="ace-add-note" class="ace-btn ace-btn-gold"><i class="fas fa-plus"></i> Add</button>
+        </div>
+        <div id="ace-notes-list" class="ace-npc-notes-list">
+            {{!-- Notes are rendered by JS --}}
+        </div>
+    </div>
+
+    {{!-- ═══ ADVANCED — Collapsible deep customization ═══ --}}
+    <details class="ace-npc-advanced">
+        <summary class="ace-npc-advanced-toggle"><i class="fas fa-sliders-h"></i> Customize NPC</summary>
+
+        <div class="ace-npc-advanced-content">
+
+            {{!-- Personality (editable) --}}
+            <div class="form-group">
+                <label><i class="fas fa-theater-masks"></i> Personality</label>
+                <textarea name="personality" rows="3">{{personality}}</textarea>
+                <p class="hint">How this NPC speaks, their mannerisms, verbal tics, and demeanor.</p>
+            </div>
+
+            {{!-- Secret Lore --}}
+            <div class="form-group">
+                <label><i class="fas fa-key"></i> Secret Lore / Knowledge</label>
+                <textarea name="secretLore" rows="3">{{secretLore}}</textarea>
+                <p class="hint">Hidden knowledge, quest hooks, betrayal triggers. Players never see this — only the AI reads it.</p>
+            </div>
+
+            {{!-- Voice Override --}}
+            <div class="form-group">
+                <label><i class="fas fa-microphone-alt"></i> Voice ID Override</label>
+                <div class="ace-npc-voice-override-row">
+                    <input type="text" name="voiceId" id="ai-voice-id-input" value="{{voiceId}}" placeholder="Auto-assigned by Voice Engine" />
+                </div>
+                <input type="text" id="ai-test-text" placeholder="Test phrase... (leave blank for default)" />
+                <p class="hint">Override the auto-assigned voice. Paste an ElevenLabs Voice ID, or clear to let the Voice Engine pick one.</p>
+            </div>
+
+            {{!-- Accent Override — options built by JS to handle selected state --}}
+            <div class="form-group">
+                <label><i class="fas fa-globe-americas"></i> Accent Override</label>
+                <select name="accentOverride" id="ai-accent-override">
+                    {{!-- Populated by _onRender --}}
+                </select>
+                <p class="hint">Override the Voice Engine's auto-detected accent. Triggers a new voice assignment on save.</p>
+            </div>
+
+            {{!-- Conversation Range --}}
+            <div class="form-group">
+                <label><i class="fas fa-ruler"></i> Conversation Range (feet)</label>
+                <input type="number" name="conversationRange" value="{{conversationRange}}" placeholder="30" min="5" max="300" />
+                <p class="hint">Max distance to see chat bubble. Pink hint at double range.</p>
+            </div>
+
+            {{!-- Chat Disabled --}}
+            <div class="form-group">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                    <input type="checkbox" name="chatDisabled" {{#if chatDisabled}}checked{{/if}} />
+                    Disable player conversations
+                </label>
+                <p class="hint">Players cannot initiate conversation with this NPC.</p>
+            </div>
+
+            {{!-- Memory --}}
+            <div class="form-group">
+                <label><i class="fas fa-brain"></i> Memory Log</label>
+                <textarea rows="4" readonly style="opacity:0.6;">{{memoryText}}</textarea>
+            </div>
+
+            <div class="form-group" style="background:rgba(200,40,40,0.08); border:1px solid rgba(200,60,60,0.2); border-radius:4px; padding:8px 12px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; color:#cf6060; font-weight:600;">
+                    <input type="checkbox" name="clearMemory" />
+                    <i class="fas fa-eraser"></i> Clean Slate
+                </label>
+                <p class="hint" style="color:#a08080;">If checked, this NPC will forget every conversation it has ever had. Complete amnesia — no memory of any player interactions. Cannot be undone.</p>
+            </div>
+
+        </div>
+    </details>
+
+    {{!-- ═══ SAVE BUTTON ═══ --}}
+    <div class="ace-npc-footer">
+        <button type="submit" class="ace-btn ace-btn-gold"><i class="fas fa-save"></i> Save</button>
+    </div>
+
+</form>

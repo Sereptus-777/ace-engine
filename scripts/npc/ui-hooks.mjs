@@ -4,17 +4,13 @@
 // npcChatEnabled gate is true.
 //
 // Moved from ace-envoy/src/main.js (renderTokenHUD, renderSceneConfig, the
-// canvas overlay-hiding hooks, and party-face refresh) as part of the
-// Envoy → Engine merger.
-//
-// DEFERRED to a future commit (~800 lines, AIConfigDialog class):
-//   - GM "AI Setup" icon (the robot button next to chat)
-//   - renderActorSheetV2 hook (AI Setup tab on NPC sheets)
-//   - canvasReady right-click handler (forces HUD on NPC tokens for players)
-//   - canvasReady orphaned-conversation cleanup
+// canvas overlay-hiding hooks, party-face refresh, AI Setup tab on NPC
+// sheets, player right-click HUD trigger, and orphaned conversation
+// cleanup) as part of the Envoy → Engine merger.
 
 import { onRenderSceneConfig } from "./voice-engine.mjs";
 import { ConversationApp }     from "./conversation-app.mjs";
+import { AIConfigDialog }      from "./npc-config-dialog.mjs";
 import { npcChatState }        from "./activate.mjs";
 
 const MODULE_ID = "ace-engine";
@@ -379,7 +375,7 @@ export function registerUiHooks() {
                     <div class="ai-token-controls"
                          style="position:absolute; top:-55px; left:50%; transform:translateX(-50%);
                                 pointer-events:all; z-index:70; text-align:center;">
-                        <img src="modules/ace-envoy/assets/chat-icon.png"
+                        <img src="modules/ace-engine/assets/chat-icon.png"
                              style="width:36px; height:36px; opacity:0.35; filter:grayscale(1) drop-shadow(0 0 3px black);
                                     cursor:default;" title="${actor.name} — get closer to talk" />
                     </div>`;
@@ -404,7 +400,7 @@ export function registerUiHooks() {
                 <div class="ai-token-controls"
                      style="position:absolute; top:-55px; left:50%; transform:translateX(-50%);
                             pointer-events:all; z-index:70; text-align:center;">
-                    <img src="modules/ace-envoy/assets/chat-icon.png"
+                    <img src="modules/ace-engine/assets/chat-icon.png"
                          style="width:36px; height:36px; opacity:0.3; filter:sepia(1) saturate(0.5) brightness(1.2) drop-shadow(0 0 3px black);
                                 cursor:default;" title="${faceName} is the party spokesperson" />
                 </div>`;
@@ -420,7 +416,7 @@ export function registerUiHooks() {
                 <div class="ai-token-controls"
                      style="position:absolute; top:-55px; left:50%; transform:translateX(-50%);
                             pointer-events:all; z-index:70; text-align:center;">
-                    <img src="modules/ace-envoy/assets/chat-icon.png"
+                    <img src="modules/ace-engine/assets/chat-icon.png"
                          style="width:36px; height:36px; opacity:0.3; filter:sepia(1) saturate(3) hue-rotate(-20deg) drop-shadow(0 0 3px black);
                                 cursor:default;" title="Someone is already in conversation" />
                 </div>`;
@@ -435,7 +431,7 @@ export function registerUiHooks() {
                  style="position:absolute; top:-55px; left:50%; transform:translateX(-50%);
                         pointer-events:all; z-index:70; text-align:center;">
                 <img class="ace-engine-trigger ace-engine-player-chat"
-                     src="modules/ace-envoy/assets/chat-icon.png"
+                     src="modules/ace-engine/assets/chat-icon.png"
                      title="Talk to ${actor.name}"
                      style="width:46px; height:46px; cursor:pointer;
                             filter:drop-shadow(0 0 6px rgba(201,168,76,0.8)) drop-shadow(0 0 3px black);
@@ -471,15 +467,19 @@ export function registerUiHooks() {
             return;
         }
 
-        // ── GM view: chat icon (AI Setup icon deferred — needs AIConfigDialog port)
+        // ── GM view: chat + AI Setup icons ─────────────────────────────
         jHtml.find(".ai-token-controls").remove();
         const controlsHtml = `
         <div class="ai-token-controls"
              style="position:absolute; top:-65px; left:50%; transform:translateX(-50%);
                     display:flex; gap:16px; pointer-events:all; z-index:70; width:max-content;">
             <img class="ace-engine-trigger"
-                 src="modules/ace-envoy/assets/chat-icon.png"
+                 src="modules/${MODULE_ID}/assets/chat-icon.png"
                  title="Start NPC Chat"
+                 style="width:46px; height:46px; cursor:pointer; filter:drop-shadow(0 0 6px black);" />
+            <img class="setup-trigger"
+                 src="modules/${MODULE_ID}/assets/robot-icon.png"
+                 title="AI Setup"
                  style="width:46px; height:46px; cursor:pointer; filter:drop-shadow(0 0 6px black);" />
         </div>`;
 
@@ -506,6 +506,373 @@ export function registerUiHooks() {
             convoApp.render(true);
         });
 
+        controls.find(".setup-trigger").on("click", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            new AIConfigDialog(token.actor).render(true);
+        });
+
         jHtml.append(controls);
+    });
+
+    // ── Player right-click on NPC tokens → force Token HUD ──────────────
+    // By default Foundry may not show Token HUD for unowned NPC tokens.
+    // We intercept right-clicks on NPC tokens so players can access the chat icon.
+    Hooks.on("canvasReady", () => {
+        if (game.user.isGM) return;
+
+        const board = document.getElementById("board");
+        if (!board || board._aceEngineRightClick) return;
+        board._aceEngineRightClick = true;
+
+        board.addEventListener("contextmenu", (ev) => {
+            const point = canvas.app.renderer.events.pointer?.getLocalPosition(canvas.stage);
+            if (!point) return;
+
+            // Foundry's hover state knows which token is visually on top
+            let clickedToken = canvas.tokens?.placeables?.find(t => t.hover);
+
+            if (!clickedToken) {
+                // Manual fallback: sort by Pixi children order (last = on top)
+                const sorted = [...(canvas.tokens?.placeables ?? [])].sort((a, b) => {
+                    const ia = a.parent?.children?.indexOf(a) ?? 0;
+                    const ib = b.parent?.children?.indexOf(b) ?? 0;
+                    return ib - ia;
+                });
+                for (const t of sorted) {
+                    const { x, y, width, height } = t.document;
+                    const tw = width  * canvas.grid.size;
+                    const th = height * canvas.grid.size;
+                    if (point.x >= x && point.x <= x + tw && point.y >= y && point.y <= y + th) {
+                        clickedToken = t;
+                        break;
+                    }
+                }
+            }
+            if (!clickedToken) return;
+
+            const actor = clickedToken.document?.actor ?? clickedToken.actor;
+            if (!actor || actor.type !== "npc") return;
+
+            // Skip if GM disabled chat or creature is mindless
+            if (_getFlag(actor, MODULE_ID, "chatDisabled")) return;
+            if (_isMindless(actor)) return;
+
+            ev.preventDefault();
+            ev.stopPropagation();
+            canvas.hud.token.bind(clickedToken);
+        }, true);
+    });
+
+    // ── Orphaned spectator window cleanup on scene change ───────────────
+    Hooks.on("canvasReady", async () => {
+        for (const [convoKey, app] of openConversations.entries()) {
+            const isOwner = app._isOwner;
+            if (!isOwner) {
+                const tokenExists = canvas.tokens?.placeables?.some(t => {
+                    const a = t.document?.actor ?? t.actor;
+                    return a?.id === app.actor?.id;
+                });
+                if (!tokenExists) {
+                    try {
+                        const { ttsEngine } = await import("./tts.mjs");
+                        ttsEngine?.stop();
+                    } catch (_) {}
+                    app._gmForced = true;
+                    app.close().catch(() => {});
+                    openConversations.delete(convoKey);
+                    console.log(`${TAG} | Spectator changed scene — closing orphaned window`);
+                }
+            }
+        }
+    });
+
+    // ── AI Setup tab on NPC actor sheets (V2) ───────────────────────────
+    Hooks.on("renderActorSheetV2", (sheet, html, data) => {
+        if (!game.user.isGM) return;
+        const actor = sheet.actor ?? sheet.object;
+        if (!actor || actor.type !== "npc") return;
+
+        const win = sheet.element instanceof HTMLElement ? sheet.element
+                  : sheet.element?.[0] instanceof HTMLElement ? sheet.element[0]
+                  : null;
+        if (!win) { console.warn(`${TAG} | Could not find sheet window element`); return; }
+
+        const form = (html instanceof HTMLElement) ? html
+                   : html?.[0] instanceof HTMLElement ? html[0]
+                   : win.querySelector("form");
+
+        const wasActive = win.querySelector(".ace-engine-tab-content.active") !== null;
+        win.querySelector(".ace-engine-tab-btn")?.remove();
+        win.querySelector(".ace-engine-tab-content")?.remove();
+
+        const chatDisabled = _getFlag(actor, MODULE_ID, "chatDisabled") || false;
+        const voiceId      = actor.getFlag(MODULE_ID, "voiceId") || actor.flags?.npclink?.voiceId || "";
+
+        const tabNav = win.querySelector("nav.tabs.tabs-right")
+                    ?? win.querySelector(".tabs[data-group='primary']")
+                    ?? win.querySelector("nav.tabs")
+                    ?? win.querySelector(".sheet-tabs");
+
+        const tabBody = win.querySelector(".tab-body")
+                     ?? win.querySelector(".sheet-body")
+                     ?? win.querySelector("[data-group='primary']")?.parentElement
+                     ?? form;
+
+        const tabBtn = document.createElement("a");
+        tabBtn.className   = "item control ace-engine-tab-btn";
+        tabBtn.dataset.tab = "ace-engine";
+        tabBtn.dataset.group = "primary";
+        tabBtn.title       = "ACE: Engine";
+        tabBtn.setAttribute("aria-label", "ACE: Engine");
+        tabBtn.innerHTML   = `<i class="fas fa-robot" style="color:#7fbf9f;"></i>`;
+        tabBtn.style.cssText = "cursor:pointer;";
+
+        const tabContent = document.createElement("div");
+        tabContent.className        = "tab ace-engine-tab-content";
+        tabContent.dataset.tab      = "ace-engine";
+        tabContent.dataset.group    = "primary";
+        tabContent.style.cssText    = `
+            display: none; flex-direction: column; gap: 10px;
+            padding: 12px; overflow-y: auto; height: 100%;
+            background: rgba(0,0,0,0.15); box-sizing: border-box;`;
+
+        tabContent.innerHTML = `
+            <div style="display:flex;align-items:center;gap:8px;
+                        background:${chatDisabled ? "rgba(120,30,30,0.2)" : "rgba(0,80,40,0.2)"};
+                        border:1px solid ${chatDisabled ? "rgba(200,60,60,0.3)" : "rgba(0,150,70,0.3)"};
+                        border-radius:6px;padding:8px 10px;">
+                <input type="checkbox" id="ace-engine-disabled-${actor.id}"
+                       ${chatDisabled ? "checked" : ""}
+                       style="width:16px;height:16px;cursor:pointer;flex-shrink:0;" />
+                <label for="ace-engine-disabled-${actor.id}"
+                       style="cursor:pointer;color:${chatDisabled ? "#cf6060" : "#7fbf9f"};margin:0;
+                              font-weight:bold;font-size:0.9em;user-select:none;">
+                    ${chatDisabled ? "🚫 Chat Disabled — players cannot talk to this NPC" : "💬 Chat Enabled — players can right-click to talk"}
+                </label>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:4px;">
+                <label style="color:#aaa;font-size:0.8em;font-weight:bold;">ELEVENLABS VOICE ID</label>
+                <div style="display:flex;gap:4px;align-items:center;">
+                    <input type="text" id="ace-engine-voice-id-${actor.id}"
+                           value="${voiceId}"
+                           placeholder="Paste Voice ID, or blank for auto-detect"
+                           style="flex:1;background:#1a1a2e;border:1px solid #444;
+                                  border-radius:4px;color:#ccc;padding:4px 8px;font-size:0.85em;" />
+                    <button type="button" id="ace-engine-test-${actor.id}"
+                            style="padding:4px 10px;background:#0056b3;color:#fff;
+                                   border:1px solid #0056b3;border-radius:4px;
+                                   cursor:pointer;white-space:nowrap;font-size:0.85em;">
+                        <i class="fas fa-play"></i> Test
+                    </button>
+                    <button type="button" id="ace-engine-stop-${actor.id}"
+                            style="padding:4px 8px;background:#444;color:#fff;
+                                   border:1px solid #555;border-radius:4px;cursor:pointer;font-size:0.85em;">
+                        <i class="fas fa-stop"></i>
+                    </button>
+                    <button type="button" id="ace-engine-save-voice-${actor.id}"
+                            style="padding:4px 10px;background:#2a6a3a;color:#fff;
+                                   border:1px solid #3a8a4a;border-radius:4px;
+                                   cursor:pointer;white-space:nowrap;font-size:0.85em;">
+                        <i class="fas fa-save"></i> Save
+                    </button>
+                </div>
+                <input type="text" id="ace-engine-phrase-${actor.id}"
+                       placeholder='Test phrase, e.g. "I am ${actor.name}..."'
+                       style="background:#1a1a2e;border:1px solid #444;border-radius:4px;
+                              color:#ccc;padding:4px 8px;font-size:0.85em;" />
+                <p style="color:#666;font-size:0.75em;margin:0;font-style:italic;">
+                    Leave blank for gender auto-detection.
+                    Find voices at elevenlabs.io/voice-library
+                </p>
+            </div>
+
+            <div style="border-top:1px solid #333;padding-top:10px;">
+                <button type="button" id="ace-engine-open-config-${actor.id}"
+                        style="width:100%;padding:6px;background:#1a2a3a;color:#9fc;
+                               border:1px solid #2a4a5a;border-radius:4px;cursor:pointer;
+                               font-size:0.85em;">
+                    <i class="fas fa-robot"></i> Open Full NPC Config (Personality, Lore, Memory…)
+                </button>
+            </div>`;
+
+        // ── Per-actor "Reset ACE Bio" button ─────────────────────────
+        try {
+            const bioSection = win.querySelector("section.ace-engine-bio");
+            if (bioSection) {
+                const header = bioSection.querySelector(".ace-bio-header");
+                if (header && !header.querySelector(".ace-bio-btn-group")) {
+                    const btnGroup = document.createElement("div");
+                    btnGroup.className = "ace-bio-btn-group";
+
+                    const copyBtn = document.createElement("button");
+                    copyBtn.type = "button";
+                    copyBtn.className = "ace-bio-copy";
+                    copyBtn.title = "Copy biography text to clipboard";
+                    copyBtn.innerHTML = `<i class="fas fa-copy"></i> Copy`;
+                    copyBtn.addEventListener("click", async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const paragraphs = bioSection.querySelectorAll("p");
+                        const bioText = Array.from(paragraphs)
+                            .map(p => p.innerText.trim())
+                            .filter(t => t.length > 0)
+                            .join("\n\n");
+                        try {
+                            await navigator.clipboard.writeText(bioText);
+                            copyBtn.innerHTML = `<i class="fas fa-check"></i> Copied`;
+                            setTimeout(() => { copyBtn.innerHTML = `<i class="fas fa-copy"></i> Copy`; }, 1500);
+                        } catch (err) {
+                            console.warn(`${TAG} | clipboard copy failed:`, err);
+                            ui.notifications.warn("Could not copy to clipboard.");
+                        }
+                    });
+                    btnGroup.appendChild(copyBtn);
+
+                    const resetBtn = document.createElement("button");
+                    resetBtn.type = "button";
+                    resetBtn.className = "ace-bio-reset";
+                    resetBtn.title = "Reset ACE Biography — removes generated bio and allows regeneration";
+                    resetBtn.innerHTML = `<i class="fas fa-trash-alt"></i> Reset`;
+                    resetBtn.addEventListener("click", async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const confirmed = await Dialog.confirm({
+                            title: "Reset ACE Biography",
+                            content: `<p>Remove the ACE-generated biography for <strong>${actor.name}</strong>?</p>
+                                      <p style="color:#999;font-size:0.85em;">Original module content will be preserved. The biography will regenerate next time this NPC's token is dropped onto a scene.</p>`,
+                            yes: () => true,
+                            no: () => false,
+                            defaultYes: false,
+                        });
+                        if (!confirmed) return;
+                        const currentBio = actor.system?.details?.biography?.value || "";
+                        const cleanedBio = currentBio
+                            .replace(/<section class="ace-engine-bio">[\s\S]*?<\/section>\s*/gi, "")
+                            .replace(/^<hr\s*\/?>\s*/i, "")
+                            .trim();
+                        await actor.update({ "system.details.biography.value": cleanedBio });
+                        await actor.unsetFlag(MODULE_ID, "bioGenerated");
+                        ui.notifications.info(`ACE biography reset for ${actor.name}.`);
+                        sheet.render(false);
+                    });
+                    btnGroup.appendChild(resetBtn);
+
+                    header.appendChild(btnGroup);
+                }
+            }
+        } catch (e) { console.warn(`${TAG} | Error injecting bio reset button:`, e); }
+
+        // ── Wire up tab content events ───────────────────────────────
+        tabContent.querySelector(`#ace-engine-disabled-${actor.id}`)
+            .addEventListener("change", async (e) => {
+                await actor.update({ [`flags.${MODULE_ID}.chatDisabled`]: e.target.checked });
+            });
+
+        tabContent.querySelector(`#ace-engine-save-voice-${actor.id}`)
+            .addEventListener("click", async () => {
+                const vid = tabContent.querySelector(`#ace-engine-voice-id-${actor.id}`).value.trim();
+                await actor.setFlag(MODULE_ID, "voiceId", vid);
+                ui.notifications.info(`Voice ID saved for ${actor.name}`);
+            });
+
+        tabContent.querySelector(`#ace-engine-test-${actor.id}`)
+            .addEventListener("click", async () => {
+                const vid    = tabContent.querySelector(`#ace-engine-voice-id-${actor.id}`).value.trim();
+                const phrase = tabContent.querySelector(`#ace-engine-phrase-${actor.id}`).value.trim()
+                            || `I am ${actor.name}. Beware.`;
+                if (!vid) { ui.notifications.warn("Enter a Voice ID first."); return; }
+                const btn = tabContent.querySelector(`#ace-engine-test-${actor.id}`);
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i>';
+                try {
+                    const { ttsEngine } = await import("./tts.mjs");
+                    const result = await ttsEngine.speak(phrase, vid);
+                    if (result === "invalid") ui.notifications.error("Voice ID not found on ElevenLabs.");
+                    else if (result === "nokey") ui.notifications.error("No ElevenLabs API key in Settings.");
+                } catch (e) {
+                    console.error(`${TAG} | Voice test:`, e);
+                } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-play"></i> Test';
+                }
+            });
+
+        tabContent.querySelector(`#ace-engine-stop-${actor.id}`)
+            .addEventListener("click", async () => {
+                const { ttsEngine } = await import("./tts.mjs");
+                ttsEngine.stop();
+            });
+
+        tabContent.querySelector(`#ace-engine-open-config-${actor.id}`)
+            .addEventListener("click", () => {
+                new AIConfigDialog(actor).render(true);
+            });
+
+        // ── Tab switching logic ──────────────────────────────────────
+        tabBtn.addEventListener("click", () => {
+            const isAlreadyActive = tabBtn.classList.contains("active");
+            if (isAlreadyActive) {
+                tabContent.style.display = "none";
+                tabBtn.classList.remove("active");
+                const firstNativeBtn = win.querySelector("nav.tabs .item:not(.ace-engine-tab-btn)");
+                firstNativeBtn?.click();
+            } else {
+                win.querySelectorAll(".tab[data-group='primary']").forEach(t => {
+                    if (!t.classList.contains("ace-engine-tab-content")) {
+                        t.style.display = "";
+                        t.classList.remove("active");
+                    }
+                });
+                win.querySelectorAll("nav.tabs .item").forEach(b => b.classList.remove("active"));
+                tabContent.style.display = "flex";
+                tabContent.classList.add("active");
+                tabBtn.classList.add("active");
+            }
+        });
+
+        win.querySelectorAll("nav.tabs .item:not(.ace-engine-tab-btn)").forEach(btn => {
+            btn.addEventListener("click", () => {
+                tabContent.style.display = "none";
+                tabBtn.classList.remove("active");
+            });
+        });
+
+        // ── Inject into DOM ──────────────────────────────────────────
+        if (tabNav) {
+            tabNav.appendChild(tabBtn);
+        } else {
+            tabBtn.style.cssText += `
+                position:absolute;top:4px;right:40px;z-index:100;
+                background:#1a2a1a;border:1px solid #3a6a3a;
+                border-radius:4px;padding:4px 8px;`;
+            win.appendChild(tabBtn);
+        }
+
+        const existingTab = win.querySelector(".tab[data-group='primary']");
+        const tabParent   = existingTab?.parentElement ?? tabBody;
+        tabParent.appendChild(tabContent);
+
+        if (wasActive) {
+            const tabBody2 = win.querySelector(".tab[data-group='primary']")?.parentElement;
+            if (tabBody2) tabBody2.style.visibility = "hidden";
+
+            requestAnimationFrame(() => {
+                if (tabBody2) tabBody2.style.visibility = "";
+                win.querySelectorAll(".tab[data-group='primary']").forEach(t => {
+                    if (!t.classList.contains("ace-engine-tab-content")) {
+                        t.style.display = "none";
+                        t.classList.remove("active");
+                    }
+                });
+                win.querySelectorAll("nav.tabs .item").forEach(b => b.classList.remove("active"));
+                tabContent.style.display = "flex";
+                tabContent.classList.add("active");
+                tabBtn.classList.add("active");
+            });
+        } else {
+            tabContent.style.display = "none";
+        }
     });
 }
