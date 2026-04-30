@@ -6528,26 +6528,34 @@ li.ace-toolbar-btn:hover {
 .ace-config-panel .window-header h1,
 .ace-config-panel .window-header h2 {
   font-family: "Cinzel Decorative", "Cinzel", serif !important;
-  color: #000 !important;
+  color: #ffd878 !important;
   font-weight: 700 !important;
   font-size: 18px !important;
   letter-spacing: 2px !important;
   text-transform: uppercase !important;
   -webkit-text-stroke: 0 !important;
-  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.55) !important;
+  text-shadow:
+    0 0 8px rgba(255, 200, 100, 0.7),
+    0 0 16px rgba(255, 170, 68, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.85) !important;
 }
 .ace-config-panel .window-header i,
 .ace-config-panel .window-header .header-button,
 .ace-config-panel .window-header button {
-  color: #000 !important;
+  color: #ffd878 !important;
   font-size: 18px !important;
-  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.5) !important;
-  filter: drop-shadow(0 1px 0 rgba(255, 240, 200, 0.4));
+  text-shadow:
+    0 0 6px rgba(255, 200, 100, 0.6),
+    0 1px 2px rgba(0, 0, 0, 0.85) !important;
+  filter: drop-shadow(0 0 4px rgba(255, 200, 100, 0.5));
 }
 .ace-config-panel .window-header .header-button:hover,
 .ace-config-panel .window-header button:hover {
-  color: #4a2a05 !important;
-  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.7) !important;
+  color: #fff0b8 !important;
+  text-shadow:
+    0 0 10px rgba(255, 220, 130, 0.85),
+    0 0 20px rgba(255, 170, 68, 0.55),
+    0 1px 2px rgba(0, 0, 0, 0.85) !important;
 }
 
 /* Window content body — dark steel canvas */
@@ -6937,7 +6945,7 @@ li.ace-toolbar-btn:hover {
 }
 .ace-cfg-footer-spacer { flex: 1; }
 
-/* All footer buttons get the brass treatment */
+/* All footer buttons get the brass treatment with glowing-gold text */
 .ace-cfg-btn,
 .ace-cfg-footer button {
   background:
@@ -6946,7 +6954,7 @@ li.ace-toolbar-btn:hover {
   background-blend-mode: overlay, normal;
   background-size: auto, 100px;
   border: 1px solid rgba(184, 148, 58, 0.7);
-  color: #000;
+  color: #ffd878;
   font-family: "Rajdhani", "Signika", sans-serif;
   font-weight: 700;
   font-size: 14px;
@@ -6954,7 +6962,10 @@ li.ace-toolbar-btn:hover {
   padding: 6px 14px;
   border-radius: 3px;
   cursor: pointer;
-  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.5);
+  text-shadow:
+    0 0 6px rgba(255, 200, 100, 0.7),
+    0 0 12px rgba(255, 170, 68, 0.4),
+    0 1px 2px rgba(0, 0, 0, 0.85);
   box-shadow:
     inset 0 1px 0 rgba(255, 240, 200, 0.45),
     0 2px 3px rgba(0, 0, 0, 0.55);
@@ -6963,15 +6974,30 @@ li.ace-toolbar-btn:hover {
   gap: 8px;
 }
 .ace-cfg-btn i,
-.ace-cfg-footer button i { color: #000; text-shadow: 0 1px 0 rgba(255, 240, 200, 0.5); }
+.ace-cfg-footer button i {
+  color: #ffd878;
+  text-shadow:
+    0 0 6px rgba(255, 200, 100, 0.7),
+    0 1px 2px rgba(0, 0, 0, 0.85);
+}
 .ace-cfg-btn:hover,
 .ace-cfg-footer button:hover {
-  color: #4a2a05;
-  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.7);
+  color: #fff0b8;
+  text-shadow:
+    0 0 10px rgba(255, 220, 130, 0.9),
+    0 0 20px rgba(255, 170, 68, 0.55),
+    0 1px 2px rgba(0, 0, 0, 0.85);
   box-shadow:
     inset 0 1px 0 rgba(255, 240, 200, 0.55),
     0 0 10px rgba(255, 200, 100, 0.7),
     0 2px 3px rgba(0, 0, 0, 0.55);
+}
+.ace-cfg-btn:hover i,
+.ace-cfg-footer button:hover i {
+  color: #fff0b8;
+  text-shadow:
+    0 0 10px rgba(255, 220, 130, 0.9),
+    0 1px 2px rgba(0, 0, 0, 0.85);
 }
 .ace-cfg-btn-save {
   box-shadow:
