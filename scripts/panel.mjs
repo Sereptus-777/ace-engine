@@ -323,11 +323,14 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       libGenerateDigest:   AcePanel._onLibGenerateDigest,
       libToggleDigest:     AcePanel._onLibToggleDigest,
       libDeleteDigest:     AcePanel._onLibDeleteDigest,
+      libBrowseDigest:     AcePanel._onLibBrowseDigest,
       libMergeIntoBible:   AcePanel._onLibMergeIntoBible,
       libMergeDigestIntoBible: AcePanel._onLibMergeDigestIntoBible,
       // ── World Bible ─────────────────────────────────
       worldBibleGenerate:  AcePanel._onWorldBibleGenerate,
       worldBibleRegenerate: AcePanel._onWorldBibleRegenerate,
+      // ── Open Library window (replaces in-panel Library tab content) ──
+      openLibrary:         AcePanel._onOpenLibrary,
     },
   };
 
@@ -637,10 +640,22 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       </div>
 
       <!-- ═══════════════════════════════════════════════════
-           LIBRARY TAB — Document uploads for AI reference
+           LIBRARY TAB — Now just opens a dedicated window
+           Library was pulled out of the panel because it's prep-time
+           world-building, not in-session GM tooling. Bigger fonts and
+           more screen space live in the dedicated LibraryWindow.
            ═══════════════════════════════════════════════════ -->
       <div class="ace-tab-content ${this._activeTab === "library" ? "active" : ""}" data-tab-content="library">
-        ${this._buildLibraryPanel()}
+        <div class="ace-library-stub">
+          <div class="ace-library-stub-icon"><i class="fa-solid fa-book-atlas"></i></div>
+          <h2 class="ace-library-stub-title">ACE Library</h2>
+          <p class="ace-library-stub-blurb">
+            Upload sourcebooks, generate digests, browse extracted entities, and build your World Bible — all in a dedicated window with proper room to breathe.
+          </p>
+          <button class="ace-library-stub-btn" data-action="openLibrary">
+            <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Library
+          </button>
+        </div>
         <div class="ace-gold-divider ace-recap-divider">${this._renderSessionRecapButton()}</div>
       </div>
     `;
@@ -4091,6 +4106,15 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
             `- Your internet connection is working\n` +
             `- The API URL in **Module Settings → ACE** is correct\n` +
             `- For local AI (Ollama): make sure it's running and set \`OLLAMA_ORIGINS=*\``;
+          // For Ollama specifically, pop the friendly action dialog (once per session)
+          // so the user can install / switch / test connection without digging through settings.
+          try {
+            const provider = this.ai?.config?.provider || "";
+            if (provider === "ollama") {
+              const { showOllamaDownDialog } = await import("./connection-dialog.mjs");
+              showOllamaDownDialog({ message: errMsg, url: this.ai?.config?.apiUrl });
+            }
+          } catch (_) { /* dialog import failed — markdown message above is sufficient */ }
         } else if (errMsg.includes("429") || errMsg.includes("Rate limit")) {
           this._chatHistory[aiMsgIndex].content =
             `**Rate Limited**\n\nThe AI provider says you're sending too many requests. Wait a moment and try again.\n\n` +
@@ -7652,6 +7676,10 @@ MAGNITUDE: [local/regional/major/legendary]`;
           </div>
           ${pipelineHtml}
           <div class="ace-library-card-actions">
+            <button class="ace-lib-action" data-action="libBrowseDigest" data-digest-id="${d.id}"
+                    title="Browse extracted entities — see exactly what the AI captured from this source">
+              <i class="fas fa-book-atlas"></i> Browse
+            </button>
             <button class="ace-lib-action" data-action="libToggleDigest" data-digest-id="${d.id}"
                     title="${active ? "Disable" : "Enable"} digest for this world">
               <i class="fas ${active ? "fa-eye" : "fa-eye-slash"}"></i> ${active ? "On" : "Off"}
@@ -7867,6 +7895,11 @@ MAGNITUDE: [local/regional/major/legendary]`;
           </div>
           ${pipelineHtml}
           <div class="ace-library-card-actions">
+            ${digestMeta ? `
+            <button class="ace-lib-action" data-action="libBrowseDigest" data-digest-id="${digestMeta.id}"
+                    title="Browse extracted entities — see exactly what the AI captured from this source">
+              <i class="fas fa-book-atlas"></i> Browse
+            </button>` : ""}
             <button class="ace-lib-action" data-action="libToggleDoc" data-doc-id="${doc.id}"
                     title="${doc.enabled ? "Disable" : "Enable"} for AI context">
               <i class="fas ${doc.enabled ? "fa-eye" : "fa-eye-slash"}"></i> ${doc.enabled ? "On" : "Off"}
@@ -7922,17 +7955,31 @@ MAGNITUDE: [local/regional/major/legendary]`;
     });
   }
 
-  /** Refresh the Library tab content and re-wire events. */
+  /** Refresh the Library UI — now points at the dedicated LibraryWindow.
+   *  The panel's Library tab is just a launcher button, so refresh now
+   *  means: if the LibraryWindow is open, re-render it. Otherwise no-op. */
   _refreshLibraryUI() {
-    const container = this.element?.querySelector('[data-tab-content="library"]');
-    if (container) {
-      container.innerHTML = this._buildLibraryPanel();
-      this._wireLibraryEvents();
+    if (this._libraryWindow?.rendered) {
+      this._libraryWindow.render(false);
     }
     // One-shot: auto-detect publication years for existing docs that lack them
     if (!this._yearMigrationDone) {
       this._yearMigrationDone = true;
       this._migratePublishedYears();
+    }
+  }
+
+  /**
+   * Open (or focus) the dedicated Library window. Single-instance per panel —
+   * subsequent calls just bring the existing window to the front.
+   */
+  static async _onOpenLibrary(_event, _target) {
+    try {
+      const { openLibraryWindow } = await import("./library-window.mjs");
+      openLibraryWindow(this);
+    } catch (err) {
+      console.error(`${MODULE_ID} | Failed to open Library window:`, err);
+      ui.notifications?.error(`ACE: Could not open Library — ${err.message?.slice(0, 100) ?? "unknown error"}`);
     }
   }
 
@@ -7970,8 +8017,17 @@ MAGNITUDE: [local/regional/major/legendary]`;
    * Live-update just the status line on a library card without re-rendering the
    * entire library panel (avoids flicker during long PDF extraction).
    */
+  /** DOM root for library cards. Prefers the open LibraryWindow (which is
+   *  where cards actually live now); falls back to the panel only as a
+   *  safety net. Library actions reach this method via delegation, so `this`
+   *  is the panel — but the cards are inside `this._libraryWindow.element`. */
+  get _libraryDomRoot() {
+    return this._libraryWindow?.element ?? this.element ?? null;
+  }
+
   _updateLibraryCardStatus(docId, statusText, progress = null) {
-    const card = this.element?.querySelector(`.ace-library-card[data-doc-id="${docId}"]`);
+    const root = this._libraryDomRoot;
+    const card = root?.querySelector(`.ace-library-card[data-doc-id="${docId}"]`);
     if (!card) return;
     let statusEl = card.querySelector(".ace-library-card-status");
     if (!statusEl) {
@@ -8011,7 +8067,9 @@ MAGNITUDE: [local/regional/major/legendary]`;
   static _onLibUploadClick(event, target) {
     // Don't re-trigger if the click originated from the hidden file input
     if (event.target.id === "ace-library-file-input") return;
-    const fileInput = this.element.querySelector("#ace-library-file-input");
+    // Library DOM lives in the LibraryWindow now — fall back to panel just in case.
+    const root = this._libraryDomRoot ?? this.element;
+    const fileInput = root?.querySelector("#ace-library-file-input");
     fileInput?.click();
   }
 
@@ -8457,6 +8515,22 @@ MAGNITUDE: [local/regional/major/legendary]`;
   }
 
   /**
+   * Open the Digest Browser window — shows every entity the AI extracted from
+   * a digested source. Visible proof that digestion captured the data.
+   */
+  static async _onLibBrowseDigest(event, target) {
+    const digestId = target.closest("[data-digest-id]")?.dataset.digestId;
+    if (!digestId) return;
+    try {
+      const { showDigestBrowser } = await import("./digest-browser.mjs");
+      showDigestBrowser(digestId);
+    } catch (err) {
+      console.error(`${MODULE_ID} | Failed to open digest browser:`, err);
+      ui.notifications?.error(`ACE: Could not open digest browser — ${err.message?.slice(0, 100) ?? "unknown error"}`);
+    }
+  }
+
+  /**
    * Run the full digest generation pipeline for a document.
    * Shows live progress on the library card, saves results globally,
    * and auto-activates the digest for the current world.
@@ -8475,7 +8549,8 @@ MAGNITUDE: [local/regional/major/legendary]`;
     }
 
     // Replace the generate button with a pause button during processing
-    const btn = this.element?.querySelector(`[data-action="libGenerateDigest"][data-doc-id="${docId}"]`);
+    // — query the LibraryWindow first since that's where the card actually lives.
+    const btn = this._libraryDomRoot?.querySelector(`[data-action="libGenerateDigest"][data-doc-id="${docId}"]`);
     if (btn) {
       btn.dataset.action = "digestPause";
       btn.innerHTML = `<i class="fas fa-pause"></i>`;

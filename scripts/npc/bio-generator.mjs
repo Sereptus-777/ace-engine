@@ -870,8 +870,24 @@ ${personalityInstruction}`;
         }
     } catch (err) { console.debug("ACE: Engine | bio-generator NPC origin flag read non-fatal:", err); }
 
-    // If we have a token portrait, tell the AI to use it
-    if (tokenImage) {
+    // ── Gender override (set by NPC drop dialog) ─────────────────────
+    // The user can lock the gender via the drop dialog's Auto/Male/Female/
+    // Androgynous radio. When set to anything but auto, this hardcoded
+    // instruction takes precedence over the vision-based gender check —
+    // critical for users on non-vision models (qwen2.5-coder, llama3.2 base)
+    // and for explicit non-binary characters regardless of portrait.
+    let genderOverride = "";
+    try { genderOverride = actor.getFlag(MODULE_ID, "genderOverride") || ""; }
+    catch (_) { /* flag not set — fall through to portrait-based detection */ }
+
+    if (genderOverride === "male") {
+        userMsg += `\n\nGENDER LOCK: This NPC is MALE. Use a masculine name and he/him pronouns. Do NOT override based on portrait — the GM has explicitly chosen male.`;
+    } else if (genderOverride === "female") {
+        userMsg += `\n\nGENDER LOCK: This NPC is FEMALE. Use a feminine name and she/her pronouns. Do NOT override based on portrait — the GM has explicitly chosen female.`;
+    } else if (genderOverride === "androgynous") {
+        userMsg += `\n\nGENDER LOCK: This NPC is ANDROGYNOUS. Use a gender-neutral or unisex name and they/them pronouns throughout. Do NOT override based on portrait — the GM has explicitly chosen androgynous.`;
+    } else if (tokenImage) {
+        // Auto path — let the portrait drive gender (only works on vision-capable models)
         userMsg += `\n\nIMPORTANT: A portrait of this NPC is attached. Match the character's apparent GENDER, AGE, and ETHNICITY from the image. If the portrait shows a woman, use a female name and she/her pronouns. If elderly, reflect that in the bio. Override any prior gender hints if they conflict with what you see in the portrait.`;
     }
 
@@ -1164,6 +1180,24 @@ async function _generateBio(tokenDocument) {
     //── Build prompt and call AI ─────────────────────────────────────────
     const { systemPrompt, userMsg, tokenImage } = await _buildPrompt(tokenDocument, factionResult, socialProfile, canonBio);
     const images = tokenImage ? [tokenImage] : [];
+
+    // ── Vision capability check ─────────────────────────────────────────
+    // If we have a portrait but the model can't see images, the bio prompt's
+    // "match the portrait's gender" instruction does nothing — the AI will
+    // pick a random gender from the name pool. Warn the user once per session
+    // so they can switch to a vision-capable model.
+    if (images.length) {
+        try {
+            const { isVisionCapable, warnVisionUnavailable } = await import("../vision-capability.mjs");
+            const { modelName, apiUrl } = getEnvoyAIConfig();
+            const canSee = await isVisionCapable(provider, modelName, { apiUrl, queryOllamaShow: provider === "ollama" });
+            if (!canSee) {
+                warnVisionUnavailable(provider, modelName);
+                console.warn(`${TAG} | Vision NOT available on ${provider}:${modelName} — portrait passed but will be ignored. Bio gender will be random.`);
+            }
+        } catch (e) { console.debug("ACE: Engine | vision-capability check failed:", e); }
+    }
+
     const response = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey, images);
 
     if (!response || !response.trim()) {

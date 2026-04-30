@@ -6508,18 +6508,20 @@ li.ace-toolbar-btn:hover {
     0 10px 36px rgba(0, 0, 0, 0.85),
     0 0 0 1px rgba(184, 148, 58, 0.5) !important;
 }
+/* Title bar — black metal with polished gold trim (LoreKeeper aesthetic).
+   Symmetric borders both sides. No brass texture. */
 .ace-config-panel .window-header {
   background:
-    linear-gradient(180deg, rgba(255, 240, 200, 0.25) 0%, transparent 40%, rgba(0, 0, 0, 0.40) 100%),
-    url("modules/ace-engine/assets/ui/brass-frame/brass-brushed-surface.png") repeat !important;
-  background-blend-mode: overlay, normal !important;
-  border-bottom: 3px solid #2a1a05 !important;
-  border-left: 1px solid rgba(255, 230, 150, 0.45) !important;
-  border-right: 1px solid rgba(255, 230, 150, 0.45) !important;
+    linear-gradient(180deg,
+      rgba(212, 175, 55, 0.18) 0%,
+      rgba(20, 20, 22, 0.95) 55%,
+      rgba(10, 10, 12, 1.0) 100%) !important;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.55) !important;
+  border-left: 1px solid rgba(212, 175, 55, 0.40) !important;
+  border-right: 1px solid rgba(212, 175, 55, 0.40) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 250, 220, 0.55),
-    inset 0 -2px 4px rgba(60, 40, 5, 0.4),
-    0 4px 8px rgba(0, 0, 0, 0.5) !important;
+    inset 0 1px 0 rgba(212, 175, 55, 0.30),
+    0 4px 8px rgba(0, 0, 0, 0.55) !important;
   padding: 6px 22px !important;
   min-height: 38px !important;
 }
@@ -6528,41 +6530,37 @@ li.ace-toolbar-btn:hover {
 .ace-config-panel .window-header h1,
 .ace-config-panel .window-header h2 {
   font-family: "Cinzel Decorative", "Cinzel", serif !important;
-  color: #ffd878 !important;
+  color: #d4af37 !important;
   font-weight: 700 !important;
   font-size: 18px !important;
   letter-spacing: 2px !important;
   text-transform: uppercase !important;
   -webkit-text-stroke: 0 !important;
   text-shadow:
-    0 0 8px rgba(255, 200, 100, 0.7),
-    0 0 16px rgba(255, 170, 68, 0.45),
+    0 0 10px rgba(212, 175, 55, 0.45),
+    0 0 18px rgba(212, 175, 55, 0.20),
     0 1px 2px rgba(0, 0, 0, 0.85) !important;
 }
 .ace-config-panel .window-header i,
 .ace-config-panel .window-header .header-button,
 .ace-config-panel .window-header button {
-  color: #ffd878 !important;
+  color: #d4af37 !important;
   font-size: 18px !important;
-  text-shadow:
-    0 0 6px rgba(255, 200, 100, 0.6),
-    0 1px 2px rgba(0, 0, 0, 0.85) !important;
-  filter: drop-shadow(0 0 4px rgba(255, 200, 100, 0.5));
+  text-shadow: 0 0 8px rgba(212, 175, 55, 0.4) !important;
+  filter: drop-shadow(0 0 3px rgba(212, 175, 55, 0.35));
 }
 .ace-config-panel .window-header .header-button:hover,
 .ace-config-panel .window-header button:hover {
-  color: #fff0b8 !important;
-  text-shadow:
-    0 0 10px rgba(255, 220, 130, 0.85),
-    0 0 20px rgba(255, 170, 68, 0.55),
-    0 1px 2px rgba(0, 0, 0, 0.85) !important;
+  color: #ffe89a !important;
+  text-shadow: 0 0 12px rgba(212, 175, 55, 0.7) !important;
+  filter: drop-shadow(0 0 5px rgba(212, 175, 55, 0.6));
 }
 
 /* Window content body — dark steel canvas */
 .ace-config-panel .window-content {
   background:
     linear-gradient(180deg, rgba(184, 148, 58, 0.06) 0%, transparent 20%, transparent 80%, rgba(0, 0, 0, 0.4) 100%),
-    url("modules/ace-engine/assets/ui/brass-frame/dark-steel-backing.png") repeat,
+    url("../assets/ui/brass-frame/dark-steel-backing.png") repeat,
     #0a0a0c !important;
   color: #e8d8a8 !important;
   padding: 0 !important;
@@ -6595,7 +6593,7 @@ li.ace-toolbar-btn:hover {
   flex-shrink: 0;
   background:
     linear-gradient(90deg, rgba(0, 0, 0, 0.45) 0%, rgba(0, 0, 0, 0.08) 100%),
-    url("modules/ace-engine/assets/ui/brass-frame/dark-steel-backing.png") repeat;
+    url("../assets/ui/brass-frame/dark-steel-backing.png") repeat;
   margin: 0;
   padding: 6px 4px;
   overflow-y: auto;
@@ -6620,7 +6618,7 @@ li.ace-toolbar-btn:hover {
   position: absolute;
   top: -4px; right: -10px; bottom: -4px;
   width: 22px;
-  background: url("modules/ace-engine/assets/ui/brass-frame/vertical-rail-divider.png") no-repeat center;
+  background: url("../assets/ui/brass-frame/vertical-rail-divider.png") no-repeat center;
   background-size: 22px 100%;
   pointer-events: none;
   z-index: 5;
@@ -6704,7 +6702,9 @@ li.ace-toolbar-btn:hover {
   overflow: hidden;
 }
 
-/* Pane header — brass surface bar with engraved title + medallion */
+/* Pane header — black metal with gold trim, symmetric borders both sides.
+   No brass texture, no horizontal-divider PNG below it (that was the
+   thin-line artifact the user complained about). */
 .ace-cfg-pane-header {
   position: relative;
   display: flex;
@@ -6713,32 +6713,22 @@ li.ace-toolbar-btn:hover {
   gap: 14px;
   padding: 10px 22px;
   background:
-    linear-gradient(180deg, rgba(255, 240, 200, 0.25) 0%, transparent 35%, rgba(0, 0, 0, 0.35) 100%),
-    url("modules/ace-engine/assets/ui/brass-frame/brass-brushed-surface.png") repeat;
-  background-blend-mode: overlay, normal;
-  border-top: 1px solid rgba(255, 230, 150, 0.55);
-  border-bottom: 3px solid #2a1a05;
-  border-left: 1px solid rgba(255, 230, 150, 0.45);
-  border-right: 1px solid rgba(255, 230, 150, 0.45);
+    linear-gradient(180deg,
+      rgba(212, 175, 55, 0.12) 0%,
+      rgba(20, 20, 22, 0.92) 50%,
+      rgba(10, 10, 12, 1.0) 100%);
+  border-top: 1px solid rgba(212, 175, 55, 0.30);
+  border-bottom: 1px solid rgba(212, 175, 55, 0.45);
+  border-left: 1px solid rgba(212, 175, 55, 0.35);
+  border-right: 1px solid rgba(212, 175, 55, 0.35);
   box-shadow:
-    inset 0 1px 0 rgba(255, 250, 220, 0.45),
-    inset 0 -2px 4px rgba(60, 40, 5, 0.35),
-    inset 1px 0 0 rgba(255, 250, 220, 0.35),
-    inset -1px 0 0 rgba(255, 250, 220, 0.35),
+    inset 0 1px 0 rgba(212, 175, 55, 0.25),
     0 4px 10px rgba(0, 0, 0, 0.55);
   min-height: 78px;
   flex-shrink: 0;
 }
-.ace-cfg-pane-header::after {
-  content: "";
-  position: absolute;
-  left: 0; right: 0; bottom: -8px;
-  height: 12px;
-  background: url("modules/ace-engine/assets/ui/brass-frame/horizontal-divider.png") no-repeat center;
-  background-size: 100% 100%;
-  pointer-events: none;
-  z-index: 4;
-}
+/* (::after horizontal divider removed — was producing a stray thin line
+    between the pane header and the body that read as visual noise.) */
 .ace-cfg-pane-icon {
   display: inline-flex;
   align-items: center;
@@ -6764,17 +6754,15 @@ li.ace-toolbar-btn:hover {
   font-family: "Cinzel Decorative", "Cinzel", serif;
   font-size: 26px;
   font-weight: 700;
-  color: #000;
+  color: #d4af37;
   margin: 0;
   letter-spacing: 3px;
   text-transform: uppercase;
-  /* Engraved-dark fill (the slick look the user wanted to keep) PLUS a soft
-     amber halo so the letters lift off the brass and stay readable. */
+  /* Polished gold glow on black metal — LoreKeeper-Legacy aesthetic. */
   text-shadow:
-    0 1px 0 rgba(255, 240, 200, 0.7),       /* warm highlight under text */
-    0 -1px 1px rgba(0, 0, 0, 0.3),          /* slight depth above */
-    0 0 14px rgba(255, 200, 100, 0.55),     /* soft amber halo (close) */
-    0 0 24px rgba(255, 170, 68, 0.35);      /* extended amber bloom */
+    0 0 14px rgba(212, 175, 55, 0.55),
+    0 0 28px rgba(212, 175, 55, 0.30),
+    0 1px 2px rgba(0, 0, 0, 0.85);
 }
 
 /* Pane body — scrollable dark-steel canvas */
@@ -6787,7 +6775,7 @@ li.ace-toolbar-btn:hover {
   background:
     radial-gradient(ellipse at 50% 0%, rgba(184, 148, 58, 0.04), transparent 60%),
     radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.35)),
-    url("modules/ace-engine/assets/ui/brass-frame/dark-steel-backing.png") repeat;
+    url("../assets/ui/brass-frame/dark-steel-backing.png") repeat;
 }
 .ace-cfg-intro {
   margin: 16px 22px 6px 22px;
@@ -6820,7 +6808,7 @@ li.ace-toolbar-btn:hover {
 /* Setting row — horizontal divider PNG between rows */
 .ace-cfg-row {
   padding: 12px 4px 18px 4px;
-  background-image: url("modules/ace-engine/assets/ui/brass-frame/horizontal-divider.png");
+  background-image: url("../assets/ui/brass-frame/horizontal-divider.png");
   background-repeat: no-repeat;
   background-position: bottom center;
   background-size: 100% 10px;
@@ -6914,118 +6902,1423 @@ li.ace-toolbar-btn:hover {
   min-width: 0;
 }
 
-/* ── Footer — brass surface bar ─────────────────────────────────── */
+/* ── Footer — black metal with gold trim ─────────────────────────────
+   Buttons inside the footer keep their existing brass styling (handled
+   by `.ace-cfg-btn` rules below). Just the footer's own surface goes
+   black metal. Symmetric borders both sides. The ::before horizontal-
+   divider PNG is removed (was the thin line above the footer the user
+   wanted gone). */
 .ace-cfg-footer {
   display: flex;
   align-items: center;
   flex-shrink: 0;
   padding: 10px 18px;
   background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.35) 0%, transparent 25%, rgba(255, 240, 200, 0.18) 100%),
-    url("modules/ace-engine/assets/ui/brass-frame/brass-brushed-surface.png") repeat;
-  background-blend-mode: overlay, normal;
-  border-top: 3px solid #2a1a05;
-  border-bottom: 1px solid rgba(255, 230, 150, 0.4);
-  border-left: 1px solid rgba(255, 230, 150, 0.45);
-  border-right: 1px solid rgba(255, 230, 150, 0.45);
+    linear-gradient(180deg,
+      rgba(10, 10, 12, 1.0) 0%,
+      rgba(20, 20, 22, 0.95) 50%,
+      rgba(212, 175, 55, 0.10) 100%);
+  border-top: 1px solid rgba(212, 175, 55, 0.45);
+  border-bottom: 1px solid rgba(212, 175, 55, 0.30);
+  border-left: 1px solid rgba(212, 175, 55, 0.35);
+  border-right: 1px solid rgba(212, 175, 55, 0.35);
   box-shadow:
-    inset 0 -1px 0 rgba(255, 250, 220, 0.4),
-    inset 0 2px 4px rgba(60, 40, 5, 0.35),
-    inset 1px 0 0 rgba(255, 250, 220, 0.35),
-    inset -1px 0 0 rgba(255, 250, 220, 0.35),
+    inset 0 -1px 0 rgba(212, 175, 55, 0.25),
     0 -4px 10px rgba(0, 0, 0, 0.55);
   gap: 10px;
   min-height: 56px;
   position: relative;
 }
-.ace-cfg-footer::before {
-  content: "";
-  position: absolute;
-  left: 0; right: 0; top: -8px;
-  height: 12px;
-  background: url("modules/ace-engine/assets/ui/brass-frame/horizontal-divider.png") no-repeat center;
-  background-size: 100% 100%;
-  pointer-events: none;
-}
 .ace-cfg-footer-spacer { flex: 1; }
 
-/* All footer buttons get the brass treatment with glowing-gold text */
+/* All footer buttons — ported from ACE: Forge for visual consistency.
+   Per-user request: only the buttons themselves, NOT the surrounding
+   footer/backing — so this only styles button elements + their hover/active. */
 .ace-cfg-btn,
 .ace-cfg-footer button {
   background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.30), transparent 40%, rgba(0, 0, 0, 0.30)),
-    url("modules/ace-engine/assets/ui/brass-frame/brass-brushed-surface.png") repeat;
+    linear-gradient(180deg, rgba(0, 0, 0, 0.35) 0%, transparent 40%, rgba(0, 0, 0, 0.35) 100%),
+    url("../assets/ui/brass-frame/brass-brushed-surface.png") repeat;
   background-blend-mode: overlay, normal;
-  background-size: auto, 100px;
-  border: 1px solid rgba(184, 148, 58, 0.7);
-  color: #ffd878;
-  font-family: "Rajdhani", "Signika", sans-serif;
-  font-weight: 700;
-  font-size: 14px;
-  letter-spacing: 0.3px;
-  padding: 6px 14px;
+  background-size: auto, 200px;
+  border: 1px solid #5a3a08;
+  color: #000;
+  padding: 8px 22px;
   border-radius: 3px;
   cursor: pointer;
-  text-shadow:
-    0 0 6px rgba(255, 200, 100, 0.7),
-    0 0 12px rgba(255, 170, 68, 0.4),
-    0 1px 2px rgba(0, 0, 0, 0.85);
+  font-family: "Rajdhani", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  min-width: 120px;
+  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.55);
   box-shadow:
-    inset 0 1px 0 rgba(255, 240, 200, 0.45),
-    0 2px 3px rgba(0, 0, 0, 0.55);
+    inset 0 1px 0 rgba(255, 250, 220, 0.5),
+    inset 0 -2px 3px rgba(60, 40, 5, 0.35),
+    0 2px 4px rgba(0, 0, 0, 0.6);
+  transition: filter 0.12s ease, box-shadow 0.12s ease, transform 0.08s ease;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 .ace-cfg-btn i,
 .ace-cfg-footer button i {
-  color: #ffd878;
-  text-shadow:
-    0 0 6px rgba(255, 200, 100, 0.7),
-    0 1px 2px rgba(0, 0, 0, 0.85);
+  color: #000;
+  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.5);
+  filter: drop-shadow(0 1px 0 rgba(255, 240, 200, 0.4));
+  margin-right: 0;
 }
 .ace-cfg-btn:hover,
 .ace-cfg-footer button:hover {
-  color: #fff0b8;
-  text-shadow:
-    0 0 10px rgba(255, 220, 130, 0.9),
-    0 0 20px rgba(255, 170, 68, 0.55),
-    0 1px 2px rgba(0, 0, 0, 0.85);
+  color: #4a2a05;
+  text-shadow: 0 1px 0 rgba(255, 240, 200, 0.7);
+  filter: brightness(1.10);
   box-shadow:
-    inset 0 1px 0 rgba(255, 240, 200, 0.55),
-    0 0 10px rgba(255, 200, 100, 0.7),
-    0 2px 3px rgba(0, 0, 0, 0.55);
+    inset 0 1px 0 rgba(255, 250, 220, 0.6),
+    inset 0 -2px 3px rgba(60, 40, 5, 0.35),
+    0 3px 6px rgba(0, 0, 0, 0.65),
+    0 0 10px rgba(255, 170, 68, 0.7);
 }
-.ace-cfg-btn:hover i,
-.ace-cfg-footer button:hover i {
-  color: #fff0b8;
-  text-shadow:
-    0 0 10px rgba(255, 220, 130, 0.9),
-    0 1px 2px rgba(0, 0, 0, 0.85);
+.ace-cfg-btn:active,
+.ace-cfg-footer button:active {
+  transform: translateY(1px);
+  filter: brightness(0.95);
 }
+/* Save button — brightest amber glow + brighter trim, the hero button */
 .ace-cfg-btn-save {
+  border-color: #ffe89a !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 240, 200, 0.55),
-    0 0 8px rgba(255, 200, 100, 0.55),
-    0 2px 3px rgba(0, 0, 0, 0.55);
+    inset 0 1px 0 rgba(255, 250, 220, 0.7),
+    inset 0 -2px 3px rgba(60, 40, 5, 0.35),
+    0 0 14px rgba(255, 170, 68, 0.7),
+    0 2px 4px rgba(0, 0, 0, 0.6) !important;
 }
-.ace-cfg-btn-reset {
-  background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.40));
-  border-color: rgba(120, 90, 30, 0.7);
-  color: #c9b890;
+.ace-cfg-btn-save:hover {
+  filter: brightness(1.10) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 250, 220, 0.75),
+    inset 0 -2px 3px rgba(60, 40, 5, 0.35),
+    0 0 22px rgba(255, 170, 68, 0.95),
+    0 3px 6px rgba(0, 0, 0, 0.7) !important;
+}
+
+/* ─── AI Tab Actions (Test Connection / Refresh Models) ──────────────── */
+/* At top of AI tab. Plain dark buttons — NOT the brass-textured footer style. */
+.ace-cfg-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid rgba(184, 148, 58, 0.25);
+}
+.ace-cfg-plainbtn {
+  background: linear-gradient(180deg, #1f1d1a 0%, #14110e 100%);
+  border: 1px solid rgba(184, 148, 58, 0.45);
+  color: #d4af37;
+  font-family: "Rajdhani", "Signika", sans-serif;
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  padding: 5px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+.ace-cfg-plainbtn i { color: inherit; font-size: 11px; }
+.ace-cfg-plainbtn:hover {
+  background: linear-gradient(180deg, #2a2620 0%, #1a1612 100%);
+  border-color: #d4af37;
+  color: #ffd878;
+}
+.ace-cfg-plainbtn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ACE — LIBRARY STUB (panel's Library tab — just an "Open Library" button)
+   ═══════════════════════════════════════════════════════════════════════ */
+.ace-library-stub {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 60px 30px 40px;
+  gap: 18px;
+}
+.ace-library-stub-icon {
+  font-size: 56px;
+  color: #d4af37;
+  filter: drop-shadow(0 0 12px rgba(212, 175, 55, 0.4));
+  margin-bottom: 6px;
+}
+.ace-library-stub-title {
+  font-family: "Cinzel Decorative", "Cinzel", serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: #d4af37;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin: 0;
+  text-shadow:
+    0 0 12px rgba(212, 175, 55, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.85);
+}
+.ace-library-stub-blurb {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: #d8cdb6;
+  max-width: 420px;
+  margin: 0;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
 }
-.ace-cfg-btn-reset i { color: #c9b890; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85); }
-.ace-cfg-btn-reset:hover {
-  color: #ffaa44;
-  border-color: #ffaa44;
-  text-shadow: 0 0 6px rgba(255, 170, 68, 0.5);
+.ace-library-stub-btn {
+  margin-top: 10px;
+  font-family: "Rajdhani", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 12px 32px;
+  background: linear-gradient(180deg,
+    rgba(212, 175, 55, 0.20) 0%,
+    rgba(20, 20, 22, 0.95) 100%);
+  border: 1px solid rgba(212, 175, 55, 0.6);
+  border-radius: 4px;
+  color: #ffe89a;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-shadow: 0 0 10px rgba(212, 175, 55, 0.5), 0 1px 1px rgba(0, 0, 0, 0.85);
   box-shadow:
-    inset 0 1px 0 rgba(255, 240, 200, 0.2),
-    0 0 8px rgba(255, 170, 68, 0.4),
-    0 2px 3px rgba(0, 0, 0, 0.55);
+    inset 0 1px 0 rgba(212, 175, 55, 0.30),
+    0 4px 12px rgba(0, 0, 0, 0.55),
+    0 0 16px rgba(212, 175, 55, 0.25);
+  transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
 }
+.ace-library-stub-btn:hover {
+  filter: brightness(1.1);
+  box-shadow:
+    inset 0 1px 0 rgba(212, 175, 55, 0.40),
+    0 4px 16px rgba(0, 0, 0, 0.65),
+    0 0 24px rgba(212, 175, 55, 0.45);
+}
+.ace-library-stub-btn:active {
+  transform: translateY(1px);
+}
+.ace-library-stub-btn i { color: inherit; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ACE — LIBRARY WINDOW (library-window.mjs)
+   Dedicated window. Bigger fonts, higher contrast, more breathing room.
+   Uses the same .ace-library / .ace-library-card classes as the panel
+   used to (we just scope tweaks under .ace-library-window-root so they
+   don't leak into anything else).
+   ═══════════════════════════════════════════════════════════════════════ */
+.ace-library-window {
+  border: 1px solid #2a1a05 !important;
+  box-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.85),
+    0 0 0 1px rgba(212, 175, 55, 0.45) !important;
+  overflow: hidden;
+}
+.ace-library-window .window-header {
+  background:
+    linear-gradient(180deg,
+      rgba(212, 175, 55, 0.18) 0%,
+      rgba(20, 20, 22, 0.95) 55%,
+      rgba(10, 10, 12, 1.0) 100%) !important;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.55) !important;
+  padding: 6px 22px !important;
+}
+.ace-library-window .window-header .window-title {
+  font-family: "Cinzel Decorative", "Cinzel", serif !important;
+  color: #d4af37 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  font-size: 17px !important;
+  text-shadow:
+    0 0 10px rgba(212, 175, 55, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.85) !important;
+}
+.ace-library-window .window-content {
+  background:
+    linear-gradient(180deg, rgba(184, 148, 58, 0.04) 0%, transparent 20%, rgba(0, 0, 0, 0.5) 100%),
+    #0a0a0c !important;
+  color: #e8d8a8 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(212, 175, 55, 0.18),
+    inset 0 0 32px rgba(0, 0, 0, 0.65);
+}
+
+.ace-library-window-root {
+  height: 100%;
+  overflow-y: auto;
+  padding: 16px 24px 24px;
+}
+.ace-library-window-root::-webkit-scrollbar { width: 12px; }
+.ace-library-window-root::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.55); }
+.ace-library-window-root::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.65), rgba(120, 90, 30, 0.6));
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+}
+.ace-library-window-root::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(255, 220, 130, 0.75), rgba(180, 140, 40, 0.7));
+}
+
+/* ── Larger / higher-contrast type rules scoped to the LibraryWindow ── */
+
+/* Dropzone — bigger, more obvious */
+.ace-library-window-root .ace-library-dropzone-slim {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 14px 18px !important;
+  color: #f0e0b4;
+  border: 2px dashed rgba(212, 175, 55, 0.5) !important;
+  background: rgba(0, 0, 0, 0.35) !important;
+  letter-spacing: 0.04em;
+}
+.ace-library-window-root .ace-library-dropzone-slim:hover,
+.ace-library-window-root .ace-library-dropzone-slim.ace-library-dragover {
+  border-color: #ffd878 !important;
+  background: rgba(212, 175, 55, 0.10) !important;
+  color: #ffe89a;
+}
+.ace-library-window-root .ace-library-formats-slim {
+  color: #c9b890 !important;
+  font-size: 12.5px;
+}
+
+/* Document cards — bigger title, bigger meta, more contrast */
+.ace-library-window-root .ace-library-card {
+  border: 1px solid rgba(212, 175, 55, 0.30) !important;
+  background: linear-gradient(180deg, rgba(20, 20, 22, 0.95), rgba(10, 10, 12, 0.85)) !important;
+  margin-bottom: 10px !important;
+  border-radius: 5px;
+}
+.ace-library-window-root .ace-library-card:hover {
+  border-color: rgba(212, 175, 55, 0.55) !important;
+}
+
+.ace-library-window-root .ace-lib-collapsed-bar {
+  padding: 12px 16px !important;
+}
+.ace-library-window-root .ace-lib-collapsed-title {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  color: #ffe89a !important;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+}
+.ace-library-window-root .ace-library-card-title {
+  font-family: "Cinzel Decorative", "Cinzel", serif !important;
+  font-size: 18px !important;
+  color: #ffe89a !important;
+  letter-spacing: 0.06em !important;
+  text-shadow:
+    0 0 10px rgba(212, 175, 55, 0.4),
+    0 1px 2px rgba(0, 0, 0, 0.85) !important;
+}
+.ace-library-window-root .ace-library-card-meta {
+  font-size: 13.5px !important;
+  color: #d4af37 !important;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.ace-library-window-root .ace-library-card-status {
+  font-size: 13px !important;
+  color: #f0d8d8 !important;
+}
+.ace-library-window-root .ace-library-card-tags {
+  margin-top: 6px;
+  gap: 6px;
+}
+.ace-library-window-root .ace-library-tag {
+  background: rgba(212, 175, 55, 0.12) !important;
+  border: 1px solid rgba(212, 175, 55, 0.4) !important;
+  color: #ffd878 !important;
+  font-size: 12px !important;
+  font-weight: 700;
+  padding: 2px 8px !important;
+  letter-spacing: 0.04em;
+}
+
+/* Pipeline dots — bigger and brighter */
+.ace-library-window-root .ace-pipeline-dot,
+.ace-library-window-root .ace-pip-inline {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em;
+}
+.ace-library-window-root .ace-pipeline-done {
+  color: #80c080 !important;
+}
+.ace-library-window-root .ace-pipeline-action {
+  color: #ffd878 !important;
+}
+.ace-library-window-root .ace-pipeline-pending {
+  color: rgba(201, 184, 144, 0.55) !important;
+}
+
+/* Action buttons inside cards */
+.ace-library-window-root .ace-lib-action {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 13.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase;
+  padding: 7px 14px !important;
+  background: linear-gradient(180deg, rgba(20, 20, 22, 0.95), rgba(10, 10, 12, 0.85)) !important;
+  border: 1px solid rgba(212, 175, 55, 0.45) !important;
+  color: #d4af37 !important;
+  border-radius: 3px;
+  cursor: pointer;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ace-library-window-root .ace-lib-action:hover {
+  border-color: #ffd878 !important;
+  color: #ffe89a !important;
+  box-shadow: 0 0 10px rgba(212, 175, 55, 0.30);
+}
+.ace-library-window-root .ace-lib-action-delete {
+  border-color: rgba(220, 80, 80, 0.45) !important;
+  color: #ff9090 !important;
+}
+.ace-library-window-root .ace-lib-action-delete:hover {
+  border-color: #ff5050 !important;
+  color: #ff8a8a !important;
+  box-shadow: 0 0 10px rgba(220, 80, 80, 0.4);
+}
+.ace-library-window-root .ace-lib-action-nuke {
+  border-color: rgba(220, 60, 60, 0.55) !important;
+  color: #ff7070 !important;
+}
+.ace-library-window-root .ace-lib-action-nuke:hover {
+  border-color: #ff3030 !important;
+  color: #ff5050 !important;
+  box-shadow: 0 0 12px rgba(220, 60, 60, 0.45);
+}
+
+/* World Bible section — much bigger and more prominent */
+.ace-library-window-root .ace-bible-section {
+  margin-top: 24px;
+  padding: 18px 22px !important;
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.06), rgba(0, 0, 0, 0.30)) !important;
+  border: 1px solid rgba(212, 175, 55, 0.45) !important;
+  border-radius: 5px;
+  box-shadow:
+    inset 0 0 20px rgba(0, 0, 0, 0.5),
+    0 0 14px rgba(212, 175, 55, 0.15);
+}
+.ace-library-window-root .ace-bible-header {
+  font-family: "Cinzel Decorative", "Cinzel", serif !important;
+  font-size: 22px !important;
+  color: #ffd878 !important;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  text-shadow:
+    0 0 14px rgba(212, 175, 55, 0.5),
+    0 1px 2px rgba(0, 0, 0, 0.85);
+}
+.ace-library-window-root .ace-bible-header i {
+  color: #ffd878 !important;
+  margin-right: 8px;
+  filter: drop-shadow(0 0 6px rgba(212, 175, 55, 0.5));
+}
+.ace-library-window-root .ace-bible-setting {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 16px !important;
+  color: #ffe89a !important;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-left: 8px;
+}
+.ace-library-window-root .ace-bible-era {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 14.5px !important;
+  color: #d8cdb6 !important;
+  margin: 6px 0 12px;
+  font-style: italic;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+}
+.ace-library-window-root .ace-bible-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ace-library-window-root .ace-bible-badge {
+  background: rgba(212, 175, 55, 0.12) !important;
+  border: 1px solid rgba(212, 175, 55, 0.45) !important;
+  color: #ffd878 !important;
+  padding: 5px 12px !important;
+  border-radius: 12px;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 13.5px !important;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.ace-library-window-root .ace-bible-badge strong {
+  color: #ffe89a !important;
+  font-size: 15px;
+  font-weight: 800;
+}
+.ace-library-window-root .ace-bible-select {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 14.5px !important;
+  padding: 8px 12px !important;
+  background: rgba(0, 0, 0, 0.5) !important;
+  border: 1px solid rgba(212, 175, 55, 0.5) !important;
+  color: #f0e0b4 !important;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  width: 100%;
+}
+.ace-library-window-root .ace-bible-generate,
+.ace-library-window-root .ace-bible-regen {
+  font-size: 14.5px !important;
+  font-weight: 700 !important;
+  padding: 10px 18px !important;
+  margin-top: 8px;
+}
+
+/* Empty state */
+.ace-library-window-root .ace-library-empty {
+  text-align: center;
+  padding: 48px 24px !important;
+  color: rgba(216, 205, 182, 0.65) !important;
+}
+.ace-library-window-root .ace-library-empty i {
+  font-size: 36px !important;
+  color: rgba(212, 175, 55, 0.45) !important;
+  margin-bottom: 12px;
+}
+.ace-library-window-root .ace-library-empty p {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 15px !important;
+  margin: 4px 0 !important;
+}
+.ace-library-window-root .ace-library-empty-hint {
+  color: rgba(201, 184, 144, 0.6) !important;
+  font-size: 13.5px !important;
+  font-style: italic;
+}
+
+/* Nuke bar */
+.ace-library-window-root .ace-library-nuke-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 10px 0 14px;
+}
+.ace-library-window-root .ace-lib-nuke-btn {
+  background: linear-gradient(180deg, rgba(220, 60, 60, 0.18), rgba(60, 0, 0, 0.40)) !important;
+  border-color: rgba(220, 80, 80, 0.55) !important;
+  color: #ff8a8a !important;
+}
+.ace-library-window-root .ace-lib-nuke-btn:hover {
+  background: linear-gradient(180deg, rgba(220, 60, 60, 0.30), rgba(80, 0, 0, 0.55)) !important;
+  border-color: #ff5050 !important;
+  box-shadow: 0 0 14px rgba(220, 60, 60, 0.5) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ACE — LIBRARY WINDOW TOOLBAR (Recover button at top)
+   ═══════════════════════════════════════════════════════════════════════ */
+.ace-library-window-root .ace-library-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 0 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.25);
+}
+.ace-library-window-root .ace-library-toolbar-btn {
+  font-family: "Rajdhani", sans-serif;
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  background: linear-gradient(180deg, rgba(20, 20, 22, 0.95), rgba(10, 10, 12, 0.85));
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  color: #d4af37;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+  transition: all 0.15s ease;
+}
+.ace-library-window-root .ace-library-toolbar-btn:hover {
+  border-color: #ffd878;
+  color: #ffe89a;
+  box-shadow: 0 0 12px rgba(212, 175, 55, 0.3);
+}
+.ace-library-window-root .ace-library-toolbar-btn i { color: inherit; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ACE — RECOVERY DIALOG (digest-recovery.mjs)
+   Black-metal + gold trim, matching Engine's other windows. Big legible
+   text, color-coded source-type cards (WIP / backup / no-recovery).
+   ═══════════════════════════════════════════════════════════════════════ */
+.ace-recovery-dialog {
+  border: 1px solid #2a1a05 !important;
+  box-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.85),
+    0 0 0 1px rgba(212, 175, 55, 0.45) !important;
+  overflow: hidden;
+}
+.ace-recovery-dialog .window-header {
+  background:
+    linear-gradient(180deg,
+      rgba(212, 175, 55, 0.18) 0%,
+      rgba(20, 20, 22, 0.95) 55%,
+      rgba(10, 10, 12, 1.0) 100%) !important;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.55) !important;
+  padding: 6px 22px !important;
+}
+.ace-recovery-dialog .window-header .window-title {
+  font-family: "Cinzel Decorative", "Cinzel", serif !important;
+  color: #d4af37 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  font-size: 17px !important;
+  text-shadow:
+    0 0 10px rgba(212, 175, 55, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.85) !important;
+}
+.ace-recovery-dialog .window-content {
+  background:
+    linear-gradient(180deg, rgba(184, 148, 58, 0.04) 0%, transparent 20%, rgba(0, 0, 0, 0.5) 100%),
+    #0a0a0c !important;
+  color: #e8d8a8 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(212, 175, 55, 0.18),
+    inset 0 0 32px rgba(0, 0, 0, 0.65);
+}
+
+.ace-rec-root {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 24px 24px;
+}
+.ace-rec-root::-webkit-scrollbar { width: 12px; }
+.ace-rec-root::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.55); }
+.ace-rec-root::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.65), rgba(120, 90, 30, 0.6));
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+}
+
+.ace-rec-loading,
+.ace-rec-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: #c9b890;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 16px;
+}
+.ace-rec-loading i {
+  font-size: 28px;
+  color: #d4af37;
+  margin-right: 10px;
+}
+.ace-rec-empty i {
+  font-size: 48px;
+  color: #80c080;
+  margin-bottom: 16px;
+  display: block;
+  filter: drop-shadow(0 0 12px rgba(120, 200, 120, 0.4));
+}
+.ace-rec-empty h2 {
+  font-family: "Cinzel Decorative", serif;
+  color: #ffe89a;
+  font-size: 22px;
+  margin: 0 0 8px;
+  text-shadow: 0 0 12px rgba(212, 175, 55, 0.4);
+}
+.ace-rec-empty p {
+  color: #c9b890;
+  font-size: 14.5px;
+  max-width: 460px;
+  margin: 0 auto;
+}
+
+.ace-rec-error {
+  background: rgba(200, 60, 60, 0.12);
+  border: 1px solid rgba(220, 80, 80, 0.5);
+  color: #f0c8c8;
+  padding: 14px 18px;
+  border-radius: 5px;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 15px;
+}
+.ace-rec-error i { color: #ff8080; margin-right: 8px; }
+.ace-rec-error strong { color: #ffaa44; }
+
+/* Header summary strip */
+.ace-rec-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 0 0 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.30);
+}
+.ace-rec-summary { flex: 1; }
+.ace-rec-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.ace-rec-stat {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 5px 12px;
+  border-radius: 12px;
+  background: rgba(212, 175, 55, 0.10);
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  color: #d4af37;
+}
+.ace-rec-stat strong {
+  color: #ffe89a;
+  font-size: 15px;
+  margin-right: 4px;
+}
+.ace-rec-stat-orphans {
+  background: rgba(220, 130, 60, 0.10);
+  border-color: rgba(220, 150, 60, 0.45);
+  color: #ffaa66;
+}
+.ace-rec-stat-orphans strong { color: #ffd089; }
+.ace-rec-stat-recoverable {
+  background: rgba(120, 200, 120, 0.08);
+  border-color: rgba(120, 200, 120, 0.45);
+  color: #80c080;
+}
+.ace-rec-stat-recoverable strong { color: #a8e0a8; }
+
+.ace-rec-summary-blurb {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: #c9b890;
+  margin: 4px 0 0;
+}
+
+.ace-rec-rescan {
+  font-family: "Rajdhani", sans-serif;
+  font-weight: 600;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 14px;
+  background: linear-gradient(180deg, #1f1d1a 0%, #14110e 100%);
+  border: 1px solid rgba(184, 148, 58, 0.45);
+  color: #d4af37;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.ace-rec-rescan:hover {
+  border-color: #d4af37;
+  color: #ffd878;
+  box-shadow: 0 0 8px rgba(212, 175, 55, 0.25);
+}
+
+/* Orphan list */
+.ace-rec-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ace-rec-orphan {
+  background: linear-gradient(180deg, rgba(20, 20, 22, 0.92), rgba(10, 10, 12, 0.85));
+  border: 1px solid rgba(212, 175, 55, 0.30);
+  border-radius: 5px;
+  padding: 14px 18px;
+}
+.ace-rec-orphan-empty {
+  border-color: rgba(140, 140, 140, 0.20);
+  opacity: 0.72;
+}
+
+.ace-rec-orphan-head {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed rgba(212, 175, 55, 0.22);
+}
+.ace-rec-orphan-name {
+  font-family: "Cinzel Decorative", "Cinzel", serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffe89a;
+  letter-spacing: 0.05em;
+  text-shadow:
+    0 0 10px rgba(212, 175, 55, 0.4),
+    0 1px 2px rgba(0, 0, 0, 0.85);
+  margin-bottom: 4px;
+}
+.ace-rec-orphan-meta {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 12.5px;
+  color: #c9b890;
+  letter-spacing: 0.02em;
+}
+.ace-rec-orphan-meta code {
+  background: rgba(0, 0, 0, 0.5);
+  color: #d4af37;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11.5px;
+}
+
+.ace-rec-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ace-rec-source {
+  padding: 10px 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  background: rgba(0, 0, 0, 0.30);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ace-rec-source-wip {
+  background: linear-gradient(135deg, rgba(120, 200, 120, 0.06) 0%, rgba(0, 0, 0, 0.30) 100%);
+  border-color: rgba(120, 200, 120, 0.35);
+}
+.ace-rec-source-backup {
+  background: linear-gradient(135deg, rgba(120, 160, 220, 0.06) 0%, rgba(0, 0, 0, 0.30) 100%);
+  border-color: rgba(120, 160, 220, 0.35);
+}
+.ace-rec-source-empty,
+.ace-rec-source-none {
+  background: rgba(140, 140, 140, 0.05);
+  border-color: rgba(140, 140, 140, 0.20);
+  color: rgba(201, 184, 144, 0.55);
+}
+
+.ace-rec-source-title {
+  font-family: "Rajdhani", sans-serif;
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #d4af37;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+}
+.ace-rec-source-wip .ace-rec-source-title { color: #80c080; }
+.ace-rec-source-backup .ace-rec-source-title { color: #80a8d0; }
+
+.ace-rec-source-stats {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 13.5px;
+  color: #d8cdb6;
+  line-height: 1.55;
+}
+.ace-rec-source-stats strong {
+  color: #ffe89a;
+  font-weight: 700;
+}
+.ace-rec-source-stats em {
+  color: #c9b890;
+  font-style: italic;
+}
+.ace-rec-source-stats code {
+  background: rgba(0, 0, 0, 0.5);
+  color: #d4af37;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11.5px;
+}
+
+.ace-rec-source-none {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  font-family: "Rajdhani", sans-serif;
+  color: #c9b890;
+}
+.ace-rec-source-none i {
+  color: rgba(212, 175, 55, 0.5);
+  font-size: 16px;
+}
+
+.ace-rec-action {
+  align-self: flex-start;
+  font-family: "Rajdhani", sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  background: linear-gradient(180deg,
+    rgba(212, 175, 55, 0.18) 0%,
+    rgba(20, 20, 22, 0.95) 100%);
+  border: 1px solid rgba(212, 175, 55, 0.55);
+  color: #ffe89a;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  text-shadow: 0 0 8px rgba(212, 175, 55, 0.4), 0 1px 1px rgba(0, 0, 0, 0.85);
+  transition: all 0.15s ease;
+  box-shadow:
+    inset 0 1px 0 rgba(212, 175, 55, 0.30),
+    0 0 8px rgba(212, 175, 55, 0.15);
+}
+.ace-rec-action:hover {
+  filter: brightness(1.1);
+  box-shadow:
+    inset 0 1px 0 rgba(212, 175, 55, 0.40),
+    0 0 16px rgba(212, 175, 55, 0.40);
+}
+.ace-rec-action:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.ace-rec-source-wip .ace-rec-action {
+  border-color: rgba(120, 200, 120, 0.55);
+}
+.ace-rec-source-backup .ace-rec-action {
+  border-color: rgba(120, 160, 220, 0.55);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ACE — DIGEST BROWSER (digest-browser.mjs)
+   Black-metal + polished gold trim. Searchable category tabs, expandable
+   entries showing every field the AI extracted. Visible proof of digest.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.ace-digest-browser {
+  border: 1px solid #2a1a05 !important;
+  box-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.85),
+    0 0 0 1px rgba(212, 175, 55, 0.45) !important;
+  overflow: hidden;
+}
+.ace-digest-browser .window-header {
+  background:
+    linear-gradient(180deg,
+      rgba(212, 175, 55, 0.18) 0%,
+      rgba(20, 20, 22, 0.95) 55%,
+      rgba(10, 10, 12, 1.0) 100%) !important;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.55) !important;
+  padding: 6px 22px !important;
+}
+.ace-digest-browser .window-header .window-title {
+  font-family: "Cinzel Decorative", "Cinzel", serif !important;
+  color: #d4af37 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  text-shadow:
+    0 0 10px rgba(212, 175, 55, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.85) !important;
+}
+.ace-digest-browser .window-content {
+  background:
+    linear-gradient(180deg, rgba(184, 148, 58, 0.04) 0%, transparent 20%, rgba(0, 0, 0, 0.5) 100%),
+    #0a0a0c !important;
+  color: #e8d8a8 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(212, 175, 55, 0.18),
+    inset 0 0 32px rgba(0, 0, 0, 0.65);
+}
+
+.ace-digbrw-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1;
+  overflow: hidden;
+}
+
+.ace-digbrw-error {
+  padding: 24px;
+  color: #f0d8d8;
+  background: rgba(200, 60, 60, 0.10);
+  border: 1px solid rgba(220, 80, 80, 0.45);
+  border-radius: 5px;
+  margin: 16px;
+  font-family: "Rajdhani", sans-serif;
+}
+.ace-digbrw-error code {
+  background: rgba(0, 0, 0, 0.45);
+  color: #ffd878;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+/* ── Header strip: source name + counts + search ── */
+.ace-digbrw-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 18px;
+  background: linear-gradient(180deg, rgba(20, 20, 22, 0.95), rgba(10, 10, 12, 1.0));
+  border-bottom: 1px solid rgba(212, 175, 55, 0.30);
+  flex-shrink: 0;
+}
+.ace-digbrw-meta {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 13px;
+  color: #c9b890;
+  letter-spacing: 0.02em;
+}
+.ace-digbrw-meta strong {
+  color: #ffd878;
+  font-weight: 700;
+}
+.ace-digbrw-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  border-radius: 4px;
+  padding: 5px 12px;
+}
+.ace-digbrw-search-wrap i {
+  color: #d4af37;
+  opacity: 0.8;
+}
+.ace-digbrw-search {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #f0e0b4;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 14px;
+  padding: 4px 0;
+}
+.ace-digbrw-search::placeholder {
+  color: rgba(201, 184, 144, 0.5);
+  font-style: italic;
+}
+
+/* ── AI Summary callout — collapsible ── */
+.ace-digbrw-summary {
+  margin: 12px 18px 0;
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.06), rgba(0, 0, 0, 0.20));
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.ace-digbrw-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: #d4af37;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  user-select: none;
+}
+.ace-digbrw-summary-head:hover {
+  color: #ffd878;
+}
+.ace-digbrw-summary-head i {
+  color: inherit;
+}
+.ace-digbrw-summary-chevron {
+  margin-left: auto;
+  transition: transform 0.18s ease;
+  font-size: 12px;
+}
+.ace-digbrw-summary.expanded .ace-digbrw-summary-chevron {
+  transform: rotate(180deg);
+}
+.ace-digbrw-summary-body {
+  display: none;
+  padding: 4px 16px 14px;
+  color: #d8cdb6;
+  font-size: 14px;
+  line-height: 1.6;
+  border-top: 1px solid rgba(212, 175, 55, 0.20);
+}
+.ace-digbrw-summary.expanded .ace-digbrw-summary-body {
+  display: block;
+}
+.ace-digbrw-summary-body p {
+  margin: 8px 0;
+}
+
+/* ── Body: tab rail + content area ── */
+.ace-digbrw-body {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  overflow: hidden;
+  margin-top: 12px;
+}
+
+.ace-digbrw-tabs {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 6px;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.10));
+  border-right: 1px solid rgba(212, 175, 55, 0.25);
+  overflow-y: auto;
+}
+.ace-digbrw-tab {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #c9b890;
+  cursor: pointer;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+  width: 100%;
+  text-align: left;
+}
+.ace-digbrw-tab:hover {
+  background: linear-gradient(90deg, rgba(212, 175, 55, 0.12), rgba(212, 175, 55, 0.02));
+  color: #ffd878;
+  transform: translateX(2px);
+}
+.ace-digbrw-tab.active {
+  background: linear-gradient(90deg, rgba(212, 175, 55, 0.22), rgba(212, 175, 55, 0.04));
+  border-color: rgba(212, 175, 55, 0.55);
+  color: #ffe89a;
+  box-shadow:
+    inset 0 0 12px rgba(0, 0, 0, 0.4),
+    0 0 8px rgba(212, 175, 55, 0.30);
+  text-shadow: 0 0 6px rgba(212, 175, 55, 0.55), 0 1px 1px rgba(0, 0, 0, 0.9);
+}
+.ace-digbrw-tab-icon {
+  width: 24px;
+  text-align: center;
+  color: inherit;
+}
+.ace-digbrw-tab-label {
+  flex: 1;
+}
+.ace-digbrw-tab-count {
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(212, 175, 55, 0.18);
+  color: #ffd878;
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(212, 175, 55, 0.40);
+  min-width: 28px;
+  text-align: center;
+}
+
+/* ── Content scroll area ── */
+.ace-digbrw-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 16px;
+}
+.ace-digbrw-content::-webkit-scrollbar { width: 10px; }
+.ace-digbrw-content::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.55); }
+.ace-digbrw-content::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.6), rgba(120, 90, 30, 0.6));
+  border-radius: 5px;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+}
+.ace-digbrw-content::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(255, 220, 130, 0.7), rgba(180, 140, 40, 0.7));
+}
+
+/* ── Empty state ── */
+.ace-digbrw-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: rgba(201, 184, 144, 0.55);
+}
+.ace-digbrw-empty i {
+  font-size: 36px;
+  margin-bottom: 14px;
+  display: block;
+  color: rgba(212, 175, 55, 0.35);
+}
+.ace-digbrw-empty p {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 14px;
+  margin: 0;
+}
+.ace-digbrw-empty strong { color: #ffd878; }
+
+/* ── Entry card (collapsible row) ── */
+.ace-digbrw-entry {
+  background: linear-gradient(180deg, rgba(20, 20, 22, 0.7), rgba(10, 10, 12, 0.5));
+  border: 1px solid rgba(212, 175, 55, 0.20);
+  border-radius: 4px;
+  margin-bottom: 6px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.ace-digbrw-entry:hover {
+  border-color: rgba(212, 175, 55, 0.45);
+}
+.ace-digbrw-entry.expanded {
+  border-color: rgba(212, 175, 55, 0.55);
+  box-shadow:
+    inset 0 0 12px rgba(0, 0, 0, 0.45),
+    0 0 8px rgba(212, 175, 55, 0.20);
+}
+
+.ace-digbrw-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-family: "Rajdhani", sans-serif;
+  flex-wrap: wrap;
+}
+.ace-digbrw-entry-chevron {
+  color: #d4af37;
+  font-size: 11px;
+  transition: transform 0.18s ease;
+  flex-shrink: 0;
+}
+.ace-digbrw-entry.expanded .ace-digbrw-entry-chevron {
+  transform: rotate(90deg);
+}
+.ace-digbrw-entry-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #ffe89a;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+}
+.ace-digbrw-entry-brief {
+  font-size: 12.5px;
+  color: #c9b890;
+  flex: 1;
+  font-style: italic;
+}
+
+/* Knowledge level badges (common, uncommon, rare, secret) */
+.ace-digbrw-knowledge {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 8px;
+  border-radius: 10px;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+.ace-digbrw-knowledge-common,
+.ace-digbrw-knowledge-public,
+.ace-digbrw-knowledge-known {
+  background: rgba(120, 180, 120, 0.15);
+  color: #80c080;
+  border: 1px solid rgba(120, 180, 120, 0.40);
+}
+.ace-digbrw-knowledge-uncommon,
+.ace-digbrw-knowledge-regional {
+  background: rgba(120, 160, 220, 0.15);
+  color: #80a8d0;
+  border: 1px solid rgba(120, 160, 220, 0.40);
+}
+.ace-digbrw-knowledge-rare,
+.ace-digbrw-knowledge-restricted {
+  background: rgba(212, 175, 55, 0.15);
+  color: #ffd878;
+  border: 1px solid rgba(212, 175, 55, 0.45);
+}
+.ace-digbrw-knowledge-secret,
+.ace-digbrw-knowledge-hidden,
+.ace-digbrw-knowledge-spoiler {
+  background: rgba(200, 80, 80, 0.15);
+  color: #ff9090;
+  border: 1px solid rgba(200, 80, 80, 0.45);
+}
+
+/* Entry detail view (visible when expanded) */
+.ace-digbrw-entry-body {
+  padding: 12px 18px 14px 30px;
+  background: rgba(0, 0, 0, 0.30);
+  border-top: 1px solid rgba(212, 175, 55, 0.18);
+  font-family: "Rajdhani", sans-serif;
+  font-size: 14px;
+  color: #d8cdb6;
+  line-height: 1.55;
+}
+.ace-digbrw-field {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(212, 175, 55, 0.10);
+}
+.ace-digbrw-field:last-child { border-bottom: none; }
+.ace-digbrw-field-label {
+  color: #d4af37;
+  font-weight: 700;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+}
+.ace-digbrw-field-value {
+  color: #e8d8a8;
+}
+.ace-digbrw-field-value p { margin: 0 0 8px; }
+.ace-digbrw-field-value p:last-child { margin-bottom: 0; }
+.ace-digbrw-field-list {
+  margin: 0;
+  padding-left: 18px;
+}
+.ace-digbrw-field-list li {
+  padding: 1px 0;
+}
+.ace-digbrw-field-json {
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(212, 175, 55, 0.20);
+  border-radius: 3px;
+  padding: 8px 10px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #c9b890;
+  overflow-x: auto;
+  margin: 4px 0 0;
+}
+
+/* ─── Digest model slow-warning box ──────────────────────────────────── */
+/* Big red callout beneath the digest dropdown when user picks a local
+   provider for digest. Designed to be impossible to miss — bright red
+   border, glowing amber accent on the lead-in. */
+.ace-cfg-warning-box {
+  margin-top: 10px;
+  padding: 12px 16px;
+  border-radius: 5px;
+  font-family: "Rajdhani", "Signika", sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  letter-spacing: 0.02em;
+}
+.ace-cfg-warning-slow {
+  background: linear-gradient(135deg, rgba(200, 60, 60, 0.18) 0%, rgba(200, 60, 60, 0.06) 100%);
+  border: 1px solid rgba(220, 80, 80, 0.55);
+  color: #f0d8d8;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+  box-shadow: 0 0 12px rgba(200, 60, 60, 0.25);
+}
+.ace-cfg-warning-slow strong {
+  color: #ffc060;
+  font-weight: 700;
+  text-shadow: 0 0 8px rgba(255, 170, 68, 0.5);
+}
+
+/* ─── Dark dropdown options inside the config panel ──────────────────── */
+/* Native <select> dropdown options default to white in Chrome. Dark them
+   so text reads on the brass theme without breaking system rendering. */
+.ace-config-panel select option,
+.ace-config-panel .ace-cfg-input select option {
+  background-color: #14110e;
+  color: #e8d8a8;
+  padding: 4px 8px;
+}
+.ace-config-panel select option:hover,
+.ace-config-panel select option:checked,
+.ace-config-panel .ace-cfg-input select option:hover,
+.ace-config-panel .ace-cfg-input select option:checked {
+  background-color: #2a2620;
+  color: #ffd878;
+}
+.ace-cfg-test-result {
+  flex: 1 1 100%;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  display: none;
+}
+.ace-cfg-test-result.testing,
+.ace-cfg-test-result.success,
+.ace-cfg-test-result.fail {
+  display: block;
+}
+.ace-cfg-test-result.testing {
+  background: linear-gradient(135deg, rgba(184, 148, 58, 0.10) 0%, rgba(184, 148, 58, 0.04) 100%);
+  border: 1px solid rgba(184, 148, 58, 0.40);
+  color: #c9b890;
+}
+.ace-cfg-test-result.success {
+  background: linear-gradient(135deg, rgba(93, 184, 138, 0.12) 0%, rgba(93, 184, 138, 0.04) 100%);
+  border: 1px solid rgba(93, 184, 138, 0.45);
+  color: #5db88a;
+}
+.ace-cfg-test-result.success i { color: #5db88a; margin-right: 6px; }
+.ace-cfg-test-result.fail {
+  background: linear-gradient(135deg, rgba(200, 60, 60, 0.10) 0%, rgba(200, 60, 60, 0.03) 100%);
+  border: 1px solid rgba(200, 60, 60, 0.40);
+  color: #e87070;
+}
+.ace-cfg-test-result.fail i { color: #e87070; margin-right: 6px; }
+.ace-cfg-test-result strong { color: inherit; font-weight: 700; }
 
 /* ─── INITIATIVE REORDER ARROWS (moved from ACE: Envoy, Phase 1A) ─────── */
 

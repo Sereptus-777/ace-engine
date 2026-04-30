@@ -702,7 +702,10 @@ RULES:
 
         // ── Ollama (local) via GM socket proxy (default) ────────────────
         try {
-            const text = await AIHandler._callOllamaViaGM(messages);
+            // Pass `images` through — when present, Ollama call switches to
+            // /api/chat (native vision endpoint) and injects images on the
+            // last user message in Ollama's expected format.
+            const text = await AIHandler._callOllamaViaGM(messages, images);
             if (!text) {
                 ui.notifications?.warn("Ollama returned an empty response. Is your model loaded? Try: ollama pull llama3.2");
                 return "My mind is foggy...";
@@ -711,11 +714,18 @@ RULES:
             return text;
         } catch (err) {
             console.error("AI Handler | Ollama Error:", err);
-            // Show a helpful notification so the user knows what went wrong
             const isTimeout = err.message?.includes("timed out") || err.name === "AbortError";
-            const isNetwork = err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError");
+            const isNetwork = err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError") || err.message?.includes("not responding");
             if (isNetwork) {
-                ui.notifications?.error("Ollama is not responding — is it running? Start it with 'ollama serve' or check that OLLAMA_ORIGINS=* is set.", { permanent: true });
+                // Friendly action dialog (once per session) instead of a permanent red banner.
+                try {
+                    const { showOllamaDownDialog } = await import("../connection-dialog.mjs");
+                    const apiUrl = (() => { try { return game.settings.get(MODULE_ID, "apiUrl") || "http://localhost:11434"; } catch (_) { return "http://localhost:11434"; } })();
+                    showOllamaDownDialog({ message: err.message, url: apiUrl });
+                } catch (e) {
+                    // Fallback to a non-permanent toast if the dialog import fails
+                    ui.notifications?.error(`Ollama isn't responding. Open ACE Engine settings to switch provider or test connection.`);
+                }
             } else if (isTimeout) {
                 ui.notifications?.warn("Ollama is taking too long to respond. The model may still be loading — try again in a moment.");
             } else {
@@ -726,17 +736,47 @@ RULES:
     }
 
     // ─── OLLAMA CALLER ──────────────────────────────────────────────────────
-    static _callOllamaViaGM(messages) {
+    // `images` is an array of { base64, mimeType }. When present, the call
+    // switches from /v1/chat/completions (OpenAI-compat) to /api/chat
+    // (Ollama's native vision endpoint) and attaches images to the last
+    // user message using Ollama's expected `message.images = [base64...]`
+    // shape. Vision-capable models (llava, llama3.2-vision, qwen2-vl,
+    // bakllava) honor this; non-vision models silently ignore it.
+    static _callOllamaViaGM(messages, images = []) {
         if (game.user.isGM) {
-            return AIHandler._fetchOllama(messages);
+            return AIHandler._fetchOllama(messages, images);
         }
-        return AIHandler._callOllamaViaSocket(messages);
+        return AIHandler._callOllamaViaSocket(messages, images);
     }
 
-    static async _fetchOllama(messages) {
+    static async _fetchOllama(messages, images = []) {
         const { apiUrl, modelName } = getEnvoyAIConfig();
         const ollamaUrl   = apiUrl || "http://localhost:11434";
         const ollamaModel = modelName || "llama3.2";
+
+        // ── Vision path: use Ollama's native /api/chat endpoint ──
+        // The OpenAI-compat /v1/chat/completions endpoint may strip Ollama's
+        // image format, so when images are present we use the native endpoint
+        // and Ollama's own message shape.
+        if (images?.length) {
+            const visionMessages = messages.map(m => ({ ...m }));
+            const lastUser = [...visionMessages].reverse().find(m => m.role === "user");
+            if (lastUser) lastUser.images = images.map(img => img.base64);
+
+            const res = await fetch(`${ollamaUrl}/api/chat`, {
+                method:  "POST",
+                signal:  AbortSignal.timeout(AI_FETCH_TIMEOUT),
+                headers: { "Content-Type": "application/json" },
+                body:    JSON.stringify({ model: ollamaModel, messages: visionMessages, stream: false }),
+            });
+            const json = await res.json();
+            if (json.error) throw new Error(json.error);
+            const text = json.message?.content;
+            if (!text) throw new Error("Ollama returned no content");
+            return text;
+        }
+
+        // ── Non-vision path: keep existing OpenAI-compat endpoint ──
         const res  = await fetch(`${ollamaUrl}/v1/chat/completions`, {
             method:  "POST",
             signal:  AbortSignal.timeout(AI_FETCH_TIMEOUT),
@@ -750,7 +790,7 @@ RULES:
         return text;
     }
 
-    static _callOllamaViaSocket(messages) {
+    static _callOllamaViaSocket(messages, images = []) {
         return new Promise((resolve, reject) => {
             const requestId = foundry.utils.randomID();
             const timeout   = setTimeout(() => {
@@ -770,7 +810,8 @@ RULES:
             game.socket.emit(`module.${MODULE_ID}`, {
                 action: "ollamaRequest",
                 requestId,
-                messages
+                messages,
+                images,  // forwarded so the GM-side handler can include them in the actual fetch
             });
         });
     }

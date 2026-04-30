@@ -94,30 +94,99 @@ export class AceSettings {
 
     // ── AI Provider ─────────────────────────────────────────
     s("aiProvider", {
-      name: "ACE.Settings.AiProvider.Name",
-      hint: "ACE.Settings.AiProvider.Hint",
+      name: "AI Provider",
+      hint: "Which AI service ACE talks to. 🆓 = local + free, 💰 = cloud paid, 💰🆓 = cloud with free tier or free models. Setting this picks the matching default URL and model below.",
       type: String,
       choices: {
-        openai: "OpenAI / ChatGPT (free tier available)",
-        anthropic: "Anthropic (Claude)",
-        ollama: "Ollama (Local — free, requires install)",
-        lmstudio: "LM Studio (Local — free, requires install)",
-        openrouter: "OpenRouter (many models, pay-per-use)",
-        custom: "Custom OpenAI-Compatible endpoint",
+        ollama:     "🆓 Ollama — Local, FREE (requires install)",
+        lmstudio:   "🆓 LM Studio — Local, FREE (requires install)",
+        openrouter: "💰🆓 OpenRouter — many models, free + paid",
+        openai:     "💰🆓 OpenAI / ChatGPT — paid, free tier available",
+        anthropic:  "💰 Anthropic (Claude) — paid",
+        custom:     "⚙ Custom OpenAI-Compatible endpoint",
       },
       default: "ollama",
+      // Auto-sync URL + Model to the new provider's defaults. Fires whenever
+      // the provider value is saved — main page, panel, console, doesn't
+      // matter. Customized URLs/models (anything NOT in the known-defaults
+      // list) are preserved so power users don't get clobbered.
+      onChange: async (newProvider) => {
+        try {
+          const defaults = AceSettings.PROVIDER_DEFAULTS[newProvider];
+          if (!defaults) return;
+
+          // Known defaults across all providers — any current value matching
+          // these is treated as "unedited", safe to swap.
+          const knownUrls   = Object.values(AceSettings.PROVIDER_DEFAULTS).map(d => d.apiUrl);
+          const knownModels = Object.values(AceSettings.PROVIDER_DEFAULTS).map(d => d.modelName);
+
+          const currentUrl   = game.settings.get(MODULE_ID, "apiUrl") || "";
+          const currentModel = game.settings.get(MODULE_ID, "modelName") || "";
+
+          const updates = [];
+          if (!currentUrl || knownUrls.includes(currentUrl)) {
+            await game.settings.set(MODULE_ID, "apiUrl", defaults.apiUrl);
+            updates.push(`URL → ${defaults.apiUrl}`);
+          }
+          if (!currentModel || knownModels.includes(currentModel)) {
+            await game.settings.set(MODULE_ID, "modelName", defaults.modelName);
+            updates.push(`Model → ${defaults.modelName}`);
+          }
+
+          // ── Also retarget the digest extraction model ──────────────────
+          // Digest is a separate model setting (cheap/fast extractor). When
+          // the user switches to a local provider, the previously-configured
+          // cloud digest will silently fail (wrong key/route). Auto-retarget
+          // to a same-provider default — but ONLY if current is a known
+          // default we recognize. Custom digest selections are preserved.
+          const KNOWN_DIGEST_DEFAULTS = new Set([
+            "",  // empty = use main, always safe to retarget
+            "openai:gpt-4o-mini",
+            "openai:gpt-4.1-nano",
+            "openai:gpt-4.1-mini",
+            "openai:gpt-4o",
+            "anthropic:claude-haiku-4-5-20251001",
+            "anthropic:claude-sonnet-4-20250514",
+            "ollama:qwen2.5-coder:32b",
+            "ollama:qwen2.5:14b",
+            "ollama:llama3.1",
+          ]);
+          const currentDigest = game.settings.get(MODULE_ID, "digestModel") || "";
+          if (KNOWN_DIGEST_DEFAULTS.has(currentDigest)) {
+            const newDigestByProvider = {
+              openai:     "openai:gpt-4o-mini",
+              anthropic:  "anthropic:claude-haiku-4-5-20251001",
+              openrouter: "openai:gpt-4o-mini",  // OR has GPT-4o Mini; cheapest cross-provider digest
+              ollama:     "ollama:llama3.1",
+              lmstudio:   "",                    // LM Studio uses main
+              custom:     "",
+            };
+            const newDigest = newDigestByProvider[newProvider] ?? "";
+            if (newDigest !== currentDigest) {
+              await game.settings.set(MODULE_ID, "digestModel", newDigest);
+              updates.push(`Digest → ${newDigest || "(use main)"}`);
+            }
+          }
+
+          if (updates.length) {
+            ui.notifications?.info(`ACE Engine — provider changed to ${newProvider}: ${updates.join(", ")}`);
+          }
+        } catch (err) {
+          console.warn("ACE: Engine | aiProvider onChange auto-sync failed:", err);
+        }
+      },
     });
 
     s("apiKey", {
-      name: "ACE.Settings.ApiKey.Name",
-      hint: "ACE.Settings.ApiKey.Hint",
+      name: "API Key",
+      hint: "Your provider's API key. Required for cloud providers (OpenAI, Anthropic, OpenRouter). Leave blank for local models (Ollama, LM Studio). Stored as a password and only visible to the GM.",
       type: String,
       default: "",
     });
 
     s("apiUrl", {
-      name: "ACE.Settings.ApiUrl.Name",
-      hint: "ACE.Settings.ApiUrl.Hint",
+      name: "API Endpoint URL",
+      hint: "The HTTP endpoint your AI provider listens on. Pick from the dropdown for standard hosts, or set to your own server's address if you're running a local model on a custom port.",
       type: String,
       choices: {
         "https://api.openai.com":      "OpenAI (api.openai.com)",
@@ -130,8 +199,8 @@ export class AceSettings {
     });
 
     s("modelName", {
-      name: "ACE.Settings.ModelName.Name",
-      hint: "ACE.Settings.ModelName.Hint",
+      name: "AI Model",
+      hint: "Which model your provider should use. Higher-tier models (GPT-4o, Claude Sonnet) write better prose but cost more. Smaller models (GPT-4o Mini, Haiku) are fast and cheap. For local Ollama, this is the model tag you've pulled.",
       type: String,
       choices: {
         // ── Cloud: OpenAI ──
@@ -204,8 +273,8 @@ export class AceSettings {
 
     // ── Game System ─────────────────────────────────────────
     s("gameSystem", {
-      name: "ACE.Settings.GameSystem.Name",
-      hint: "ACE.Settings.GameSystem.Hint",
+      name: "Game System",
+      hint: "Which TTRPG system this world uses. Leave on Auto-detect to read it from Foundry's installed game system. Pick a specific entry to override (useful for generic/custom systems where you want the AI to assume a familiar ruleset).",
       type: String,
       choices: {
         auto: "Auto-detect from Foundry",
@@ -231,22 +300,22 @@ export class AceSettings {
 
     // ── Prompt & Behavior ───────────────────────────────────
     s("systemPrompt", {
-      name: "ACE.Settings.SystemPrompt.Name",
-      hint: "ACE.Settings.SystemPrompt.Hint",
+      name: "System Prompt",
+      hint: "The instructions ACE sends to the AI before every conversation. Sets tone, response style, and what role the AI is playing. Edit to customize ACE's voice — keep the [NARRATION] block rules intact for the read-aloud feature to work.",
       type: String,
       default: DEFAULT_SYSTEM_PROMPT,
     });
 
     s("autoSuggestions", {
-      name: "ACE.Settings.AutoSuggestions.Name",
-      hint: "ACE.Settings.AutoSuggestions.Hint",
+      name: "Auto Story Suggestions",
+      hint: "When ON, ACE periodically generates story ideas and tactical hints in the background and posts them to the panel's Ideas tab. When OFF, the Ideas tab only fills when you click 'Generate'.",
       type: Boolean,
       default: false,
     });
 
     s("suggestionInterval", {
-      name: "ACE.Settings.SuggestionInterval.Name",
-      hint: "ACE.Settings.SuggestionInterval.Hint",
+      name: "Suggestion Interval (seconds)",
+      hint: "How often ACE generates a fresh story idea when Auto Story Suggestions is ON. Default 120 seconds (2 minutes). Lower = more ideas + higher API cost. Only used when Auto Story Suggestions is enabled.",
       type: Number,
       default: 120,
       range: { min: 30, max: 600, step: 10 },
@@ -258,16 +327,16 @@ export class AceSettings {
     });
 
     s("maxContextTokens", {
-      name: "ACE.Settings.MaxContextTokens.Name",
-      hint: "ACE.Settings.MaxContextTokens.Hint",
+      name: "Max Context Tokens",
+      hint: "Upper limit on how much conversation history + scene context + reference data is packaged with each AI request. Higher = better long-game memory but slower and more expensive. Default 4000 is a balanced middle ground. Lower it if you hit rate limits or context errors.",
       type: Number,
       default: 4000,
       range: { min: 500, max: 16000, step: 500 },
     });
 
     s("maxResponseTokens", {
-      name: "ACE.Settings.MaxResponseTokens.Name",
-      hint: "ACE.Settings.MaxResponseTokens.Hint",
+      name: "Max Response Tokens",
+      hint: "Upper limit on how long an AI reply can be. Higher = the AI can write longer narration and more detailed answers; lower = forces concise responses. Default 2048 fits most table-side use.",
       type: Number,
       default: 2048,
       range: { min: 256, max: 8192, step: 256 },
@@ -275,66 +344,66 @@ export class AceSettings {
 
     // ── Feature Toggles ────────────────────────────────────
     s("enableCritFumble", {
-      name: "ACE.Settings.EnableCritFumble.Name",
-      hint: "ACE.Settings.EnableCritFumble.Hint",
+      name: "Crit & Fumble Tables",
+      hint: "When ON, natural 20s and natural 1s on attack rolls automatically post a flavor message from ACE's crit/fumble tables. When OFF, the dnd5e default behavior is used.",
       type: Boolean,
       default: true,
     });
 
     s("enableSurvivalTracker", {
-      name: "ACE.Settings.EnableSurvivalTracker.Name",
-      hint: "ACE.Settings.EnableSurvivalTracker.Hint",
+      name: "Survival Tracker",
+      hint: "When ON, ACE tracks meals consumed and rests taken across the campaign and surfaces this on the panel. Helpful for hexcrawl / wilderness games. When OFF, the survival pane is hidden.",
       type: Boolean,
       default: true,
     });
 
     s("enableStoryNotes", {
-      name: "ACE.Settings.EnableStoryNotes.Name",
-      hint: "ACE.Settings.EnableStoryNotes.Hint",
+      name: "Story Notes & Memory Log",
+      hint: "When ON, ACE keeps a persistent campaign log (kills, crits, scene changes, key narrations) and uses it as memory for future AI calls. Disable only if you want a stateless assistant.",
       type: Boolean,
       default: true,
     });
 
     s("enableFameSystem", {
-      name: "ACE.Settings.EnableFameSystem.Name",
-      hint: "ACE.Settings.EnableFameSystem.Hint",
+      name: "Fame & Reputation",
+      hint: "When ON, ACE tracks a fame/reputation score for the party and adjusts NPC reactions, prices, and faction stance accordingly. When OFF, all NPCs treat the party as strangers each time.",
       type: Boolean,
       default: true,
     });
 
     s("enableNarrativeTime", {
-      name: "ACE.Settings.EnableNarrativeTime.Name",
-      hint: "ACE.Settings.EnableNarrativeTime.Hint",
+      name: "Narrative Time Advancement",
+      hint: "When ON, ACE advances in-world time based on actions taken (rests, travel, scene transitions) and surfaces it on the panel. Useful for tracking timed events. When OFF, time only moves when you set it manually.",
       type: Boolean,
       default: true,
     });
 
     s("syncSimpleCalendar", {
-      name: "ACE.Settings.SyncSimpleCalendar.Name",
-      hint: "ACE.Settings.SyncSimpleCalendar.Hint",
+      name: "Sync with Simple Calendar",
+      hint: "When ON and the Simple Calendar module is installed, ACE reads/writes the in-world date through Simple Calendar instead of its own internal clock. Only enable if you use Simple Calendar.",
       type: Boolean,
       default: false,
     });
 
     // ── Document Library ────────────────────────────────────
     s("enableDocumentLibrary", {
-      name: "ACE.Settings.EnableDocumentLibrary.Name",
-      hint: "ACE.Settings.EnableDocumentLibrary.Hint",
+      name: "Document Library",
+      hint: "When ON, ACE indexes uploaded PDFs / sourcebooks / notes and makes their content searchable so the AI can quote and reference them in answers. When OFF, the Library tab is hidden and the AI relies on training knowledge only.",
       type: Boolean,
       default: true,
     });
 
     s("docContextBudget", {
-      name: "ACE.Settings.DocContextBudget.Name",
-      hint: "ACE.Settings.DocContextBudget.Hint",
+      name: "Document Context Budget",
+      hint: "How many characters of indexed-document text get attached to each AI query. Higher = more accurate quotes from your books, but slower and more expensive. Set to 0 to disable document injection entirely.",
       type: Number,
       default: 4000,
       range: { min: 0, max: 50000, step: 500 },
     });
 
     s("enableVisionImages", {
-      name: "ACE.Settings.EnableVisionImages.Name",
-      hint: "ACE.Settings.EnableVisionImages.Hint",
+      name: "Vision Image Captioning",
+      hint: "When ON, ACE sends images from your documents to a vision-capable AI model to extract text, tables, and diagram content. Costs extra API credits per page and only works on providers with vision support (GPT-4o, Claude Sonnet 4). Leave OFF for text-only documents.",
       type: Boolean,
       default: false,
     });
@@ -496,8 +565,8 @@ export class AceSettings {
     s("debugMode", {
       scope: "client",
       config: false,
-      name: "ACE.Settings.DebugMode.Name",
-      hint: "ACE.Settings.DebugMode.Hint",
+      name: "Debug Mode",
+      hint: "When ON, ACE writes detailed logs to the browser console (F12). Useful for troubleshooting and bug reports — leave OFF for normal play.",
       type: Boolean,
       default: false,
     });
@@ -519,22 +588,22 @@ export class AceSettings {
 
     // ── Subtle Rolls ────────────────────────────────────────
     s("enableSubtleRolls", {
-      name: "ACE.Settings.EnableSubtleRolls.Name",
-      hint: "ACE.Settings.EnableSubtleRolls.Hint",
+      name: "Subtle Rolls",
+      hint: "When ON, certain skill checks (Insight, History, Arcana, etc.) are rolled silently and the result is delivered as AI narration instead of dice numbers. Preserves mystery — players don't know if they rolled a 2 or a 20 on Insight. Disable to use vanilla dnd5e rolls.",
       type: Boolean,
       default: true,
     });
 
     s("subtleRollSkills", {
-      name: "ACE.Settings.SubtleRollSkills.Name",
-      hint: "ACE.Settings.SubtleRollSkills.Hint",
+      name: "Subtle Roll Skills",
+      hint: "Comma-separated list of skill keys (dnd5e short codes) that should trigger a subtle roll instead of a public one. Defaults cover Insight, History, Arcana, Religion, Nature, Perception, Investigation, Survival, Medicine.",
       type: String,
       default: "ins,his,arc,rel,nat,prc,inv,sur,med",
     });
 
     s("subtleRollAutoDetect", {
-      name: "ACE.Settings.SubtleRollAutoDetect.Name",
-      hint: "ACE.Settings.SubtleRollAutoDetect.Hint",
+      name: "Auto-Detect Subtle Rolls",
+      hint: "When ON, ACE watches chat messages for skill checks that match the Subtle Roll Skills list and converts them into narration automatically. When OFF, you must explicitly request a subtle roll from the panel.",
       type: Boolean,
       default: false,
     });
@@ -754,6 +823,13 @@ export class AceSettings {
     s("envoyMigrated", {
       scope: "world", config: false, type: Boolean, default: false,
     });
+
+    // ── Model catalog cache (live-fetched provider model lists) ──────
+    // Populated by model-catalog.mjs; structure: { [provider]: { models: [...], fetchedAt: number } }
+    // 24h TTL. Refreshed on demand via the "Refresh Model List" button.
+    game.settings.register(MODULE_ID, "modelCatalogCache", {
+      scope: "world", config: false, type: Object, default: {},
+    });
   }
 
   /** Signup / API key URLs per provider */
@@ -831,16 +907,35 @@ export class AceSettings {
       }
 
       const providerSelect = root.querySelector(`[name="${MODULE_ID}.aiProvider"]`);
-      const urlInput       = root.querySelector(`[name="${MODULE_ID}.apiUrl"]`);
-      const modelInput     = root.querySelector(`[name="${MODULE_ID}.modelName"]`);
-      if (!providerSelect || !urlInput || !modelInput) return;
+      // Provider is the only required field — URL + Model live in the popup
+      // panel now (config:false). Buttons must still appear without them.
+      if (!providerSelect) return;
 
-      // Replace the model text input with a <select> dropdown
-      const modelSelect = document.createElement("select");
-      modelSelect.name = modelInput.name;
-      modelSelect.style.cssText = modelInput.style.cssText;
-      const savedValue = modelInput.value;
-      modelInput.replaceWith(modelSelect);
+      const apiKeyInput = root.querySelector(`[name="${MODULE_ID}.apiKey"]`);
+      const urlInput    = root.querySelector(`[name="${MODULE_ID}.apiUrl"]`);     // may be null (hidden)
+      const modelInput  = root.querySelector(`[name="${MODULE_ID}.modelName"]`);  // may be null (hidden)
+
+      // Helpers to read effective URL/model from DOM if visible, otherwise saved settings
+      const getEffectiveUrl = () => {
+        if (urlInput) return urlInput.value;
+        try { return game.settings.get(MODULE_ID, "apiUrl") || ""; } catch { return ""; }
+      };
+      const getEffectiveModel = () => {
+        if (modelSelect) return modelSelect.value;
+        if (modelInput)  return modelInput.value;
+        try { return game.settings.get(MODULE_ID, "modelName") || ""; } catch { return ""; }
+      };
+
+      // Replace the model text input with a <select> dropdown — only if visible
+      let modelSelect = null;
+      let savedValue = "";
+      if (modelInput) {
+        modelSelect = document.createElement("select");
+        modelSelect.name = modelInput.name;
+        modelSelect.style.cssText = modelInput.style.cssText;
+        savedValue = modelInput.value;
+        modelInput.replaceWith(modelSelect);
+      }
 
       /** Add options to the model select element */
       const _fillSelect = (models, currentValue) => {
@@ -902,8 +997,8 @@ export class AceSettings {
         return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / (1024 ** 2)).toFixed(0)} MB`;
       };
 
-      // Initial population
-      populateModels(providerSelect.value, savedValue);
+      // Initial population — only if modelSelect was created
+      if (modelSelect) populateModels(providerSelect.value, savedValue);
 
       // ── "Get API Key" link — changes with provider ─────────
       const signupLink = document.createElement("a");
@@ -923,11 +1018,19 @@ export class AceSettings {
       };
       updateSignupLink(providerSelect.value);
       // Insert the link after the API key field's parent form-group
-      const apiKeyInput = root.querySelector(`[name="${MODULE_ID}.apiKey"]`);
       if (apiKeyInput) {
         const keyGroup = apiKeyInput.closest(".form-group") ?? apiKeyInput.parentElement;
         keyGroup?.appendChild(signupLink);
       }
+
+      // Choose where to attach Test/Refresh buttons:
+      // 1) After the model dropdown if it's visible (preferred)
+      // 2) Otherwise after the API Key form-group
+      // 3) Otherwise after the Provider form-group (last resort)
+      const buttonHost =
+        (modelSelect?.closest(".form-group") ?? null) ||
+        (apiKeyInput?.closest(".form-group") ?? apiKeyInput?.parentElement ?? null) ||
+        (providerSelect?.closest(".form-group") ?? providerSelect?.parentElement ?? null);
 
       // ── Test Connection button ──────────────────────────────
       const testBtn = document.createElement("button");
@@ -943,8 +1046,8 @@ export class AceSettings {
         const result = await AceSettings.testConnection(
           providerSelect.value,
           apiKeyInput?.value ?? "",
-          urlInput.value,
-          modelSelect.value,
+          getEffectiveUrl(),
+          getEffectiveModel(),
         );
         if (result.ok) {
           testBtn.innerHTML = '<i class="fas fa-check" style="color:#5db88a;"></i> Connected!';
@@ -962,24 +1065,83 @@ export class AceSettings {
         }, 4000);
       });
 
-      // Insert test button after the model dropdown's form-group
-      const modelGroup = modelSelect.closest(".form-group") ?? modelSelect.parentElement;
-      if (modelGroup) modelGroup.appendChild(testBtn);
+      // Attach Test Connection button — uses buttonHost (resolved earlier)
+      buttonHost?.appendChild(testBtn);
 
-      // When provider changes: update URL, update model dropdown, select default
+      // ── Refresh Model List button — force live re-fetch from provider's API ──
+      const refreshBtn = document.createElement("button");
+      refreshBtn.type = "button";
+      refreshBtn.className = "ace-refresh-models-btn";
+      refreshBtn.innerHTML = '<i class="fas fa-rotate"></i> Refresh Model List';
+      refreshBtn.style.cssText = "margin-top:8px;margin-left:6px;padding:5px 14px;background:#1a1a1e;border:1px solid #c9a84c;border-radius:4px;color:#c9a84c;cursor:pointer;font-size:0.85em;transition:all 0.2s;";
+      refreshBtn.addEventListener("mouseenter", () => { refreshBtn.style.background = "#2a2a2e"; refreshBtn.style.boxShadow = "0 0 6px rgba(212,175,55,0.3)"; });
+      refreshBtn.addEventListener("mouseleave", () => { refreshBtn.style.background = "#1a1a1e"; refreshBtn.style.boxShadow = "none"; });
+      refreshBtn.addEventListener("click", async () => {
+        refreshBtn.disabled = true;
+        refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing…';
+        try {
+          const { fetchModelsForProvider, clearModelCatalogCache } = await import("./model-catalog.mjs");
+          clearModelCatalogCache();
+          const provider = providerSelect.value;
+          const models = await fetchModelsForProvider(provider, {
+            apiKey: apiKeyInput?.value ?? "",
+            apiUrl: getEffectiveUrl(),
+            forceRefresh: true,
+          });
+          if (models.length) {
+            // If the model dropdown is visible on this page, replace its options
+            // with the live list. Otherwise just cache + announce — the popup
+            // panel will pick up the cached list next time it renders.
+            if (modelSelect) {
+              modelSelect.innerHTML = "";
+              const currentValue = modelSelect.value;
+              let hasCurrent = false;
+              for (const m of models) {
+                const opt = document.createElement("option");
+                opt.value = m.value;
+                const badge = m.free ? "🆓 " : "";
+                const visionBadge = m.vision ? " 👁" : "";
+                opt.textContent = `${badge}${m.label}${visionBadge}`;
+                if (m.value === currentValue) { opt.selected = true; hasCurrent = true; }
+                modelSelect.appendChild(opt);
+              }
+              if (currentValue && !hasCurrent) {
+                const opt = document.createElement("option");
+                opt.value = currentValue;
+                opt.textContent = `${currentValue} (custom)`;
+                opt.selected = true;
+                modelSelect.prepend(opt);
+              }
+            }
+            ui.notifications?.info(`ACE: refreshed ${models.length} models for ${provider}.`);
+          } else {
+            ui.notifications?.warn(`ACE: no models returned from ${provider}. Check connection.`);
+          }
+        } catch (err) {
+          ui.notifications?.error(`ACE: refresh failed — ${err.message?.slice(0, 100) || "unknown error"}`);
+        } finally {
+          refreshBtn.disabled = false;
+          refreshBtn.innerHTML = '<i class="fas fa-rotate"></i> Refresh Model List';
+        }
+      });
+      buttonHost?.appendChild(refreshBtn);
+
+      // When provider changes: update URL, update model dropdown (if visible), select default
       providerSelect.addEventListener("change", () => {
         const newProvider = providerSelect.value;
         const defaults = AceSettings.PROVIDER_DEFAULTS[newProvider];
         if (!defaults) return;
 
-        // Auto-fill URL if it's a known default (don't overwrite custom URLs)
-        const knownUrls = Object.values(AceSettings.PROVIDER_DEFAULTS).map(d => d.apiUrl);
-        if (!urlInput.value || knownUrls.includes(urlInput.value)) {
-          urlInput.value = defaults.apiUrl;
+        // Auto-fill URL if it's a known default (don't overwrite custom URLs) — only if visible
+        if (urlInput) {
+          const knownUrls = Object.values(AceSettings.PROVIDER_DEFAULTS).map(d => d.apiUrl);
+          if (!urlInput.value || knownUrls.includes(urlInput.value)) {
+            urlInput.value = defaults.apiUrl;
+          }
         }
 
-        // Repopulate model dropdown and select the default for this provider
-        populateModels(newProvider, defaults.modelName);
+        // Repopulate model dropdown and select the default for this provider — only if visible
+        if (modelSelect) populateModels(newProvider, defaults.modelName);
 
         // Update signup link
         updateSignupLink(newProvider);
@@ -1072,10 +1234,24 @@ export class AceSettings {
           return { ok: false, error: `Unknown provider: ${provider}` };
       }
     } catch (err) {
-      // Detect CORS specifically
+      // Detect CORS / unreachable specifically — message tailored to provider
       if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
         if (/localhost|127\.0\.0\.1/.test(apiUrl)) {
-          return { ok: false, error: `Cannot reach ${apiUrl} — CORS issue. Set OLLAMA_ORIGINS=* and restart.` };
+          let fix;
+          switch (provider) {
+            case "ollama":
+              fix = "Set OLLAMA_ORIGINS=* (Machine env var), then quit Ollama from the tray and restart Foundry.";
+              break;
+            case "lmstudio":
+              fix = "Open LM Studio → Local Server tab → click 'Start Server', and make sure 'Cross-Origin Resource Sharing (CORS)' is enabled.";
+              break;
+            case "custom":
+              fix = "Make sure your server is running and its CORS policy allows requests from " + window.location.origin + ".";
+              break;
+            default:
+              fix = "Make sure the local server is running and its CORS policy allows browser requests.";
+          }
+          return { ok: false, error: `Cannot reach ${apiUrl} — ${fix}` };
         }
         return { ok: false, error: `Cannot reach server — check URL and network.` };
       }
@@ -1137,6 +1313,13 @@ export class AceSettings {
           <p class="ace-wiz-local-hint">
             <i class="fas fa-info-circle"></i> No API key needed for local providers \u2014 just make sure the service is running.
           </p>
+          <div class="ace-wiz-ollama-tips" style="display:none; margin-top:10px; padding:10px 14px; background:rgba(212,175,55,0.06); border:1px solid rgba(212,175,55,0.25); border-radius:5px; font-size:11.5px; color:#c8c0b0; line-height:1.55;">
+            <div style="color:#d4af37; font-weight:700; margin-bottom:6px; letter-spacing:0.04em;"><i class="fas fa-lightbulb"></i> OLLAMA QUICK START</div>
+            <div style="margin-bottom:4px;">1. Install Ollama and run <code style="background:rgba(0,0,0,0.4);padding:1px 6px;border-radius:3px;color:#d4af37;">ollama serve</code></div>
+            <div style="margin-bottom:4px;">2. Pull a starter model: <code style="background:rgba(0,0,0,0.4);padding:1px 6px;border-radius:3px;color:#d4af37;">ollama pull llama3.2</code></div>
+            <div style="margin-bottom:4px;">3. <strong>For NPC portrait reading</strong>, also: <code style="background:rgba(0,0,0,0.4);padding:1px 6px;border-radius:3px;color:#d4af37;">ollama pull llama3.2-vision</code></div>
+            <div style="margin-bottom:0;">4. Set environment variable <code style="background:rgba(0,0,0,0.4);padding:1px 6px;border-radius:3px;color:#d4af37;">OLLAMA_ORIGINS=*</code> at the system level (Windows: System Properties \u2192 Advanced \u2192 Environment Variables) and restart Ollama AND Foundry, otherwise the browser blocks the connection (CORS).</div>
+          </div>
           <div class="ace-wiz-actions">
             <button class="ace-wiz-btn ace-wiz-back" type="button"><i class="fas fa-arrow-left"></i> Back</button>
             <button class="ace-wiz-btn ace-wiz-btn-gold ace-wiz-test" type="button"><i class="fas fa-plug"></i> Test Connection</button>
@@ -1617,6 +1800,12 @@ export class AceSettings {
               const isLocal = (selectedProvider === "ollama" || selectedProvider === "lmstudio");
               const signup = AceSettings.PROVIDER_SIGNUP[selectedProvider];
               const defaults = AceSettings.PROVIDER_DEFAULTS[selectedProvider];
+
+              // Ollama-specific quick-start tip box (vision model + OLLAMA_ORIGINS)
+              const ollamaTips = root.querySelector(".ace-wiz-ollama-tips");
+              if (ollamaTips) {
+                ollamaTips.style.display = (selectedProvider === "ollama") ? "block" : "none";
+              }
 
               if (isLocal) {
                 keyInput.style.display = "none";

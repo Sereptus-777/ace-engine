@@ -15,14 +15,25 @@ const _FP = () =>
  * Upload a file silently — suppresses Foundry's upload notification toast.
  * In Foundry v13, FilePicker.upload() ignores the { notify: false } option,
  * so we temporarily mute ui.notifications.info() during the upload.
+ * Also filters the spurious "User [] does not have permission to upload"
+ * warning (fires on some hosted Foundry setups even when uploads succeed).
  * Uses refcount so concurrent uploads don't clobber the restore.
  */
 let _silentDepth = 0;
 let _origNotifyInfo = null;
+let _origNotifyWarn = null;
+let _origNotifyErr  = null;
+const _PERM_RX = /does not have permission to upload/i;
 async function _silentUpload(source, dir, file) {
   try {
     if (ui.notifications) {
-      if (_silentDepth === 0) _origNotifyInfo = ui.notifications.info;
+      if (_silentDepth === 0) {
+        _origNotifyInfo = ui.notifications.info;
+        _origNotifyWarn = ui.notifications.warn.bind(ui.notifications);
+        _origNotifyErr  = ui.notifications.error.bind(ui.notifications);
+        ui.notifications.warn  = (msg, ...rest) => (typeof msg === "string" && _PERM_RX.test(msg)) ? null : _origNotifyWarn(msg, ...rest);
+        ui.notifications.error = (msg, ...rest) => (typeof msg === "string" && _PERM_RX.test(msg)) ? null : _origNotifyErr(msg, ...rest);
+      }
       _silentDepth++;
       ui.notifications.info = () => {};
     }
@@ -30,9 +41,10 @@ async function _silentUpload(source, dir, file) {
   } finally {
     if (ui.notifications && _silentDepth > 0) {
       _silentDepth--;
-      if (_silentDepth === 0 && _origNotifyInfo) {
-        ui.notifications.info = _origNotifyInfo;
-        _origNotifyInfo = null;
+      if (_silentDepth === 0) {
+        if (_origNotifyInfo) { ui.notifications.info  = _origNotifyInfo; _origNotifyInfo = null; }
+        if (_origNotifyWarn) { ui.notifications.warn  = _origNotifyWarn; _origNotifyWarn = null; }
+        if (_origNotifyErr)  { ui.notifications.error = _origNotifyErr;  _origNotifyErr  = null; }
       }
     }
   }

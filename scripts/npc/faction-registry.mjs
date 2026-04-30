@@ -1207,8 +1207,9 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
     factionMeta["__new__"] = { name: "Generate New Faction", type: template?.type ?? "group", alignment: "", leader: "", description: `AI will create a new ${template?.type ?? "group"} for ${creatureBase}s in ${sceneName}. The faction will be tailored to the creature type, scene context, and world lore.`, region: "" };
     factionMeta["__none__"] = { name: "No Faction", type: "", alignment: "", leader: "", description: "This NPC is independent — their social profile and bio will define their identity without a faction affiliation.", region: "" };
 
-    // Smart default for persistent NPC based on CR
-    const persistDefault = cr >= 5;
+    // Default OFF — most NPCs are throwaway. GMs check the box deliberately
+    // when they want a recurring character with a persistent actor sheet.
+    const persistDefault = false;
 
     return new Promise((resolve) => {
         // ── Build role chips HTML (D&D official variant names) ──
@@ -1336,6 +1337,30 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
               </div>
             </div>
 
+            <!-- Gender Override -->
+            <div style="margin-bottom:14px;">
+              <div style="font-size:1em; text-transform:uppercase; letter-spacing:0.05em; color:#8b6914; font-weight:bold; margin-bottom:6px;">
+                <i class="fas fa-venus-mars"></i> Gender
+              </div>
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <label style="flex:1; min-width:90px; cursor:pointer; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; font-size:0.95em; color:#222; display:flex; align-items:center; gap:6px;">
+                  <input type="radio" name="genderOverride" value="auto" checked style="accent-color:#d4af37;"> Auto
+                </label>
+                <label style="flex:1; min-width:90px; cursor:pointer; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; font-size:0.95em; color:#222; display:flex; align-items:center; gap:6px;">
+                  <input type="radio" name="genderOverride" value="male" style="accent-color:#d4af37;"> Male
+                </label>
+                <label style="flex:1; min-width:90px; cursor:pointer; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; font-size:0.95em; color:#222; display:flex; align-items:center; gap:6px;">
+                  <input type="radio" name="genderOverride" value="female" style="accent-color:#d4af37;"> Female
+                </label>
+                <label style="flex:1; min-width:90px; cursor:pointer; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; font-size:0.95em; color:#222; display:flex; align-items:center; gap:6px;">
+                  <input type="radio" name="genderOverride" value="androgynous" style="accent-color:#d4af37;"> Androgynous
+                </label>
+              </div>
+              <div style="font-size:0.85em; color:#666; margin-top:4px; line-height:1.4;">
+                Auto = AI reads the portrait (requires vision-capable model). Pick a gender to lock it before bio generation.
+              </div>
+            </div>
+
             <!-- Persistent NPC Checkbox -->
             <div style="padding:8px 10px; background:#f5f5f5; border:1px solid #ccc; border-radius:6px;">
               <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
@@ -1372,6 +1397,9 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                         // Read auto-link
                         const autoLink = html.find('input[name="autoLink"]').is(':checked');
 
+                        // Read gender override (auto / male / female / androgynous)
+                        const genderOverride = html.find('input[name="genderOverride"]:checked').val() || "auto";
+
                         // Parse faction choice
                         let factionId = null;
                         let isNew = false;
@@ -1385,7 +1413,7 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                             factionId = factionChoice;
                         }
 
-                        resolve({ factionId, isNew, role, origin, originCustom, autoLink });
+                        resolve({ factionId, isNew, role, origin, originCustom, autoLink, genderOverride });
                     }
                 },
                 skip: {
@@ -2659,18 +2687,26 @@ export async function processTokenFaction(tokenDoc) {
                 if (result.origin) await tokenDoc.actor.setFlag(MODULE_ID, "npcOrigin", result.origin);
                 if (result.originCustom) await tokenDoc.actor.setFlag(MODULE_ID, "npcOriginCustom", result.originCustom);
                 if (result.autoLink !== undefined) tokenDoc._aceAutoLink = result.autoLink;
+                if (result.genderOverride && result.genderOverride !== "auto") {
+                    await tokenDoc.actor.setFlag(MODULE_ID, "genderOverride", result.genderOverride);
+                }
                 return { faction: null, isSpy: false, spyFaction: null, role: result.role || "" };
             } else if (result.isNew) {
                 isNew = true;
                 role = result.role;
             }
 
-            // Store origin + autoLink from dialog
+            // Store origin + autoLink + gender override from dialog
             if (result) {
                 try {
                     if (result.origin) await tokenDoc.actor.setFlag(MODULE_ID, "npcOrigin", result.origin);
                     if (result.originCustom) await tokenDoc.actor.setFlag(MODULE_ID, "npcOriginCustom", result.originCustom);
                     if (result.autoLink !== undefined) tokenDoc._aceAutoLink = result.autoLink;
+                    // Gender override: only save when user picked something other than auto.
+                    // bio-generator reads this flag and hardcodes the gender in the AI prompt.
+                    if (result.genderOverride && result.genderOverride !== "auto") {
+                        await tokenDoc.actor.setFlag(MODULE_ID, "genderOverride", result.genderOverride);
+                    }
                 } catch (err) { console.debug("ACE: Engine | faction-registry origin/autoLink flag save non-fatal:", err); }
             }
 

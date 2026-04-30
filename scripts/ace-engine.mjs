@@ -649,6 +649,40 @@ Hooks.once("ready", async () => {
     }
   } catch (_) { /* No config.local.json — perfectly fine, use Settings */ }
 
+  // ── Provider/URL/Model consistency repair ──────────────────
+  // Detects the bug where Provider was changed on the main settings page
+  // but URL + Model didn't follow (because they're hidden there). Auto-fixes
+  // by setting them to the current Provider's defaults — but only if the
+  // CURRENT URL/Model belongs to a DIFFERENT provider's known defaults
+  // (i.e. a clear mismatch, not a custom config). The onChange handler on
+  // aiProvider prevents this from happening again.
+  try {
+    const provider     = game.settings.get(MODULE_ID, "aiProvider");
+    const defaults     = AceSettings.PROVIDER_DEFAULTS[provider];
+    const currentUrl   = game.settings.get(MODULE_ID, "apiUrl") || "";
+    const currentModel = game.settings.get(MODULE_ID, "modelName") || "";
+
+    if (defaults) {
+      const allUrls   = Object.entries(AceSettings.PROVIDER_DEFAULTS);
+      const urlOwner   = allUrls.find(([_, d]) => d.apiUrl === currentUrl)?.[0];
+      const modelOwner = allUrls.find(([_, d]) => d.modelName === currentModel)?.[0];
+
+      const fixes = [];
+      if (urlOwner && urlOwner !== provider) {
+        await game.settings.set(MODULE_ID, "apiUrl", defaults.apiUrl);
+        fixes.push(`URL was ${urlOwner}'s default — synced to ${defaults.apiUrl}`);
+      }
+      if (modelOwner && modelOwner !== provider) {
+        await game.settings.set(MODULE_ID, "modelName", defaults.modelName);
+        fixes.push(`Model was ${modelOwner}'s default — synced to ${defaults.modelName}`);
+      }
+      if (fixes.length) {
+        console.log(`${MODULE_ID} | Provider/URL/Model auto-repair (${provider}): ${fixes.join("; ")}`);
+        ui.notifications?.info(`ACE Engine — repaired settings to match ${provider} provider.`);
+      }
+    }
+  } catch (err) { console.warn(`${MODULE_ID} | Provider consistency repair failed:`, err); }
+
   // ── Envoy sync status ──────────────────────────────────────
   if (game.modules.get("ace-envoy")?.active) {
     try {

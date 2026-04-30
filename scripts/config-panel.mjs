@@ -16,6 +16,19 @@ const { ApplicationV2 } = foundry.applications.api;
 
 const SECRET_KEYS = new Set(["apiKey", "digestApiKey", "elevenLabsApiKey"]);
 
+// ── Provider defaults ─────────────────────────────────────────────────────
+// Mirrors AceSettings.PROVIDER_DEFAULTS (kept local to avoid circular import
+// since settings.mjs imports this file). When the AI Provider dropdown
+// changes, we use these to auto-fill the URL + Model fields with sane values.
+const PROVIDER_DEFAULTS = {
+    openai:     { apiUrl: "https://api.openai.com",       modelName: "gpt-4o-mini" },
+    anthropic:  { apiUrl: "https://api.anthropic.com",    modelName: "claude-sonnet-4-20250514" },
+    ollama:     { apiUrl: "http://localhost:11434",       modelName: "llama3.2" },
+    lmstudio:   { apiUrl: "http://localhost:1234",        modelName: "default" },
+    openrouter: { apiUrl: "https://openrouter.ai/api",    modelName: "openai/gpt-4o-mini" },
+    custom:     { apiUrl: "http://localhost:8080",        modelName: "default" },
+};
+
 // ─── Tab → Setting Key Map ────────────────────────────────────────────────
 // Single source of truth for which setting belongs in which tab.
 
@@ -108,6 +121,9 @@ export class AceConfigPanel extends ApplicationV2 {
         const activeTab = TABS.find(t => t.id === this._activeTab) || TABS[0];
         const settingsHtml = this._buildSettingsHTML(activeTab);
 
+        // No honeypot needed — secret fields are now type="text" with CSS
+        // text-security masking, so Chrome can't detect a password form at all.
+
         return `
             <div class="ace-cfg-root">
                 <ul class="ace-cfg-tablist" role="tablist">${tabRail}</ul>
@@ -117,6 +133,7 @@ export class AceConfigPanel extends ApplicationV2 {
                         <h2>${this._esc(activeTab.label)}</h2>
                     </header>
                     ${activeTab.intro ? `<p class="ace-cfg-intro">${this._esc(activeTab.intro)}</p>` : ""}
+                    ${activeTab.id === "ai" ? this._buildAiTabActions() : ""}
                     <div class="ace-cfg-settings">${settingsHtml}</div>
                 </div>
             </div>
@@ -150,11 +167,17 @@ export class AceConfigPanel extends ApplicationV2 {
             })();
             const isPassword = SECRET_KEYS.has(key);
             const inputHtml = this._buildInput(key, meta, value, isPassword);
+            // Per-setting "extras" slot — currently used only for the digest
+            // model "🐢 slow" warning. Populated/hidden in _wireEvents.
+            const extras = key === "digestModel"
+                ? `<div class="ace-cfg-extras" data-digest-warning style="grid-column:1 / -1; display:none;"></div>`
+                : "";
             rows.push(`
                 <div class="ace-cfg-row" data-setting="${this._esc(key)}">
                     <label for="ace-cfg-${this._esc(key)}">${this._esc(meta.name || key)}</label>
                     <div class="ace-cfg-input">${inputHtml}</div>
                     ${meta.hint ? `<p class="ace-cfg-hint">${this._esc(meta.hint)}</p>` : ""}
+                    ${extras}
                 </div>
             `);
         }
@@ -166,7 +189,15 @@ export class AceConfigPanel extends ApplicationV2 {
         const v  = this._esc(String(value ?? ""));
 
         if (isPassword) {
-            return `<input type="password" id="${id}" data-setting-key="${key}" value="${v}" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">`;
+            // type="text" + -webkit-text-security:disc — visually masks like a
+            // password field (dots) but Chrome literally cannot detect it as a
+            // password input, so the "Save password?" prompt never fires. The
+            // honeypot + autocomplete="new-password" approach kept failing on
+            // Foundry's Electron build; this is the bulletproof option.
+            return `<input type="text" id="${id}" data-setting-key="${key}" value="${v}" `
+                 + `autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" `
+                 + `data-lpignore="true" data-1p-ignore="true" data-form-type="other" `
+                 + `style="-webkit-text-security: disc; text-security: disc; font-family: text-security-disc, sans-serif; letter-spacing: 0.1em;">`;
         }
         if (meta.type === Boolean) {
             return `<input type="checkbox" id="${id}" data-setting-key="${key}" ${value ? "checked" : ""}>`;
@@ -175,20 +206,33 @@ export class AceConfigPanel extends ApplicationV2 {
             const options = Object.entries(meta.choices).map(([val, label]) => {
                 const sel = String(val) === String(value) ? "selected" : "";
                 return `<option value="${this._esc(val)}" ${sel}>${this._esc(label)}</option>`;
-            }).join("");
-            return `<select id="${id}" data-setting-key="${key}">${options}</select>`;
+            });
+            // ── Critical: if the saved value isn't in the static choices list,
+            // prepend it as a "(current)" entry so the dropdown shows it
+            // selected. Without this, the browser silently defaults to the
+            // FIRST option, and a Save Changes click corrupts the saved value.
+            // This bit a user with Ollama models like "llama3.2-vision:latest"
+            // (with the :latest tag) that don't match the static gpt-4o/etc.
+            // list, leaving the dropdown stuck on gpt-4o.
+            const valueInChoices = Object.keys(meta.choices).some(k => String(k) === String(value));
+            if (!valueInChoices && value !== "" && value != null) {
+                options.unshift(`<option value="${this._esc(value)}" selected>${this._esc(value)} (current)</option>`);
+            }
+            return `<select id="${id}" data-setting-key="${key}">${options.join("")}</select>`;
         }
         if (meta.type === Number) {
             const range = meta.range;
+            // All numeric inputs get autofill suppression so Chrome's password
+            // manager doesn't grab a number near the apiKey field as "username".
             if (range) {
                 return `
                     <div class="ace-cfg-range">
-                        <input type="range" value="${v}" min="${range.min}" max="${range.max}" step="${range.step ?? 1}" data-slider-for="${id}">
-                        <input type="number" id="${id}" data-setting-key="${key}" value="${v}" min="${range.min}" max="${range.max}" step="${range.step ?? 1}">
+                        <input type="range" value="${v}" min="${range.min}" max="${range.max}" step="${range.step ?? 1}" data-slider-for="${id}" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+                        <input type="number" id="${id}" data-setting-key="${key}" value="${v}" min="${range.min}" max="${range.max}" step="${range.step ?? 1}" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
                     </div>
                 `;
             }
-            return `<input type="number" id="${id}" data-setting-key="${key}" value="${v}" autocomplete="off">`;
+            return `<input type="number" id="${id}" data-setting-key="${key}" value="${v}" autocomplete="off" data-lpignore="true" data-1p-ignore="true">`;
         }
         // Default: text
         return `<input type="text" id="${id}" data-setting-key="${key}" value="${v}" autocomplete="off" data-lpignore="true" data-1p-ignore="true">`;
@@ -201,6 +245,23 @@ export class AceConfigPanel extends ApplicationV2 {
             .replace(/>/g,  "&gt;")
             .replace(/"/g,  "&quot;")
             .replace(/'/g,  "&#39;");
+    }
+
+    // ─── AI Tab: Test Connection / Refresh Models actions ────────────────
+    // Plain buttons (NOT brass-textured) at the top of the AI tab so users
+    // can diagnose connection issues before scrolling through settings.
+    _buildAiTabActions() {
+        return `
+            <div class="ace-cfg-ai-actions">
+                <button type="button" class="ace-cfg-plainbtn" data-action="testConnection">
+                    <i class="fa-solid fa-plug"></i> Test Connection
+                </button>
+                <button type="button" class="ace-cfg-plainbtn" data-action="refreshModels">
+                    <i class="fa-solid fa-rotate"></i> Refresh Model List
+                </button>
+                <div class="ace-cfg-test-result" data-test-result></div>
+            </div>
+        `;
     }
 
     // ─── Event wiring (manual, after _replaceHTML) ───────────────────────
@@ -222,10 +283,209 @@ export class AceConfigPanel extends ApplicationV2 {
             target.addEventListener("input", () => { slider.value = target.value; });
         });
 
+        // ── AI Provider change → auto-update URL + Model defaults ──────────
+        // Picking "Ollama" should set URL to localhost:11434 and Model to a
+        // sensible Ollama default. Without this, swapping provider leaves
+        // mismatched URL+Model and nothing works.
+        const providerSelect = content.querySelector('[data-setting-key="aiProvider"]');
+        if (providerSelect) {
+            providerSelect.addEventListener("change", async () => {
+                const newProvider = providerSelect.value;
+                const defaults = PROVIDER_DEFAULTS[newProvider];
+                if (!defaults) return;
+
+                // ── Update API URL ──
+                const urlField = content.querySelector('[data-setting-key="apiUrl"]');
+                if (urlField) {
+                    if (urlField.tagName === "SELECT") {
+                        const hasOption = Array.from(urlField.options).some(o => o.value === defaults.apiUrl);
+                        if (hasOption) urlField.value = defaults.apiUrl;
+                        else {
+                            const opt = document.createElement("option");
+                            opt.value = defaults.apiUrl;
+                            opt.textContent = defaults.apiUrl;
+                            opt.selected = true;
+                            urlField.prepend(opt);
+                        }
+                    } else {
+                        urlField.value = defaults.apiUrl;
+                    }
+                }
+
+                // ── Update AI Model: prefer live catalog, fall back to default ──
+                ui.notifications?.info(`ACE Engine — fetching ${newProvider} model list…`);
+                await this._populateModelDropdownFromCatalog(content, newProvider, defaults.modelName);
+            });
+        }
+
+        // ── On AI tab render, populate model dropdown from cached catalog ──
+        // Skip the live fetch (use cached only) so the panel renders fast.
+        // The "Refresh Model List" button forces a re-fetch.
+        if (this._activeTab === "ai" && providerSelect) {
+            const currentProvider = providerSelect.value;
+            const currentModel    = content.querySelector('[data-setting-key="modelName"]')?.value || "";
+            this._populateModelDropdownFromCatalog(content, currentProvider, currentModel, /* useCacheOnly= */ true);
+        }
+
         // Footer buttons
         content.querySelector('[data-action="saveAll"]')?.addEventListener("click", () => this._saveAll());
         content.querySelector('[data-action="cancel"]')?.addEventListener("click",  () => this.close());
         content.querySelector('[data-action="resetTab"]')?.addEventListener("click", () => this._resetTab());
+
+        // Test Connection (AI tab only)
+        content.querySelector('[data-action="testConnection"]')?.addEventListener("click", () => this._testConnection(content));
+        // Refresh Models (AI tab only) — wired in step #7 with live model fetch
+        content.querySelector('[data-action="refreshModels"]')?.addEventListener("click", () => this._refreshModels(content));
+
+        // ── Digest model slowness warning (highly visible) ───────────────
+        // Local digest extraction takes 10–30 minutes per book vs ~30 seconds
+        // for cloud. Show a red warning box right under the digest dropdown
+        // whenever the user has it pointed at a local provider.
+        const digestSelect = content.querySelector('[data-setting-key="digestModel"]');
+        const warningSlot  = content.querySelector('[data-digest-warning]');
+        if (digestSelect && warningSlot) {
+            const updateDigestWarning = () => {
+                const value       = digestSelect.value || "";
+                const providerVal = providerSelect?.value || "";
+                const valueIsLocal = value.startsWith("ollama:") || value.startsWith("lmstudio:");
+                const usingMain    = value === "";
+                const mainIsLocal  = providerVal === "ollama" || providerVal === "lmstudio";
+
+                if (valueIsLocal || (usingMain && mainIsLocal)) {
+                    const which = valueIsLocal ? value.split(":")[0] : providerVal;
+                    warningSlot.innerHTML = `
+                        <div class="ace-cfg-warning-box ace-cfg-warning-slow">
+                            <strong>🐢 SLOW WARNING:</strong> Local digest extraction on <strong>${this._esc(which)}</strong> takes <strong>10–30 minutes per book</strong> vs ~30 seconds on a cloud provider. Bigger sourcebooks (PHB, DMG) can run an hour or more. Strongly recommended: paste an OpenAI API key in <strong>Digest API Key</strong> above and pick <strong>OpenAI: GPT-4o Mini (~$0.50/book) — Best Value</strong> for the digest model. Your main AI stays local — only the bulk extraction goes cloud.
+                        </div>
+                    `;
+                    warningSlot.style.display = "block";
+                } else {
+                    warningSlot.innerHTML = "";
+                    warningSlot.style.display = "none";
+                }
+            };
+            digestSelect.addEventListener("change", updateDigestWarning);
+            providerSelect?.addEventListener("change", updateDigestWarning);
+            updateDigestWarning();  // initial state
+        }
+    }
+
+    // ─── Test Connection ─────────────────────────────────────────────────
+    // Pings the configured provider/URL/key/model with a one-token request
+    // and returns a precise diagnosis. Reuses AceSettings.testConnection so
+    // there's only one place that knows how each provider's API is shaped.
+    async _testConnection(content) {
+        const btn = content.querySelector('[data-action="testConnection"]');
+        const resultEl = content.querySelector('[data-test-result]');
+        if (!btn || !resultEl) return;
+
+        // Read currently-displayed values from the panel (NOT saved settings —
+        // user may be testing a config they haven't saved yet)
+        const provider = content.querySelector('[data-setting-key="aiProvider"]')?.value || "ollama";
+        const apiKey   = content.querySelector('[data-setting-key="apiKey"]')?.value || "";
+        const apiUrl   = content.querySelector('[data-setting-key="apiUrl"]')?.value || "";
+        const model    = content.querySelector('[data-setting-key="modelName"]')?.value || "";
+
+        btn.disabled = true;
+        const originalLabel = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Testing…';
+        resultEl.className = "ace-cfg-test-result testing";
+        resultEl.textContent = `Pinging ${provider} at ${apiUrl || "default URL"}…`;
+
+        try {
+            // Dynamic import — settings.mjs imports this file so a static
+            // import would create a cycle that breaks on module evaluation.
+            const { AceSettings } = await import("./settings.mjs");
+            const result = await AceSettings.testConnection(provider, apiKey, apiUrl, model);
+
+            if (result.ok) {
+                resultEl.className = "ace-cfg-test-result success";
+                resultEl.innerHTML = `<i class="fa-solid fa-check-circle"></i> Connected — <strong>${this._esc(result.model || model)}</strong> responded.`;
+            } else {
+                resultEl.className = "ace-cfg-test-result fail";
+                resultEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${this._esc(result.error || "Connection failed.")}`;
+            }
+        } catch (err) {
+            resultEl.className = "ace-cfg-test-result fail";
+            resultEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${this._esc(err.message || "Connection failed.")}`;
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalLabel;
+        }
+    }
+
+    // ─── Refresh Models — force live re-fetch from provider's API ────────
+    async _refreshModels(content) {
+        const provider    = content.querySelector('[data-setting-key="aiProvider"]')?.value || "ollama";
+        const currentModel = content.querySelector('[data-setting-key="modelName"]')?.value || "";
+        const btn = content.querySelector('[data-action="refreshModels"]');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Refreshing…';
+        }
+        try {
+            const { clearModelCatalogCache } = await import("./model-catalog.mjs");
+            clearModelCatalogCache();
+            await this._populateModelDropdownFromCatalog(content, provider, currentModel, /* useCacheOnly= */ false);
+            ui.notifications?.info(`ACE Engine — model list refreshed for ${provider}.`);
+        } catch (err) {
+            console.warn(`${MODULE_ID} | Refresh models failed:`, err);
+            ui.notifications?.warn(`Could not refresh ${provider} models: ${err.message?.slice(0, 100) || "unknown error"}`);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-rotate"></i> Refresh Model List';
+            }
+        }
+    }
+
+    // ─── Populate the modelName <select> from the live catalog ───────────
+    // When useCacheOnly is true, only the cached (within 24h TTL) list is
+    // used — no network calls. When false, a live fetch is forced.
+    async _populateModelDropdownFromCatalog(content, provider, currentValue, useCacheOnly = false) {
+        const modelField = content.querySelector('[data-setting-key="modelName"]');
+        if (!modelField || modelField.tagName !== "SELECT") return;
+
+        try {
+            const { fetchModelsForProvider } = await import("./model-catalog.mjs");
+            const apiKey = content.querySelector('[data-setting-key="apiKey"]')?.value || "";
+            const apiUrl = content.querySelector('[data-setting-key="apiUrl"]')?.value || "";
+            const models = await fetchModelsForProvider(provider, {
+                apiKey, apiUrl,
+                forceRefresh: !useCacheOnly,
+            });
+            if (!models?.length) {
+                if (!useCacheOnly) ui.notifications?.warn(`${provider}: no models returned. Check connection / API key.`);
+                return;
+            }
+
+            // Replace the dropdown's options with the live catalog
+            modelField.innerHTML = "";
+            let hasCurrent = false;
+            for (const m of models) {
+                const opt = document.createElement("option");
+                opt.value = m.value;
+                // Prepend free badge to label so it stands out
+                const badge = m.free ? "🆓 " : "";
+                const visionBadge = m.vision ? " 👁" : "";
+                opt.textContent = `${badge}${m.label}${visionBadge}`;
+                if (m.value === currentValue) {
+                    opt.selected = true;
+                    hasCurrent = true;
+                }
+                modelField.appendChild(opt);
+            }
+            // If the saved model isn't in the live list, prepend it as a custom entry
+            if (currentValue && !hasCurrent) {
+                const opt = document.createElement("option");
+                opt.value = currentValue;
+                opt.textContent = `${currentValue} (custom)`;
+                opt.selected = true;
+                modelField.prepend(opt);
+            }
+        } catch (err) {
+            console.debug(`${MODULE_ID} | Populate model dropdown failed (non-fatal):`, err);
+        }
     }
 
     // ─── Actions ─────────────────────────────────────────────────────────
