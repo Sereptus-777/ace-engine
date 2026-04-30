@@ -3,11 +3,15 @@
 // Settings" page keeps only the master toggle, AI Provider dropdown, and
 // API Key. Everything else opens via the "Open Configuration" menu button.
 //
-// This is the FUNCTIONAL scaffold — minimal styling. The gunmetal-tech-fancy
-// theme is layered on later via ace-engine.css. Tab structure + form rendering
-// are stable; only the visual skin changes.
+// MODULE_ID is hard-coded locally (not imported from ace-engine.mjs) to break
+// a circular dependency: settings.mjs imports this file at the top to wire
+// the registerMenu call, and ace-engine.mjs imports settings.mjs. When
+// config-panel imported MODULE_ID from ace-engine, the class was being
+// defined before ace-engine.mjs finished evaluating — making MODULE_ID
+// undefined at class-field evaluation time, breaking registerMenu and
+// nuking the entire engine settings registration.
 
-import { MODULE_ID } from "./ace-engine.mjs";
+const MODULE_ID = "ace-engine";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
