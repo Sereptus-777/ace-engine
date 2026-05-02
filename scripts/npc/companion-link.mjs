@@ -506,36 +506,82 @@ export function registerInitiativeHooks() {
         // ── Job 1b: enforce companion uniqueness (RAW) ──
         // Steel Defender, Iron Defender, Find Familiar, etc. all have the
         // "if you already have one, the first immediately perishes" rule.
-        // We detect "named recurring summons" via the companion-link flag
-        // (set when an actor is marked Link as Companion). Generic Conjure
-        // Animals / Animate Objects don't have that flag, so they stay
-        // multi-spawnable. For companion-linked spawns, we delete any
-        // pre-existing tokens that:
-        //   - Share the same source ACTOR (so two SDs collide, but a SD
-        //     and a familiar from the same caster don't)
-        //   - Resolve to the same summoner (so player A's SD doesn't
-        //     poof when player B summons their SD)
-        //   - Aren't the just-spawned token itself
+        //
+        // Identity check: SUMMON ORIGIN UUID (flags.dnd5e.summon.origin) is
+        // shared by every spawn from the same caster's same feature. Two
+        // SDs from Varick → same origin. Varick's SD vs Bob's SD → different
+        // origins. So origin matching gives "same caster + same feature".
+        //
+        // Gate: enforce uniqueness if EITHER:
+        //   (a) The summon profile says count === "1" (Steel Defender,
+        //       Iron Defender, familiar, etc. — single-spawn features).
+        //   (b) The source/clone has a companion-link flag (manual override
+        //       for unusual cases).
+        // Conjure Animals / Animate Objects have count="1d4+1" or numeric
+        // > 1 → gate fails → multiples stay alive.
         try {
-            const newCompanionLink = getCompanionLink(tokenDoc.actor);
-            if (newCompanionLink) {
-                const newSummoner = await resolveSummonerActor(tokenDoc);
-                if (newSummoner) {
+            const newOriginUuid = _getDnd5eSummonOrigin(tokenDoc);
+            if (newOriginUuid) {
+                // Resolve source actor from origin (Item.parent === source Actor)
+                let sourceActor = null;
+                let originItem = null;
+                try {
+                    originItem = await fromUuid(newOriginUuid);
+                    if (originItem?.parent?.documentName === "Actor") {
+                        sourceActor = originItem.parent;
+                    }
+                } catch (_) { /* origin uuid stale */ }
+
+                // ── Gate (a): profile.count === "1" ──
+                let isSingleSpawn = false;
+                try {
+                    const summonFlag = tokenDoc.actor?.flags?.dnd5e?.summon
+                                    ?? tokenDoc.flags?.dnd5e?.summon
+                                    ?? tokenDoc.delta?.flags?.dnd5e?.summon;
+                    const activityId = summonFlag?.activity;
+                    const profileId  = summonFlag?.profile;
+                    if (originItem && activityId) {
+                        const activity = originItem.system?.activities?.get?.(activityId)
+                                      ?? originItem.system?.activities?.contents?.find(a => a.id === activityId);
+                        if (activity?.type === "summon") {
+                            const profiles = activity.profiles ?? activity.toObject?.()?.profiles ?? [];
+                            const profile = profileId
+                                ? profiles.find(p => p._id === profileId)
+                                : profiles[0];
+                            // Count is a Foundry formula string. Parse strict:
+                            // "1" → single. "1d4+1", "6", "1+@scaling" → multi.
+                            const rawCount = (profile?.count ?? "").toString().trim();
+                            isSingleSpawn = rawCount === "1" || rawCount === "";
+                            console.log(`${TAG} | uniqueness: profile.count="${rawCount}" → singleSpawn=${isSingleSpawn} for ${tokenDoc.name}`);
+                        }
+                    }
+                } catch (e) {
+                    console.warn(`${TAG} | uniqueness: profile lookup failed (non-blocking):`, e);
+                }
+
+                // ── Gate (b): companion-link flag (manual override) ──
+                const profileLink = await _resolveCompanionLinkForSpawn(tokenDoc, sourceActor);
+                const isCompanion = !!profileLink;
+
+                // Either gate passes → enforce
+                if (isSingleSpawn || isCompanion) {
                     const scene = tokenDoc.parent;
                     const stale = [];
                     for (const otherTok of scene.tokens) {
                         if (otherTok.id === tokenDoc.id) continue;
-                        if (otherTok.actor?.id !== tokenDoc.actor?.id) continue;
-                        // Same actor as new spawn — check summoner match
-                        const otherSummoner = await resolveSummonerActor(otherTok);
-                        if (otherSummoner?.id === newSummoner.id) {
+                        const otherOrigin = _getDnd5eSummonOrigin(otherTok);
+                        if (otherOrigin === newOriginUuid) {
                             stale.push(otherTok.id);
                         }
                     }
                     if (stale.length) {
                         await scene.deleteEmbeddedDocuments("Token", stale);
-                        console.log(`${TAG} | RAW uniqueness: removed ${stale.length} previous ${tokenDoc.actor.name}(s) of ${newSummoner.name} (replaced by new spawn)`);
+                        console.log(`${TAG} | RAW uniqueness: removed ${stale.length} previous ${tokenDoc.actor.name}(s) sharing origin ${newOriginUuid} (gate: singleSpawn=${isSingleSpawn}, companion=${isCompanion})`);
+                    } else {
+                        console.log(`${TAG} | uniqueness: no previous instances of ${tokenDoc.actor.name} found on canvas`);
                     }
+                } else {
+                    console.log(`${TAG} | uniqueness: ${tokenDoc.actor.name} is multi-spawn (count > 1, no companion-link) — allowing duplicates`);
                 }
             }
         } catch (err) {
@@ -618,6 +664,38 @@ async function _scanSceneForUntrackedSummons(pcCombatant, combat) {
         }
     }
     if (added) console.log(`${TAG} | ${pcCombatant.name} entered combat — added ${added} of their summon(s) to the tracker`);
+}
+
+/** Decide if a freshly-spawned summoned token came from a companion-linked
+ *  source. Checks (in order):
+ *    1. The synthetic actor on the spawn (cloned actor inherits flags from
+ *       source — so if source had the flag, the clone has it too).
+ *    2. The actor pointed to by the summon profile (the world / compendium
+ *       SD that the artificer's feature uses as its profile UUID).
+ *    3. The owner-side: search game.actors for an actor matching the
+ *       spawn's name with companion-link set (last-resort fallback).
+ *
+ *  Returns the companion-link config object if found, null otherwise.
+ */
+async function _resolveCompanionLinkForSpawn(tokenDoc, sourceActor) {
+    // 1. Inherited from clone
+    const onSpawn = getCompanionLink(tokenDoc.actor);
+    if (onSpawn) return onSpawn;
+
+    // 2. On the source actor (resolved from origin chain by caller)
+    if (sourceActor) {
+        const onSource = getCompanionLink(sourceActor);
+        if (onSource) return onSource;
+    }
+
+    // 3. Search by name in world actors (defensive fallback for cases where
+    //    the clone got stripped of flags or the origin chain is incomplete)
+    const byName = game.actors?.find(a =>
+        a.name === tokenDoc.actor?.name &&
+        a.type === "npc" &&
+        getCompanionLink(a)
+    );
+    return byName ? getCompanionLink(byName) : null;
 }
 
 /** Find the primary non-GM player owner of an actor. Used to identify
