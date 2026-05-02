@@ -635,16 +635,26 @@ Hooks.once("ready", async () => {
   // GM-only: players don't need ElevenLabs keys or other credentials.
   // If the file exists and contains your ElevenLabs key/voice, those
   // values will be used instead of whatever is in Module Settings.
+  // Existence-check via FilePicker first so we don't 404 in network logs
+  // when the file isn't present (the common case).
   try {
-    const resp = await fetch(`modules/${MODULE_ID}/config.local.json`, { cache: "no-store" });
-    if (resp.ok) {
-      const cfg = await resp.json();
-      const { elevenLabsApiKey, elevenLabsVoiceId, elevenLabsModel } = cfg;
-      if (elevenLabsApiKey  && !elevenLabsApiKey.includes("YOUR_"))  localCredentials.elevenLabsApiKey  = elevenLabsApiKey.trim();
-      if (elevenLabsVoiceId && !elevenLabsVoiceId.includes("YOUR_")) localCredentials.elevenLabsVoiceId = elevenLabsVoiceId.trim();
-      if (elevenLabsModel)                                            localCredentials.elevenLabsModel   = elevenLabsModel.trim();
-      if (Object.keys(localCredentials).length) {
-        console.log(`${MODULE_ID} | Loaded local credentials from config.local.json (${Object.keys(localCredentials).join(", ")})`);
+    const FP = foundry.applications?.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
+    let fileExists = false;
+    try {
+      const dir = await FP.browse("data", `modules/${MODULE_ID}`);
+      fileExists = (dir?.files ?? []).some(f => f.endsWith("config.local.json"));
+    } catch (_) { /* dir not browsable */ }
+    if (fileExists) {
+      const resp = await fetch(`modules/${MODULE_ID}/config.local.json`, { cache: "no-store" });
+      if (resp.ok) {
+        const cfg = await resp.json();
+        const { elevenLabsApiKey, elevenLabsVoiceId, elevenLabsModel } = cfg;
+        if (elevenLabsApiKey  && !elevenLabsApiKey.includes("YOUR_"))  localCredentials.elevenLabsApiKey  = elevenLabsApiKey.trim();
+        if (elevenLabsVoiceId && !elevenLabsVoiceId.includes("YOUR_")) localCredentials.elevenLabsVoiceId = elevenLabsVoiceId.trim();
+        if (elevenLabsModel)                                            localCredentials.elevenLabsModel   = elevenLabsModel.trim();
+        if (Object.keys(localCredentials).length) {
+          console.log(`${MODULE_ID} | Loaded local credentials from config.local.json (${Object.keys(localCredentials).join(", ")})`);
+        }
       }
     }
   } catch (_) { /* No config.local.json — perfectly fine, use Settings */ }

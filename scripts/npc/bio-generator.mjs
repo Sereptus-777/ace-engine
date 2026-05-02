@@ -1399,7 +1399,10 @@ async function _generateBio(tokenDocument) {
     // The voice engine runs before bio generation, so it may have guessed wrong.
     // Now that the bio has pronouns, re-detect and reassign if different.
     try {
-        const { detectGender, assignVoice } = await import("../voice-engine.js");
+        // voice-engine lives next to bio-generator in /npc/ and is .mjs.
+        // Was: "../voice-engine.js" (wrong dir AND wrong extension), which
+        // failed silently with "Failed to fetch dynamically imported module".
+        const { detectGender, assignVoice } = await import("./voice-engine.mjs");
         const bioGender = detectGender(isUnlinked ? tokenDocument.actor : actor);
         const currentGender = (isUnlinked ? tokenDocument.actor : actor).getFlag(MODULE_ID, "voiceGender") || "";
         if (bioGender && bioGender !== currentGender) {

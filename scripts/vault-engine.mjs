@@ -162,6 +162,17 @@ export class VaultEngine {
   async loadLedger() {
     if (this._ledgerCache) return this._ledgerCache;
     try {
+      // Existence-check first so a fresh install doesn't 404 in the console
+      const FP = foundry.applications?.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
+      let exists = false;
+      try {
+        const listing = await FP.browse("data", VAULT_ROOT);
+        exists = (listing?.files ?? []).some(f => f.endsWith("legacy-ledger.json"));
+      } catch (_) { /* vault dir doesn't exist yet */ }
+      if (!exists) {
+        this._ledgerCache = { version: 1, campaigns: [] };
+        return this._ledgerCache;
+      }
       const res = await fetch(`${VAULT_ROOT}/legacy-ledger.json`);
       if (!res.ok) {
         this._ledgerCache = { version: 1, campaigns: [] };

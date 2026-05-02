@@ -73,8 +73,18 @@ export class ReputationEngine {
    * @param {string} worldId
    */
   async load(worldId) {
-    const path = `${REPUTATION_DIR(worldId)}/${REPUTATION_FILE}`;
+    const dir  = REPUTATION_DIR(worldId);
+    const path = `${dir}/${REPUTATION_FILE}`;
     try {
+      // Existence-check via FilePicker before fetching, so first-time worlds
+      // don't print a console 404 (the file is created on first save).
+      const FP = foundry.applications?.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
+      let exists = false;
+      try {
+        const listing = await FP.browse("data", dir);
+        exists = (listing?.files ?? []).some(f => f.endsWith(REPUTATION_FILE));
+      } catch (_) { /* dir doesn't exist yet */ }
+      if (!exists) throw new Error("HTTP 404");
       const response = await fetch(`/${path}?_=${Date.now()}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const json = await response.json();

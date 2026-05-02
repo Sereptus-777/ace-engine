@@ -48,6 +48,43 @@ function _isNpcChatEnabled() {
 }
 
 /**
+ * Detect whether a token (or its actor) is a "summon-like" entity that
+ * should skip the auto-bio / voice / items+loot pipeline. Returns a short
+ * string naming the source that flagged it, or null if no flag matches.
+ *
+ * Sources, in priority order:
+ *   1. "companion-link" — flags["ace-suite"].companion on the ACTOR.
+ *      Set via "Link as companion" right-click menu; used for recurring
+ *      summons that also need ownership/init linking (Steel Defender etc.).
+ *   2. "actor-opt-out"  — flags["ace-suite"].alwaysSkipBio on the ACTOR.
+ *      Simpler "skip bio only" mark with no init/ownership behavior.
+ *   3. "ace-forge"      — flags["ace-suite"].summonedByTrap on the token,
+ *      stamped by ACE Forge's summon-pipeline (Mimic Chest, Summoning Rune).
+ *   4. "warpgate"       — flags.warpgate.* (Warpgate module spawn)
+ *   5. "foundry-summons" — flags["foundry-summons"].* (Foundry Summons)
+ *   6. "dnd5e-summon"   — flags.dnd5e.summon / summonedActorUuid
+ *      (the dnd5e system's native Summon activity, e.g. Conjure Animals)
+ */
+function _detectSkipReason(tokenDoc) {
+    const actor = tokenDoc?.actor;
+    if (actor?.flags?.["ace-suite"]?.companion?.ownerUserId) return "companion-link";
+    if (actor?.flags?.["ace-suite"]?.alwaysSkipBio === true) return "actor-opt-out";
+    const tFlags = tokenDoc?.flags ?? {};
+    if (tFlags["ace-suite"]?.summonedByTrap === true) return "ace-forge";
+    if (actor?.flags?.["ace-suite"]?.summonedByTrap === true) return "ace-forge";
+    if (tFlags.warpgate && Object.keys(tFlags.warpgate).length) return "warpgate";
+    if (tFlags["foundry-summons"] && Object.keys(tFlags["foundry-summons"]).length) return "foundry-summons";
+    // dnd5e Summon activity stamps `flags.dnd5e.summon.origin` on the spawned
+    // ACTOR (and sometimes on the token's delta), not on the token document
+    // itself. Check all three locations or this skip will silently fail and
+    // bios will generate for Steel Defender, Conjure Animals, etc.
+    if (tFlags.dnd5e?.summon || tFlags.dnd5e?.summonedActorUuid) return "dnd5e-summon";
+    if (actor?.flags?.dnd5e?.summon || actor?.flags?.dnd5e?.summonedActorUuid) return "dnd5e-summon";
+    if (tokenDoc?.delta?.flags?.dnd5e?.summon) return "dnd5e-summon";
+    return null;
+}
+
+/**
  * Activate the NPC chat subsystem. Idempotent — registers hooks only once.
  * Safe to call from init OR ready — internally gates on canvas/game readiness.
  */
@@ -68,6 +105,15 @@ export function activateNpcChat() {
     import("./ui-hooks.mjs").then(({ registerUiHooks }) => {
         registerUiHooks();
     }).catch(err => console.error(`${TAG} | UI hooks load failed:`, err));
+
+    // Companion-link feature — right-click context menu in Actors directory
+    // + initiative auto-link hooks. Used for recurring summons that belong
+    // to a specific player (Steel Defender, Iron Defender, familiars, etc.)
+    import("./companion-link.mjs").then(({ registerActorDirectoryContext, registerInitiativeHooks }) => {
+        registerActorDirectoryContext();
+        registerInitiativeHooks();
+        console.log(`${TAG} | Companion-link feature online.`);
+    }).catch(err => console.error(`${TAG} | Companion-link load failed:`, err));
 }
 
 /** Expose internal state for the engine api block (so other modules / macros
@@ -86,6 +132,24 @@ function _registerHooks() {
     Hooks.on("createToken", (tokenDocument, options, userId) => {
         if (userId !== game.user.id || !game.user.isGM) return;
         if (!tokenDocument.actor || tokenDocument.actor.type !== "npc") return;
+
+        // Skip auto-bio / voice / items+loot for summoned creatures.
+        // Five recognized sources (any one is sufficient):
+        //   1. ACE Forge summon-pipeline (Mimic Chest, Summoning Rune)
+        //   2. Warpgate module — flags.warpgate.*
+        //   3. Foundry Summons module — flags["foundry-summons"].*
+        //   4. dnd5e system Summon activity — flags.dnd5e.summon / summonedActorUuid
+        //   5. Actor-level explicit opt-out — flags["ace-suite"].alwaysSkipBio
+        //      (set via the right-click context menu on the actor — used for
+        //      Steel Defender / Iron Defender / familiars / recurring NPCs)
+        const skipReason = _detectSkipReason(tokenDocument);
+        let skipForSummons = true;
+        try { skipForSummons = game.settings.get(MODULE_ID, "skipBioForSummons") !== false; }
+        catch (_) { /* default true */ }
+        if (skipReason && skipForSummons) {
+            console.log(`${TAG} | Skipping auto-bio/voice/items for ${tokenDocument.name} (reason: ${skipReason})`);
+            return;
+        }
 
         // Voice assignment (always runs, even if bio gen is off)
         import("./voice-engine.mjs").then(({ onTokenCreated }) => {
@@ -140,6 +204,16 @@ function _registerHooks() {
             const tokenDoc = token.document;
             if (!tokenDoc?.actor) continue;
 
+            // Skip surviving summoned creatures on scene scan — same five-
+            // source detection as the createToken hook above. A Steel
+            // Defender or Mimic that survives a reload doesn't suddenly
+            // want a bio at next world load.
+            const skipReason = _detectSkipReason(tokenDoc);
+            let skipForSummons = true;
+            try { skipForSummons = game.settings.get(MODULE_ID, "skipBioForSummons") !== false; }
+            catch (_) { /* default true */ }
+            if (skipReason && skipForSummons) continue;
+
             import("./voice-engine.mjs").then(({ onTokenCreated }) => {
                 setTimeout(() => onTokenCreated(tokenDoc), 50);
             }).catch(err => console.error(`${TAG} | Voice Engine load failed:`, err));
@@ -153,6 +227,56 @@ function _registerHooks() {
             }).catch(err => console.error(`${TAG} | Bio-generator load failed:`, err));
         }
     });
+
+    // ── Actor directory context menu — toggle "skip auto-bio" on actors ─
+    // Sets the flags["ace-suite"].alwaysSkipBio actor flag, which the
+    // _detectSkipReason() helper reads in the createToken / canvasReady
+    // hooks above. Used for recurring summons like Steel Defender,
+    // Iron Defender, familiars — actors that don't go through any
+    // automated summon-module pipeline but still want bio-skip every
+    // time they're spawned.
+    //
+    // Both V12 (`getActorDirectoryEntryContext`) and V13
+    // (`getActorContextOptions`) hook names are registered for compat.
+    const _actorContextOptions = (_html, options) => {
+        if (!Array.isArray(options)) return;
+        options.push({
+            name: "Mark as summon — skip auto-bio",
+            icon: '<i class="fa-solid fa-wand-sparkles"></i>',
+            condition: (li) => {
+                const id = li.dataset?.entryId ?? li.dataset?.documentId;
+                const actor = game.actors.get(id);
+                return !!actor && !actor.flags?.["ace-suite"]?.alwaysSkipBio;
+            },
+            callback: async (li) => {
+                const id = li.dataset?.entryId ?? li.dataset?.documentId;
+                const actor = game.actors.get(id);
+                if (!actor) return;
+                // Direct update bypasses Foundry's setFlag scope validation
+                // (it rejects "ace-suite" since it's not a registered module).
+                await actor.update({ "flags.ace-suite.alwaysSkipBio": true });
+                ui.notifications?.info(`ACE Engine — "${actor.name}" marked as summon. Future tokens of this actor will skip auto-bio.`);
+            },
+        });
+        options.push({
+            name: "Unmark summon — restore auto-bio",
+            icon: '<i class="fa-solid fa-rotate-left"></i>',
+            condition: (li) => {
+                const id = li.dataset?.entryId ?? li.dataset?.documentId;
+                const actor = game.actors.get(id);
+                return !!actor && actor.flags?.["ace-suite"]?.alwaysSkipBio === true;
+            },
+            callback: async (li) => {
+                const id = li.dataset?.entryId ?? li.dataset?.documentId;
+                const actor = game.actors.get(id);
+                if (!actor) return;
+                await actor.update({ "flags.ace-suite.-=alwaysSkipBio": null });
+                ui.notifications?.info(`ACE Engine — "${actor.name}" no longer skips auto-bio. Tokens will be processed normally.`);
+            },
+        });
+    };
+    Hooks.on("getActorDirectoryEntryContext", _actorContextOptions); // V12
+    Hooks.on("getActorContextOptions",        _actorContextOptions); // V13
 
     // ── Conversation lock: block player movement during chat ────────────
     Hooks.on("preUpdateToken", (tokenDoc, changes) => {
