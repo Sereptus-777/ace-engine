@@ -1994,7 +1994,7 @@ ${tierInstructions[tier]}`;
         // Pick an appropriate icon based on type, then refine by item name keywords
         const typeIconMap = {
             gem:        "icons/commodities/gems/gem-faceted-round-white.webp",
-            trinket:    "icons/sundries/misc/trinket-goblet-gold.webp",
+            trinket:    "icons/svg/item-bag.svg",
             jewelry:    "icons/equipment/neck/necklace-simple-gold.webp",
             document:   "icons/sundries/documents/document-sealed-brown-red.webp",
             potion:     "icons/consumables/potions/potion-bottle-standard-red.webp",
@@ -2339,25 +2339,180 @@ ${tierInstructions[tier]}`;
                 "icons/sundries/lights/candle-pillar-lit-yellow.webp",
             ]},
 
-            // ── Misc Items ──
-            { match: /\b(goblet|chalice|cup|grail|tankard)\b/i, pool: ["icons/sundries/misc/trinket-goblet-gold.webp"] },
-            { match: /\b(mirror|looking\s*glass)\b/i, pool: ["icons/sundries/misc/trinket-goblet-gold.webp"] },
-            { match: /\b(feather|quill|plume)\b/i, pool: ["icons/sundries/documents/document-writing-brown.webp", "icons/sundries/documents/document-writing-pink.webp"] },
-            { match: /\b(bell)\b/i, pool: ["icons/sundries/misc/trinket-goblet-gold.webp"] },
+            // ── ID Tags / Medals / Insignia (semantic: necklace-ish chains worn on body) ──
+            // Covers things like "Tattered Dog Tags", "Soldier's ID Tag", "Service Medal"
+            { match: /\b(dog\s*tag|id\s*tag|name\s*tag|service\s*tag|military\s*tag|tags?)\b/i, pool: [
+                "icons/equipment/neck/necklace-simple-gold.webp",
+                "icons/equipment/neck/necklace-pendant-pearl-silver.webp",
+                "icons/equipment/neck/choker-chain-thin-gold.webp",
+                "icons/equipment/neck/choker-chain-thick-silver.webp",
+            ]},
+            { match: /\b(badge|insignia|crest|emblem|sigil\s*pin|brooch|seal\s*pin)\b/i, pool: [
+                "icons/equipment/neck/amulet-round-engraved-gold.webp",
+                "icons/equipment/neck/amulet-round-gold-red.webp",
+                "icons/equipment/neck/amulet-triangle-blue.webp",
+            ]},
+            { match: /\b(medal|ribbon|honor\s*token|service\s*pin|war\s*medal)\b/i, pool: [
+                "icons/equipment/neck/amulet-round-engraved-gold.webp",
+                "icons/equipment/neck/amulet-round-gold-red.webp",
+                "icons/equipment/neck/medallion-engraved-gold.webp",
+            ]},
+
+            // ── Food / Rations / Provisions ──
+            { match: /\b(ration|rations|provisions|hardtack|bread|loaf|biscuit|cracker)\b/i, pool: [
+                "icons/consumables/food/bread-loaf-boule-rustic-tan.webp",
+                "icons/consumables/food/bread-loaf-rustic-brown.webp",
+                "icons/consumables/food/bread-loaf-baguette-tan.webp",
+            ]},
+            { match: /\b(meat|jerky|bacon|sausage|steak|roast|game)\b/i, pool: [
+                "icons/consumables/meat/cooked-meat-grey-red.webp",
+                "icons/consumables/meat/skewer-cooked-meat-brown.webp",
+                "icons/consumables/meat/raw-meat-grey-red.webp",
+            ]},
+            { match: /\b(cheese|wheel\s*of)\b/i, pool: [
+                "icons/consumables/food/cheese-wedge-yellow.webp",
+                "icons/consumables/food/cheese-wheel-yellow.webp",
+            ]},
+            { match: /\b(fruit|apple|berry|berries|peach|pear|plum)\b/i, pool: [
+                "icons/consumables/fruit/apple-red.webp",
+                "icons/consumables/fruit/berries-blue.webp",
+                "icons/consumables/fruit/grapes-bunch-purple.webp",
+            ]},
+            { match: /\b(soup|stew|broth|porridge|gruel)\b/i, pool: [
+                "icons/consumables/soup/bowl-steaming-brown.webp",
+                "icons/consumables/soup/soup-meat-stew-brown.webp",
+            ]},
+            { match: /\b(food|meal|snack|ration\s*pack|packet)\b/i, pool: [
+                "icons/consumables/food/bread-loaf-rustic-brown.webp",
+                "icons/consumables/food/cake-side-brown.webp",
+                "icons/consumables/soup/bowl-steaming-brown.webp",
+            ]},
+
+            // ── Drinks / Containers ──
+            { match: /\b(waterskin|wineskin|skin\s*of|flask|canteen)\b/i, pool: [
+                "icons/sundries/survival/canteen-skin-tan.webp",
+                "icons/sundries/survival/canteen-tin-grey.webp",
+            ]},
+            { match: /\b(wine|ale|beer|mead|liquor|spirits|whiskey|rum|brandy|grog)\b/i, pool: [
+                "icons/consumables/drinks/wine-bottle-glass-red.webp",
+                "icons/consumables/drinks/beer-glass-foam-tan.webp",
+                "icons/consumables/drinks/alcohol-jug-tan.webp",
+            ]},
+            { match: /\b(jug|jar|pitcher|urn|amphora)\b/i, pool: [
+                "icons/consumables/drinks/alcohol-jug-tan.webp",
+                "icons/containers/kitchenware/vase-clay-painted-blue.webp",
+                "icons/containers/kitchenware/vase-clay-engraved-grey.webp",
+            ]},
+            { match: /\b(bottle|vial|phial)\b/i, pool: [
+                "icons/consumables/drinks/wine-bottle-glass-red.webp",
+                "icons/consumables/potions/bottle-corked-empty-tan.webp",
+                "icons/consumables/potions/vial-cork-empty-glass.webp",
+            ]},
+
+            // ── Bags / Pouches / Containers ──
+            { match: /\b(pouch|purse|sack|bag|satchel|knapsack|backpack)\b/i, pool: [
+                "icons/containers/bags/pouch-simple-leather-brown.webp",
+                "icons/containers/bags/pack-rolled-tan.webp",
+                "icons/containers/bags/sack-simple-leather-tan.webp",
+            ]},
+            { match: /\b(box|case|crate|chest)\b/i, pool: [
+                "icons/containers/chest/chest-simple-engraved-brown.webp",
+                "icons/containers/boxes/box-gift-tan.webp",
+                "icons/containers/chest/chest-iron-bronze-grey.webp",
+            ]},
+
+            // ── Tools / Misc Items (existing + augmented) ──
+            { match: /\b(goblet|chalice|cup|grail|tankard)\b/i, pool: [
+                "icons/containers/kitchenware/goblet-jeweled-gold-red.webp",
+                "icons/containers/kitchenware/goblet-engraved-gold.webp",
+                "icons/containers/kitchenware/goblet-jeweled-gold-purple.webp",
+            ]},
+            { match: /\b(mirror|looking\s*glass)\b/i, pool: [
+                "icons/svg/item-bag.svg",
+            ]},
+            { match: /\b(feather|quill|plume)\b/i, pool: [
+                "icons/sundries/documents/document-writing-brown.webp",
+                "icons/sundries/documents/document-writing-pink.webp",
+            ]},
+            { match: /\b(bell)\b/i, pool: ["icons/svg/sound.svg"] },
             { match: /\b(herb|plant|flower|root|moss|leaf|sprig)\b/i, pool: [
                 "icons/consumables/plants/herb-tied-bundle-green.webp",
                 "icons/consumables/plants/herb-bunch-dried-leaf-green.webp",
                 "icons/consumables/plants/leaf-herb-green.webp",
                 "icons/consumables/plants/sprout-leaf-herb-green.webp",
             ]},
-            { match: /\b(food|ration|bread|meat|cheese|fruit)\b/i, pool: ["icons/tools/cooking/bowl-steaming-brown.webp"] },
-            { match: /\b(rope|twine|cord)\b/i, pool: ["icons/tools/fasteners/chain-steel-grey.webp"] },
-            { match: /\b(chain|shackle|manacle)\b/i, pool: ["icons/tools/fasteners/chain-brass-yellow.webp", "icons/tools/fasteners/chain-steel-grey.webp"] },
-            { match: /\b(hammer|mace|maul)\b/i, pool: ["icons/tools/hand/hammer-simple-stone.webp", "icons/tools/hand/hammer-mallet-brown.webp"] },
+            { match: /\b(rope|twine|cord|string|wire)\b/i, pool: [
+                "icons/sundries/survival/rope-coil-tan.webp",
+                "icons/tools/fasteners/chain-steel-grey.webp",
+            ]},
+            { match: /\b(chain|shackle|manacle)\b/i, pool: [
+                "icons/tools/fasteners/chain-brass-yellow.webp",
+                "icons/tools/fasteners/chain-steel-grey.webp",
+            ]},
+            { match: /\b(hammer|mace|maul|cudgel)\b/i, pool: [
+                "icons/tools/hand/hammer-simple-stone.webp",
+                "icons/tools/hand/hammer-mallet-brown.webp",
+            ]},
             { match: /\b(pick|pickaxe)\b/i, pool: ["icons/tools/hand/pickaxe-simple-stone-brown.webp"] },
             { match: /\b(idol|figurine|statue|statuette|effigy|totem)\b/i, pool: [
                 "icons/commodities/treasure/bust-carved-stone.webp",
                 "icons/commodities/treasure/bust-pharaoh-gold-blue.webp",
+            ]},
+
+            // ── Cloth / Worn / Tattered things — sensible default to clothing/cloth ──
+            // Catches "Tattered Cloth", "Worn Garment", "Bloody Rag" etc. that fall
+            // through everything else above. The "tattered" keyword shouldn't beat
+            // "tattered dog tags" because that rule appears earlier in the list.
+            { match: /\b(cloak|robe|cape|mantle|shawl)\b/i, pool: [
+                "icons/equipment/back/cape-layered-red.webp",
+                "icons/equipment/back/cloak-collared-brown.webp",
+                "icons/equipment/back/cape-layered-tan.webp",
+            ]},
+            { match: /\b(boot|boots|shoe|shoes|sandal)\b/i, pool: [
+                "icons/equipment/feet/boots-leather-brown.webp",
+                "icons/equipment/feet/shoes-pointed-leather-brown.webp",
+            ]},
+            { match: /\b(glove|gloves|gauntlet|mitten)\b/i, pool: [
+                "icons/equipment/hand/glove-cloth-pink.webp",
+                "icons/equipment/hand/glove-leather-brown.webp",
+            ]},
+            { match: /\b(belt|sash|girdle|strap|harness)\b/i, pool: [
+                "icons/equipment/waist/belt-simple-leather-brown.webp",
+                "icons/equipment/waist/sash-cloth-tan.webp",
+            ]},
+            { match: /\b(rag|cloth|fabric|cloth\s*scrap|bandage|wrap|garment|tunic|shirt)\b/i, pool: [
+                "icons/sundries/survival/bedroll-blue.webp",
+                "icons/equipment/back/cloak-collared-brown.webp",
+                "icons/sundries/lights/lantern-simple-tan.webp",
+            ]},
+
+            // ── Survival / Camp gear ──
+            { match: /\b(bedroll|blanket|tarp|tent)\b/i, pool: [
+                "icons/sundries/survival/bedroll-blue.webp",
+                "icons/sundries/survival/bedroll-tan.webp",
+            ]},
+            { match: /\b(lantern|lamp|firefly\s*jar)\b/i, pool: [
+                "icons/sundries/lights/lantern-simple-tan.webp",
+                "icons/sundries/lights/lantern-iron-yellow.webp",
+            ]},
+
+            // ── Tobacco / Smoking ──
+            { match: /\b(pipe|tobacco|cigar|cigarette|smoke)\b/i, pool: [
+                "icons/sundries/misc/pipe-wood-engraved.webp",
+                "icons/sundries/misc/pipe-wood-stoke.webp",
+            ]},
+
+            // ── Music ──
+            { match: /\b(lute|harp|flute|drum|fiddle|whistle|horn\s*(of|that)|instrument)\b/i, pool: [
+                "icons/tools/instruments/lute-gold-brown.webp",
+                "icons/tools/instruments/flute-simple-wood.webp",
+                "icons/tools/instruments/horn-carved-brown.webp",
+            ]},
+
+            // ── Game / Gambling ──
+            { match: /\b(dice|die|card|cards|gaming|gambling)\b/i, pool: [
+                "icons/sundries/gaming/dice-runed-tan.webp",
+                "icons/sundries/gaming/playing-card-simple.webp",
             ]},
 
             // ── Magic & Theme (broad matches — keep these last!) ──
@@ -2379,22 +2534,32 @@ ${tierInstructions[tier]}`;
             ]},
         ];
 
-        // Resolve icon: sub-keyword → random pool → type map → trinket fallback
+        // Resolve icon: sub-keyword → random pool → type map → trinket → guaranteed SVG
+        // Guaranteed final fallback uses an icons/svg/* path which is Foundry-stock
+        // and always exists, so the chat card never renders a broken image.
+        const FINAL_FALLBACK = "icons/svg/item-bag.svg";
         function _pickLootIcon(name, type) {
-            const n = name.toLowerCase();
-            for (const rule of iconRules) {
-                if (!rule.match.test(n)) continue;
-                // 1) Sub-keyword refinement
-                if (rule.sub) {
-                    for (const [subRe, subIcon] of rule.sub) {
-                        if (subRe.test(n)) return subIcon;
+            const n = (name || "").toLowerCase();
+            try {
+                for (const rule of iconRules) {
+                    if (!rule.match.test(n)) continue;
+                    // 1) Sub-keyword refinement
+                    if (rule.sub) {
+                        for (const [subRe, subIcon] of rule.sub) {
+                            if (subRe.test(n)) return subIcon || FINAL_FALLBACK;
+                        }
+                    }
+                    // 2) Random from pool
+                    if (rule.pool?.length) {
+                        const picked = _rng(rule.pool);
+                        if (picked) return picked;
                     }
                 }
-                // 2) Random from pool
-                if (rule.pool?.length) return _rng(rule.pool);
+            } catch (err) {
+                console.warn(`${TAG} | _pickLootIcon rule scan failed for "${name}":`, err);
             }
-            // 3) Type map fallback → 4) trinket
-            return typeIconMap[type] || typeIconMap.trinket;
+            // 3) Type-map fallback → 4) FINAL_FALLBACK so we never return undefined/empty
+            return typeIconMap[type] || typeIconMap.trinket || FINAL_FALLBACK;
         }
 
         // Parse gp value for price

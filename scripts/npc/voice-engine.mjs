@@ -980,6 +980,23 @@ export async function onTokenDeath(tokenDocument) {
     const actor = tokenDocument?.actor;
     if (!actor) return;
 
+    // ── Skip if the token is already gone ──
+    // ace-qol's death pipeline removes the original token after stamping a
+    // dead-art tile. By the time this hook fires, an unlinked synthetic actor's
+    // parent TokenDocument has been deleted — calling unsetFlag on a synthetic
+    // actor whose token is gone throws "does not exist in EmbeddedCollection".
+    // For unlinked tokens the voice flags evaporate with the token anyway, so
+    // there's no real cleanup needed. Only proceed when the token doc is still
+    // resolvable in its parent scene OR the actor is linked (world-actor flags).
+    try {
+        const isLinked = !!tokenDocument?.actorLink;
+        const stillOnScene = tokenDocument?.parent?.tokens?.get?.(tokenDocument.id);
+        if (!isLinked && !stillOnScene) {
+            // Synthetic actor on a deleted token — nothing to clean up.
+            return;
+        }
+    } catch (_) { /* fall through to the unset path below — the catch handles errors */ }
+
     try {
         // Voice flags are always on the actor (base actor for linked,
         // ActorDelta synthetic actor for unlinked)
@@ -989,7 +1006,14 @@ export async function onTokenDeath(tokenDocument) {
         await actor.unsetFlag(MODULE_ID, "voiceGender");
         console.log(`${MODULE_ID} | Voice Engine: Cleared voice for ${actor.name} (death)`);
     } catch (e) {
-        console.warn(`${MODULE_ID} | Voice Engine: Failed to clear voice on death:`, e);
+        // Most common case: token already deleted by another module's death
+        // pipeline. Demote to debug — the warning was just adding noise.
+        const msg = String(e?.message ?? e);
+        if (msg.includes("does not exist in the EmbeddedCollection")) {
+            console.debug(`${MODULE_ID} | Voice Engine: token gone before voice clear — harmless.`);
+        } else {
+            console.warn(`${MODULE_ID} | Voice Engine: Failed to clear voice on death:`, e);
+        }
     }
 }
 
