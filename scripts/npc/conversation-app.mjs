@@ -266,27 +266,53 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             this._listenersAttached = true;
         }
 
-        // ── Inject minimize button in header ───────────────────────────────
-        // Foundry V13 ApplicationV2's default minimize control doesn't render
-        // here for some reason (engine's main panel works around the same way).
-        // Add a manual one that calls this.minimize() — runs every render so
-        // the button reappears after re-render.
+        // ── Inject manual minimize + close buttons in header ──────────────
+        // Foundry V13 ApplicationV2's default chrome controls don't always
+        // render here (engine's main panel hits the same issue). Without a
+        // close button, the player can't exit the conversation — they'd
+        // have to F5 reload Foundry. Inject manual buttons every render so
+        // they're guaranteed to appear regardless of V13's chrome state.
         const header = el.querySelector(".window-header, header");
-        if (header && !header.querySelector(".ace-engine-btn-minimize")) {
-            const minBtn = document.createElement("button");
-            minBtn.className = "header-control ace-engine-btn-minimize";
-            minBtn.type = "button";
-            minBtn.title = "Minimize";
-            minBtn.innerHTML = '<i class="fas fa-minus"></i>';
-            minBtn.addEventListener("click", (ev) => {
-                ev.preventDefault();
-                ev.stopPropagation();
-                this.minimize();
-            });
-            // Insert before the close button so it sits next to it
-            const closeBtn = header.querySelector("button.close, button[data-action='close'], .header-control:last-child");
-            if (closeBtn) header.insertBefore(minBtn, closeBtn);
-            else header.appendChild(minBtn);
+        if (header) {
+            // Detect whether V13 already rendered its native close — match
+            // every variant we've seen across V13 sub-versions.
+            const hasNativeClose = !!header.querySelector(
+                "button.close, button[data-action='close'], button[data-tooltip='Close'], .header-control[data-action='close']"
+            );
+
+            // Minimize
+            if (!header.querySelector(".ace-engine-btn-minimize")) {
+                const minBtn = document.createElement("button");
+                minBtn.className = "header-control ace-engine-btn-minimize";
+                minBtn.type = "button";
+                minBtn.title = "Minimize";
+                minBtn.innerHTML = '<i class="fas fa-minus"></i>';
+                minBtn.addEventListener("click", (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    this.minimize();
+                });
+                header.appendChild(minBtn);
+            }
+
+            // Close (only when V13 didn't render its own — never duplicate)
+            if (!hasNativeClose && !header.querySelector(".ace-engine-btn-close")) {
+                const closeBtn = document.createElement("button");
+                closeBtn.className = "header-control ace-engine-btn-close";
+                closeBtn.type = "button";
+                closeBtn.title = "Close conversation";
+                closeBtn.innerHTML = '<i class="fas fa-xmark"></i>';
+                closeBtn.addEventListener("click", (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    this.close().catch(err => {
+                        console.error(`${MODULE_ID} | Conversation close failed:`, err);
+                        // Last-resort: rip the DOM out so the user is unstuck
+                        try { this.element?.remove(); } catch (_) {}
+                    });
+                });
+                header.appendChild(closeBtn);
+            }
         }
 
         // ── GM-only controls ──────────────────────────────────────────────
@@ -1081,6 +1107,15 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         // Raw history is already saved per-exchange via _saveMemorySafe().
         // Journal summary fires automatically when the PLAYER ends the conversation
         // (handled by the gmDismiss socket handler in main.js).
+        //
+        // openConversations and npcLocks are GLOBAL state shared via the
+        // window._aceEnvoy bridge object. Other paths in this file pull them
+        // via destructuring; the close path was previously assuming bare
+        // identifiers (which threw "ReferenceError: openConversations is not
+        // defined" — the chat window then couldn't be closed). Pull them
+        // explicitly here so the refs always resolve, with safe fallbacks
+        // when the bridge is missing.
+        const { openConversations, npcLocks, unlockNPC } = window._aceEnvoy ?? {};
 
         // ── DOM wipe — clear stale content before closing ────────────────────
         try {
@@ -1115,17 +1150,19 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 });
                 // Release the lock if it's mine — give a short grace period so the
                 // GM can see the close happen before the slot reopens.
-                const myLock = npcLocks.get(this.actor.id);
-                if (myLock?.userId === game.user.id) {
-                    setTimeout(() => {
-                        if (npcLocks.get(this.actor.id)?.userId === game.user.id) {
-                            npcLocks.delete(this.actor.id);
-                        }
-                    }, 3000);
+                if (npcLocks) {
+                    const myLock = npcLocks.get(this.actor.id);
+                    if (myLock?.userId === game.user.id) {
+                        setTimeout(() => {
+                            if (npcLocks.get(this.actor.id)?.userId === game.user.id) {
+                                npcLocks.delete(this.actor.id);
+                            }
+                        }, 3000);
+                    }
                 }
-                openConversations.delete(this._convoKey);
+                openConversations?.delete(this._convoKey);
             } else if (game.user.isGM) {
-                openConversations.delete(this._convoKey);
+                openConversations?.delete(this._convoKey);
             } else {
                 game.socket.emit(`module.${MODULE_ID}`, {
                     action: "stopAudio", targetUserId: game.user.id
@@ -1137,7 +1174,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         // _gmForced or some other path bailed early. Without this, reopening the
         // chat with the same NPC silently fails because the Map still references
         // a closed app.
-        if (openConversations.get(this._convoKey) === this) {
+        if (openConversations?.get?.(this._convoKey) === this) {
             openConversations.delete(this._convoKey);
         }
 

@@ -35,8 +35,8 @@ const PROVIDER_DEFAULTS = {
 const TABS = [
     {
         id: "ai", label: "AI Provider", icon: "fa-solid fa-microchip",
-        intro: "Connect to OpenAI, Anthropic, Ollama, or any compatible model. The primary API Key lives on the main settings page so it's quick to update.",
-        keys: ["aiProvider", "apiUrl", "modelName", "digestApiKey", "digestModel", "gameSystem", "systemPrompt", "maxContextTokens", "maxResponseTokens"],
+        intro: "Connect to OpenAI, Anthropic, Ollama, or any compatible model. All AI fields are edited here — the main settings page just shows what's currently active and a Test Connection button.",
+        keys: ["aiProvider", "apiKey", "apiUrl", "modelName", "digestApiKey", "digestModel", "gameSystem", "systemPrompt", "maxContextTokens", "maxResponseTokens"],
     },
     {
         id: "voice", label: "Voice & TTS", icon: "fa-solid fa-microphone",
@@ -46,7 +46,7 @@ const TABS = [
     {
         id: "npc", label: "NPC Chat", icon: "fa-solid fa-comment",
         intro: "Bio generation, faction assignment, item & loot pipeline, conversation memory. Master switch turns the whole subsystem on/off.",
-        keys: ["npcChatEnabled", "autoGenerateBio", "tokenDropAI", "alwaysRunItemAndLoot", "enableSocialProfiles", "enableAutoLink", "npcKnowledgeBudget", "npcIntelligenceScaling", "npcKnowledgeCap", "enableFactions", "factionSpyChance", "factionWildcardChance", "defaultVoiceRegion", "npcWebpFolder"],
+        keys: ["npcChatEnabled", "autoGenerateBio", "tokenDropAI", "alwaysRunItemAndLoot", "skipBioForSummons", "autoLinkSummons", "enableSocialProfiles", "enableAutoLink", "npcKnowledgeBudget", "npcIntelligenceScaling", "npcKnowledgeCap", "enableFactions", "factionSpyChance", "factionWildcardChance", "defaultVoiceRegion", "npcWebpFolder"],
     },
     {
         id: "combat", label: "Combat", icon: "fa-solid fa-shield-alt",
@@ -93,17 +93,59 @@ export class AceConfigPanel extends ApplicationV2 {
     constructor(options = {}) {
         super(options);
         this._activeTab = TABS[0].id;
+        // Per-provider API key cache (Phase: settings cleanup 2026-05-01).
+        // Mirrors the apiKeysByProvider setting; lets us stash the visible
+        // key in-memory when the user swaps providers, then write everything
+        // on Save Changes. Initialized in _renderHTML.
+        this._apiKeyVault          = {};
+        this._lastProviderForVault = null;
     }
 
     // ─── Render lifecycle ────────────────────────────────────────────────
 
     async _renderHTML(_context, _options) {
+        // Load (and one-time-migrate) the per-provider API key vault before
+        // building HTML so the apiKey field reflects the active provider's
+        // saved key on every panel open.
+        this._loadApiKeyVault();
         return this._buildHTML();
     }
 
     _replaceHTML(result, content, _options) {
         content.innerHTML = result;
         this._wireEvents(content);
+    }
+
+    /**
+     * Read apiKeysByProvider into _apiKeyVault. Performs a silent one-time
+     * migration: if the map is empty but `apiKey` is set, seed the map with
+     * apiKeysByProvider[currentProvider] = apiKey so existing setups keep
+     * working after the schema addition.
+     */
+    _loadApiKeyVault() {
+        let stored = {};
+        try { stored = game.settings.get(MODULE_ID, "apiKeysByProvider") || {}; }
+        catch (_) { stored = {}; }
+        const provider = (() => {
+            try { return game.settings.get(MODULE_ID, "aiProvider") || ""; }
+            catch (_) { return ""; }
+        })();
+        const apiKey = (() => {
+            try { return game.settings.get(MODULE_ID, "apiKey") || ""; }
+            catch (_) { return ""; }
+        })();
+
+        // One-time migration: seed the map from the live apiKey if empty
+        const isEmpty = !stored || Object.keys(stored).length === 0;
+        if (isEmpty && provider && apiKey) {
+            stored = { [provider]: apiKey };
+            // Persist the migration immediately (best-effort, GM-only)
+            try { game.settings.set(MODULE_ID, "apiKeysByProvider", stored); }
+            catch (_) { /* non-blocking */ }
+        }
+
+        this._apiKeyVault          = { ...stored };
+        this._lastProviderForVault = provider || null;
     }
 
     // ─── HTML builders ───────────────────────────────────────────────────
@@ -194,13 +236,36 @@ export class AceConfigPanel extends ApplicationV2 {
             // password input, so the "Save password?" prompt never fires. The
             // honeypot + autocomplete="new-password" approach kept failing on
             // Foundry's Electron build; this is the bulletproof option.
-            return `<input type="text" id="${id}" data-setting-key="${key}" value="${v}" `
-                 + `autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" `
-                 + `data-lpignore="true" data-1p-ignore="true" data-form-type="other" `
-                 + `style="-webkit-text-security: disc; text-security: disc; font-family: text-security-disc, sans-serif; letter-spacing: 0.1em;">`;
+            //
+            // The wrapper + eye-toggle button (Phase: settings cleanup,
+            // 2026-05-01) lets the GM peek at the saved key to verify it's
+            // the right one, without exposing it in the DOM permanently.
+            // Click toggles the -webkit-text-security style on/off.
+            return `
+                <div class="ace-cfg-secret-wrap">
+                    <input type="text" id="${id}" data-setting-key="${key}" value="${v}"
+                           autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+                           data-lpignore="true" data-1p-ignore="true" data-form-type="other"
+                           data-secret-masked="true"
+                           style="-webkit-text-security: disc; text-security: disc; font-family: text-security-disc, sans-serif; letter-spacing: 0.1em;">
+                    <button type="button" class="ace-cfg-secret-toggle"
+                            data-action="toggleSecret" data-target="${id}"
+                            title="Show / hide the API key">
+                        <i class="fa-solid fa-eye" data-eye="closed"></i>
+                    </button>
+                </div>
+            `;
         }
         if (meta.type === Boolean) {
-            return `<input type="checkbox" id="${id}" data-setting-key="${key}" ${value ? "checked" : ""}>`;
+            // Toggle-switch slider — visually consistent with ACE Forge / QOL
+            // config panels. Same underlying <input type="checkbox"> so the
+            // existing read/write code in _saveAll() doesn't change.
+            return `
+                <label class="ace-cfg-toggle">
+                    <input type="checkbox" id="${id}" data-setting-key="${key}" ${value ? "checked" : ""}>
+                    <span class="ace-cfg-toggle-track"></span>
+                </label>
+            `;
         }
         if (meta.choices) {
             const options = Object.entries(meta.choices).map(([val, label]) => {
@@ -294,6 +359,29 @@ export class AceConfigPanel extends ApplicationV2 {
                 const defaults = PROVIDER_DEFAULTS[newProvider];
                 if (!defaults) return;
 
+                // ── Swap API Key (Phase: per-provider key vault) ──
+                // 1. Stash the currently-visible key under the PREVIOUS provider
+                //    in the in-memory vault. (Written on Save Changes.)
+                // 2. Look up the new provider's saved key and load it into the
+                //    field — or blank it out + toast if none was saved.
+                const apiKeyField = content.querySelector('[data-setting-key="apiKey"]');
+                if (apiKeyField) {
+                    const previousProvider = this._lastProviderForVault;
+                    if (previousProvider && previousProvider !== newProvider) {
+                        // Only stash if the user actually had a value typed
+                        const currentVisible = apiKeyField.value ?? "";
+                        if (currentVisible) {
+                            this._apiKeyVault[previousProvider] = currentVisible;
+                        }
+                    }
+                    const savedForNew = this._apiKeyVault[newProvider] ?? "";
+                    apiKeyField.value = savedForNew;
+                    if (!savedForNew && (newProvider === "openai" || newProvider === "anthropic" || newProvider === "openrouter")) {
+                        ui.notifications?.info(`ACE Engine — no saved ${newProvider} API key. Paste yours and click Save Changes.`);
+                    }
+                    this._lastProviderForVault = newProvider;
+                }
+
                 // ── Update API URL ──
                 const urlField = content.querySelector('[data-setting-key="apiUrl"]');
                 if (urlField) {
@@ -331,6 +419,47 @@ export class AceConfigPanel extends ApplicationV2 {
         content.querySelector('[data-action="saveAll"]')?.addEventListener("click", () => this._saveAll());
         content.querySelector('[data-action="cancel"]')?.addEventListener("click",  () => this.close());
         content.querySelector('[data-action="resetTab"]')?.addEventListener("click", () => this._resetTab());
+
+        // Eye-toggle: reveal / mask API key fields. Click flips the visual
+        // text-security style on the target input + swaps the eye icon.
+        // The underlying input.value is unchanged either way.
+        content.querySelectorAll('[data-action="toggleSecret"]').forEach(btn => {
+            btn.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                const targetId = btn.dataset.target;
+                const input = content.querySelector(`#${CSS.escape(targetId)}`);
+                if (!input) return;
+                const icon = btn.querySelector("i");
+                const masked = input.dataset.secretMasked === "true";
+                if (masked) {
+                    // Reveal — clear the text-security CSS
+                    input.style.webkitTextSecurity = "none";
+                    input.style.textSecurity       = "none";
+                    input.style.fontFamily         = "";
+                    input.style.letterSpacing      = "";
+                    input.dataset.secretMasked     = "false";
+                    if (icon) {
+                        icon.classList.remove("fa-eye");
+                        icon.classList.add("fa-eye-slash");
+                        icon.dataset.eye = "open";
+                    }
+                    btn.title = "Hide the API key";
+                } else {
+                    // Re-mask — restore the dots
+                    input.style.webkitTextSecurity = "disc";
+                    input.style.textSecurity       = "disc";
+                    input.style.fontFamily         = "text-security-disc, sans-serif";
+                    input.style.letterSpacing      = "0.1em";
+                    input.dataset.secretMasked     = "true";
+                    if (icon) {
+                        icon.classList.remove("fa-eye-slash");
+                        icon.classList.add("fa-eye");
+                        icon.dataset.eye = "closed";
+                    }
+                    btn.title = "Show the API key";
+                }
+            });
+        });
 
         // Test Connection (AI tab only)
         content.querySelector('[data-action="testConnection"]')?.addEventListener("click", () => this._testConnection(content));
@@ -446,6 +575,44 @@ export class AceConfigPanel extends ApplicationV2 {
         const modelField = content.querySelector('[data-setting-key="modelName"]');
         if (!modelField || modelField.tagName !== "SELECT") return;
 
+        // Helper: replace dropdown options + select currentValue (or prepend
+        // it as a "(custom)" entry if not in the list).
+        const fillDropdown = (models, valueToSelect) => {
+            modelField.innerHTML = "";
+            let hasCurrent = false;
+            for (const m of models) {
+                const opt = document.createElement("option");
+                opt.value = m.value;
+                const badge       = m.free   ? "🆓 " : "";
+                const visionBadge = m.vision ? " 👁"  : "";
+                opt.textContent = `${badge}${m.label}${visionBadge}`;
+                if (m.value === valueToSelect) {
+                    opt.selected = true;
+                    hasCurrent = true;
+                }
+                modelField.appendChild(opt);
+            }
+            if (valueToSelect && !hasCurrent) {
+                const opt = document.createElement("option");
+                opt.value = valueToSelect;
+                opt.textContent = `${valueToSelect} (custom)`;
+                opt.selected = true;
+                modelField.prepend(opt);
+            }
+        };
+
+        // Static fallback — guarantees the dropdown reflects the *new*
+        // provider's options even when the live API fetch fails. Without
+        // this, switching from Anthropic→OpenAI with the wrong key left
+        // the Claude model selected, which is exactly the bug we're fixing.
+        // Dynamic-imported here (not at top of file) to avoid the circular
+        // import between settings.mjs and config-panel.mjs.
+        let staticFallback = [];
+        try {
+            const { AceSettings } = await import("./settings.mjs");
+            staticFallback = AceSettings?.PROVIDER_MODELS?.[provider] ?? [];
+        } catch (_) { /* settings module unavailable; static list stays empty */ }
+
         try {
             const { fetchModelsForProvider } = await import("./model-catalog.mjs");
             const apiKey = content.querySelector('[data-setting-key="apiKey"]')?.value || "";
@@ -454,37 +621,28 @@ export class AceConfigPanel extends ApplicationV2 {
                 apiKey, apiUrl,
                 forceRefresh: !useCacheOnly,
             });
-            if (!models?.length) {
-                if (!useCacheOnly) ui.notifications?.warn(`${provider}: no models returned. Check connection / API key.`);
+            if (models?.length) {
+                fillDropdown(models, currentValue);
                 return;
             }
 
-            // Replace the dropdown's options with the live catalog
-            modelField.innerHTML = "";
-            let hasCurrent = false;
-            for (const m of models) {
-                const opt = document.createElement("option");
-                opt.value = m.value;
-                // Prepend free badge to label so it stands out
-                const badge = m.free ? "🆓 " : "";
-                const visionBadge = m.vision ? " 👁" : "";
-                opt.textContent = `${badge}${m.label}${visionBadge}`;
-                if (m.value === currentValue) {
-                    opt.selected = true;
-                    hasCurrent = true;
+            // ── Fetch failed / empty — fall back to static list so the
+            //    dropdown still reflects the NEW provider, never the old one.
+            if (staticFallback.length) {
+                fillDropdown(staticFallback, currentValue);
+                if (!useCacheOnly) {
+                    ui.notifications?.warn(
+                        `ACE Engine — couldn't fetch live ${provider} model list (likely missing or invalid API key). Showing static fallback; pick one and Save Changes.`
+                    );
                 }
-                modelField.appendChild(opt);
-            }
-            // If the saved model isn't in the live list, prepend it as a custom entry
-            if (currentValue && !hasCurrent) {
-                const opt = document.createElement("option");
-                opt.value = currentValue;
-                opt.textContent = `${currentValue} (custom)`;
-                opt.selected = true;
-                modelField.prepend(opt);
+            } else if (!useCacheOnly) {
+                ui.notifications?.warn(`${provider}: no models returned. Check connection / API key.`);
             }
         } catch (err) {
             console.debug(`${MODULE_ID} | Populate model dropdown failed (non-fatal):`, err);
+            // Even on import/throw, try the static fallback so the dropdown
+            // doesn't get stranded on the previous provider's selection.
+            if (staticFallback.length) fillDropdown(staticFallback, currentValue);
         }
     }
 
@@ -493,6 +651,16 @@ export class AceConfigPanel extends ApplicationV2 {
     async _saveAll() {
         if (!this.element) return;
         let saved = 0, failed = 0;
+
+        // Capture the API key field BEFORE the generic save loop so we can
+        // also write it into the per-provider vault. The vault stays in sync
+        // with the active `apiKey` setting; it's used by the provider swap
+        // logic on next open.
+        const apiKeyField   = this.element.querySelector('[data-setting-key="apiKey"]');
+        const providerField = this.element.querySelector('[data-setting-key="aiProvider"]');
+        const currentApiKey   = apiKeyField?.value ?? "";
+        const currentProvider = providerField?.value ?? "";
+
         for (const el of this.element.querySelectorAll("[data-setting-key]")) {
             const key = el.dataset.settingKey;
             if (!key) continue;
@@ -512,6 +680,21 @@ export class AceConfigPanel extends ApplicationV2 {
                 failed++;
             }
         }
+
+        // Persist the per-provider key vault. Merge in-memory swaps + the
+        // currently-visible key for the currently-selected provider.
+        try {
+            const vault = { ...this._apiKeyVault };
+            if (currentProvider) {
+                if (currentApiKey) vault[currentProvider] = currentApiKey;
+                else delete vault[currentProvider];   // user blanked it intentionally
+            }
+            await game.settings.set(MODULE_ID, "apiKeysByProvider", vault);
+            this._apiKeyVault = vault;
+        } catch (err) {
+            console.warn("ACE: Engine | Config panel — failed to save apiKeysByProvider:", err);
+        }
+
         ui.notifications.info(`ACE Engine — saved ${saved} setting${saved === 1 ? "" : "s"}${failed ? ` (${failed} failed)` : ""}.`);
         this.close();
     }

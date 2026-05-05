@@ -608,33 +608,28 @@ export function registerInitiativeHooks() {
         }
     });
 
-    // ── Combat creation — when a new combat is created in a scene with
-    //    summons already on canvas, add them all so they're part of
-    //    initiative from the start. Catches the workflow where the GM
-    //    summons defenders during prep, THEN clicks "Create Combat".
-    Hooks.on("createCombat", async (combat) => {
-        if (!game.user.isGM) return;
-        const scene = combat.scene;
-        if (!scene) return;
-        // Wait a tick for combat to settle, then scan
-        setTimeout(async () => {
-            for (const tokenDoc of scene.tokens) {
-                if (!isSummonedToken(tokenDoc)) continue;
-                if (combat.combatants.find(c => c.tokenId === tokenDoc.id)) continue;
-                try {
-                    await combat.createEmbeddedDocuments("Combatant", [{
-                        tokenId:  tokenDoc.id,
-                        actorId:  tokenDoc.actorId ?? tokenDoc.actor?.id,
-                        sceneId:  scene.id,
-                        hidden:   tokenDoc.hidden ?? false,
-                    }]);
-                    console.log(`${TAG} | ${tokenDoc.name} added to newly-created combat`);
-                } catch (err) {
-                    console.warn(`${TAG} | createCombat scan: failed to add ${tokenDoc.name}:`, err);
-                }
-            }
-        }, 100);
-    });
+    // ── Combat creation scan — DISABLED ─────────────────────────────────────
+    // Previously: when a new combat was created in a scene with summon tokens
+    // already on canvas, this scanned the scene and pulled ALL summons into
+    // the new combat — regardless of whether their summoner was joining the
+    // fight. That caused stray companions (e.g. Virric's Steel Defender) to
+    // get added to combats their owner wasn't part of, just because the
+    // token was sitting on the map.
+    //
+    // The desired behavior — and what this module already supported through
+    // OTHER triggers — is: a summon enters combat ONLY when its summoner
+    // does. The remaining triggers cover every legitimate case:
+    //   • createCombatant Sub-case 2 — PC added to combat → scan for THEIR
+    //     summons → add them right after their summoner.
+    //   • createCombatant Sub-case 1 — summon manually added to combat →
+    //     auto-set its initiative based on its summoner's roll.
+    //   • createToken — summon token placed mid-combat → auto-add it to
+    //     the active combat with the right initiative.
+    //   • updateCombatant initiative roll — summoner rolls → companion
+    //     initiative backfills under them.
+    //
+    // Together these cover every flow without the false-positive of
+    // pulling in unrelated summon tokens at combat-create time.
 }
 
 /** When a non-summon combatant (typically a PC) is added to combat, scan

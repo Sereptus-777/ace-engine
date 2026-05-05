@@ -8,12 +8,16 @@ import { AceConfigPanel } from "./config-panel.mjs";
 // ── First-page settings visibility ──────────────────────────
 // Settings whose keys are in this set stay visible on Foundry's standard
 // Configure Settings page. Everything else lives in the popup config panel.
-// To add or remove a setting from the main page: edit this set and the
-// AceConfigPanel TABS map.
+//
+// As of the 2026-05-01 settings cleanup, AI provider / API key / URL / model
+// are EDITABLE only inside the popup config panel — the main page just
+// displays the active provider + model (read-only) and a Test Connection
+// button. This was a deliberate choice to stop edits in two places from
+// fighting each other (e.g. switching provider → URL/key auto-sync running
+// twice and corrupting state). The main-page UI is injected by
+// AceSettings.injectMainPageStatus() further down — see that hook.
 const VISIBLE_IN_MAIN_CONFIG = new Set([
-    "moduleEnabled",   // master on/off — quick reach
-    "aiProvider",      // need to set provider before key
-    "apiKey",          // primary AI key — masked as password
+    "moduleEnabled",   // master on/off — quick reach, only editable thing on main page
 ]);
 
 const DEFAULT_SYSTEM_PROMPT = `You are ACE, an expert AI Game Master assistant for tabletop RPGs running in Foundry VTT.
@@ -182,6 +186,30 @@ export class AceSettings {
       hint: "Your provider's API key. Required for cloud providers (OpenAI, Anthropic, OpenRouter). Leave blank for local models (Ollama, LM Studio). Stored as a password and only visible to the GM.",
       type: String,
       default: "",
+    });
+
+    // Per-provider API key vault (Phase: settings cleanup, 2026-05-01).
+    //
+    // Maps providerId → API key, e.g. { anthropic: "sk-ant-...", openai: "sk-..." }.
+    // The visible API Key field in the config panel always shows the key for
+    // the CURRENTLY-SELECTED provider. When the GM switches provider in the
+    // panel, the previous provider's key is stashed here and the new one's
+    // key is loaded into the field. This stops "I just switched provider but
+    // the field still has the old key" confusion.
+    //
+    // The single `apiKey` setting above is still the source of truth for
+    // every consumer (testConnection, getProviderConfig, ai-provider.mjs etc.)
+    // — they all read `apiKey`, which always equals the active provider's
+    // key. This map is supplementary storage for the panel's swap logic.
+    //
+    // First-open migration (one-time, silent): if this map is empty but
+    // `apiKey` is set, seed the map with `apiKeysByProvider[currentProvider]
+    // = apiKey` so existing setups don't lose their saved key on upgrade.
+    game.settings.register(MODULE_ID, "apiKeysByProvider", {
+      scope:  "world",
+      config: false,
+      type:   Object,
+      default: {},
     });
 
     s("apiUrl", {
@@ -739,6 +767,20 @@ export class AceSettings {
       default: true,
     });
 
+    s("skipBioForSummons", {
+      name: "Skip Bio for Summoned Creatures",
+      hint: "When ON (default), creatures summoned by ACE Forge traps (Mimic Chest, Summoning Rune) and other modules that mark spawns with the shared 'summonedByTrap' flag don't trigger automatic bio generation, voice assignment, or items/loot. Summons are usually generic disposable creatures — bios on them clutter the world. Turn OFF if you want every summon (including transient conjured beasts) to get the full NPC treatment.",
+      type: Boolean,
+      default: true,
+    });
+
+    s("autoLinkSummons", {
+      name: "Auto-Link Summoned Creatures (Steel Defender, Conjure Animals, etc.)",
+      hint: "When ON (default), any token spawned by the dnd5e Summon activity is automatically linked to its summoner. The system grants the summoning player OWNER permission on the summon's token, slots it into combat at the summoner's initiative -0.01 (with multi-summon stacking: -0.01, -0.02, -0.03), and skips auto-bio. Zero setup required — works for Steel Defender, Iron Defender, familiars, Conjure Animals, anything that goes through the system Summon activity. Turn OFF only if you want to handle ownership and initiative manually, or if you only want the manual 'Link as companion' right-click path to drive behavior.",
+      type: Boolean,
+      default: true,
+    });
+
     s("npcKnowledgeBudget", {
       name: "NPC Knowledge Budget (Base)",
       hint: "Base character budget for world knowledge injected into NPC conversation prompts. The budget for an average INT 10 commoner. Higher = NPCs know more about the world but responses may be slower.",
@@ -891,262 +933,184 @@ export class AceSettings {
     ],
   };
 
-  /** Mask API keys + replace model input with dynamic dropdown */
+  /**
+   * Inject a compact AI status block on the main Configure Settings page.
+   *
+   * Phase: settings cleanup (2026-05-01) — removed all editable AI fields
+   * from the main page. Edits happen ONLY in the popup config panel. The
+   * main page now just shows what's currently configured + a Test
+   * Connection button so the user can verify at a glance.
+   *
+   * Layout (read-only):
+   *   ┌────────────────────────────────────────────┐
+   *   │ AI Provider:  Anthropic                    │
+   *   │ Model:        claude-sonnet-4-20250514     │
+   *   │ [ Test Connection ]                        │
+   *   └────────────────────────────────────────────┘
+   *
+   * The popup config panel ("Open Configuration" menu button) is where
+   * provider / API key / URL / model are actually edited.
+   */
+  /**
+   * Update the live Provider/Model spans inside any currently-rendered
+   * status block. Called when the underlying aiProvider / modelName
+   * settings change (e.g. after Save Changes in Open Configuration) so
+   * the main Game Settings page reflects the new values immediately,
+   * without needing the user to close and reopen the dialog.
+   */
+  static _refreshMainPageStatusBlock() {
+    const blocks = document.querySelectorAll(".ace-settings-main-status");
+    if (!blocks.length) return;
+    let providerVal = "", modelVal = "";
+    try { providerVal = game.settings.get(MODULE_ID, "aiProvider") || ""; } catch (_) {}
+    try { modelVal    = game.settings.get(MODULE_ID, "modelName")  || ""; } catch (_) {}
+    const providerLabel = AceSettings.PROVIDER_DEFAULTS[providerVal]?.label
+                       ?? (providerVal ? providerVal[0].toUpperCase() + providerVal.slice(1) : "(not configured)");
+    const modelLabel    = modelVal || "(not configured)";
+    for (const block of blocks) {
+      const provSpan  = block.querySelector('[data-ace-status="provider"]');
+      const modelSpan = block.querySelector('[data-ace-status="model"]');
+      if (provSpan)  provSpan.textContent  = providerLabel;
+      if (modelSpan) modelSpan.textContent = modelLabel;
+    }
+  }
+
   static maskSecretFields() {
-    Hooks.on("renderSettingsConfig", (_app, html) => {
-      const root = html instanceof HTMLElement ? html : html[0];
-      if (!root) return;
+    // Multiple render hooks fire for V12's renderSettingsConfig and V13's
+    // CategoryBrowser-based settings UI. tryInject is idempotent (skips if
+    // the status block is already in place) so listening to all variants is
+    // safe. In practice the V12 hook still fires under V13 for backward
+    // compat — the other two are belt-and-suspenders.
+    const tryInject = (rootArg) => {
+      const root = rootArg instanceof HTMLElement
+        ? rootArg
+        : (rootArg?.[0] ?? rootArg ?? document.body);
+      if (!root?.querySelector) return;
 
-      // Mask API key fields as password inputs
-      for (const key of ["apiKey", "digestApiKey", "elevenLabsApiKey"]) {
-        const input = root.querySelector(`[name="${MODULE_ID}.${key}"]`);
-        if (input && input.type !== "password") {
-          input.type = "password";
-          input.autocomplete = "off";
-        }
-      }
+      // Find ace-engine's section. We use moduleEnabled as the anchor (only
+      // AI-adjacent thing still visible on this page) and inject our status
+      // block right above it so it's the first thing the user sees.
+      let enabledInput = root.querySelector(`[name="${MODULE_ID}.moduleEnabled"]`);
+      // Document-scope fallback for cases where the hook's html arg scopes
+      // to a sub-tree that excludes the actual category content.
+      if (!enabledInput) enabledInput = document.querySelector(`[name="${MODULE_ID}.moduleEnabled"]`);
+      if (!enabledInput) return;
+      const enabledGroup = enabledInput.closest(".form-group") ?? enabledInput.parentElement;
+      if (!enabledGroup) return;
+      // Idempotency — skip if we've already injected for this render
+      if (enabledGroup.parentElement?.querySelector(".ace-settings-main-status")) return;
+      AceSettings._buildAndInjectStatusBlock(enabledGroup);
+    };
+    Hooks.on("renderSettingsConfig",  (_app, html) => tryInject(html));
+    Hooks.on("renderCategoryBrowser", (_app, html) => tryInject(html));
+    // V13 catch-all — fires for every ApplicationV2 render. We only care
+    // about the settings dialog, identified by class name.
+    Hooks.on("renderApplicationV2", (app, html) => {
+      const name = app?.constructor?.name ?? "";
+      if (!name.includes("Settings") && !name.includes("CategoryBrowser")) return;
+      tryInject(html);
+    });
 
-      const providerSelect = root.querySelector(`[name="${MODULE_ID}.aiProvider"]`);
-      // Provider is the only required field — URL + Model live in the popup
-      // panel now (config:false). Buttons must still appear without them.
-      if (!providerSelect) return;
+    // Live-refresh the status block whenever aiProvider or modelName
+    // changes — e.g. after Save Changes in Open Configuration. Without
+    // this, the parent Game Settings dialog would still show the previous
+    // provider/model until the user closes and reopens it.
+    Hooks.on("updateSetting", (setting) => {
+      const key = setting?.key ?? "";
+      if (key !== `${MODULE_ID}.aiProvider` && key !== `${MODULE_ID}.modelName`) return;
+      AceSettings._refreshMainPageStatusBlock();
+    });
+  }
 
-      const apiKeyInput = root.querySelector(`[name="${MODULE_ID}.apiKey"]`);
-      const urlInput    = root.querySelector(`[name="${MODULE_ID}.apiUrl"]`);     // may be null (hidden)
-      const modelInput  = root.querySelector(`[name="${MODULE_ID}.modelName"]`);  // may be null (hidden)
+  /** Build and insert the read-only Provider+Model + Test Connection block
+   *  above the given anchor (the moduleEnabled form-group). Internal helper
+   *  for the renderSettingsConfig / renderCategoryBrowser path above. */
+  static _buildAndInjectStatusBlock(enabledGroup) {
+    const _trueRoot = enabledGroup.parentElement;
+    if (!_trueRoot) return;
 
-      // Helpers to read effective URL/model from DOM if visible, otherwise saved settings
-      const getEffectiveUrl = () => {
-        if (urlInput) return urlInput.value;
-        try { return game.settings.get(MODULE_ID, "apiUrl") || ""; } catch { return ""; }
-      };
-      const getEffectiveModel = () => {
-        if (modelSelect) return modelSelect.value;
-        if (modelInput)  return modelInput.value;
-        try { return game.settings.get(MODULE_ID, "modelName") || ""; } catch { return ""; }
-      };
+      // Resolve current provider + model labels from saved settings.
+      let providerVal = "";
+      let modelVal    = "";
+      try { providerVal = game.settings.get(MODULE_ID, "aiProvider") || ""; } catch (_) {}
+      try { modelVal    = game.settings.get(MODULE_ID, "modelName")  || ""; } catch (_) {}
+      const providerLabel = AceSettings.PROVIDER_DEFAULTS[providerVal]?.label
+                         ?? (providerVal ? providerVal[0].toUpperCase() + providerVal.slice(1) : "(not configured)");
+      const modelLabel    = modelVal || "(not configured)";
 
-      // Replace the model text input with a <select> dropdown — only if visible
-      let modelSelect = null;
-      let savedValue = "";
-      if (modelInput) {
-        modelSelect = document.createElement("select");
-        modelSelect.name = modelInput.name;
-        modelSelect.style.cssText = modelInput.style.cssText;
-        savedValue = modelInput.value;
-        modelInput.replaceWith(modelSelect);
-      }
+      // Build the status block.
+      const status = document.createElement("div");
+      status.className = "ace-settings-main-status";
+      status.style.cssText = [
+        "margin: 4px 0 12px 0",
+        "padding: 10px 14px",
+        "background: linear-gradient(180deg, #15171c, #1f2127)",
+        "border: 1px solid rgba(201, 168, 76, 0.4)",
+        "border-radius: 4px",
+        "color: #e8e6e0",
+        "font-size: 0.9em",
+      ].join(";");
+      status.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:10px;">
+          <div><span style="color:#c9a84c;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;font-size:0.75em;">AI Provider:</span>
+               <span style="margin-left:8px;font-weight:600;" data-ace-status="provider">${foundry.utils.escapeHTML(providerLabel)}</span></div>
+          <div><span style="color:#c9a84c;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;font-size:0.75em;">Model:</span>
+               <span style="margin-left:8px;font-family:monospace;" data-ace-status="model">${foundry.utils.escapeHTML(modelLabel)}</span></div>
+        </div>
+        <button type="button" class="ace-settings-main-test-btn"
+                style="padding:6px 16px;background:#1a1a1e;border:1px solid #c9a84c;border-radius:4px;color:#c9a84c;cursor:pointer;font-size:0.85em;transition:all 0.2s;">
+          <i class="fa-solid fa-plug"></i> Test Connection
+        </button>
+        <div style="margin-top:6px;font-size:0.78em;color:#888;font-style:italic;">
+          Edit AI provider, API key, URL, and model in the
+          <strong style="color:#c9a84c;">Open Configuration</strong> panel above.
+        </div>
+      `;
 
-      /** Add options to the model select element */
-      const _fillSelect = (models, currentValue) => {
-        modelSelect.innerHTML = "";
-        let hasCurrentValue = false;
-        for (const m of models) {
-          const opt = document.createElement("option");
-          opt.value = m.value;
-          opt.textContent = m.label;
-          if (m.value === currentValue) {
-            opt.selected = true;
-            hasCurrentValue = true;
-          }
-          modelSelect.appendChild(opt);
-        }
-        // If current saved value isn't in the list, add it at the top so it's not lost
-        if (currentValue && !hasCurrentValue) {
-          const custom = document.createElement("option");
-          custom.value = currentValue;
-          custom.textContent = `${currentValue} (custom)`;
-          custom.selected = true;
-          modelSelect.prepend(custom);
-        }
-      };
+      // Hover affordance for the test button
+      const testBtn = status.querySelector(".ace-settings-main-test-btn");
+      testBtn.addEventListener("mouseenter", () => {
+        testBtn.style.background = "#2a2a2e";
+        testBtn.style.boxShadow = "0 0 6px rgba(212,175,55,0.3)";
+      });
+      testBtn.addEventListener("mouseleave", () => {
+        testBtn.style.background = "#1a1a1e";
+        testBtn.style.boxShadow = "none";
+      });
 
-      /** Populate model dropdown — queries Ollama/LM Studio live, static list for others */
-      const populateModels = async (provider, currentValue) => {
-        // Start with static list immediately (no flash of empty dropdown)
-        const staticModels = AceSettings.PROVIDER_MODELS[provider] ?? [];
-        _fillSelect(staticModels, currentValue);
-
-        // For local providers, query the actual API for installed models
-        if (provider === "ollama" || provider === "lmstudio") {
-          const localUrl = urlInput.value || AceSettings.PROVIDER_DEFAULTS[provider]?.apiUrl || "http://localhost:11434";
-          try {
-            const endpoint = provider === "ollama" ? `${localUrl}/api/tags` : `${localUrl}/v1/models`;
-            const resp = await fetch(endpoint, { signal: AbortSignal.timeout(3000) });
-            if (resp.ok) {
-              const data = await resp.json();
-              const installed = (provider === "ollama")
-                ? (data.models ?? []).map(m => ({ value: m.name, label: `${m.name} (${_formatSize(m.size)})` }))
-                : (data.data ?? []).map(m => ({ value: m.id, label: m.id }));
-
-              if (installed.length) {
-                // Sort alphabetically, put current value first
-                installed.sort((a, b) => a.value.localeCompare(b.value));
-                _fillSelect(installed, currentValue);
-                console.log(`${MODULE_ID} | Detected ${installed.length} installed ${provider} models`);
-              }
-            }
-          } catch (_) { /* API unreachable — static list is fine */ }
-        }
-      };
-
-      /** Format byte size to human-readable (e.g., 19234567890 → "17.9 GB") */
-      const _formatSize = (bytes) => {
-        if (!bytes) return "?";
-        const gb = bytes / (1024 ** 3);
-        return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / (1024 ** 2)).toFixed(0)} MB`;
-      };
-
-      // Initial population — only if modelSelect was created
-      if (modelSelect) populateModels(providerSelect.value, savedValue);
-
-      // ── "Get API Key" link — changes with provider ─────────
-      const signupLink = document.createElement("a");
-      signupLink.className = "ace-settings-signup-link";
-      signupLink.target = "_blank";
-      signupLink.rel = "noopener";
-      signupLink.style.cssText = "display:inline-block;margin-top:4px;font-size:0.85em;color:#c9a84c;text-decoration:underline;cursor:pointer;";
-      const updateSignupLink = (provider) => {
-        const info = AceSettings.PROVIDER_SIGNUP[provider];
-        if (info?.url) {
-          signupLink.href = info.url;
-          signupLink.textContent = `🔗 ${info.label}`;
-          signupLink.style.display = "inline-block";
-        } else {
-          signupLink.style.display = "none";
-        }
-      };
-      updateSignupLink(providerSelect.value);
-      // Insert the link after the API key field's parent form-group
-      if (apiKeyInput) {
-        const keyGroup = apiKeyInput.closest(".form-group") ?? apiKeyInput.parentElement;
-        keyGroup?.appendChild(signupLink);
-      }
-
-      // Choose where to attach Test/Refresh buttons:
-      // 1) After the model dropdown if it's visible (preferred)
-      // 2) Otherwise after the API Key form-group
-      // 3) Otherwise after the Provider form-group (last resort)
-      const buttonHost =
-        (modelSelect?.closest(".form-group") ?? null) ||
-        (apiKeyInput?.closest(".form-group") ?? apiKeyInput?.parentElement ?? null) ||
-        (providerSelect?.closest(".form-group") ?? providerSelect?.parentElement ?? null);
-
-      // ── Test Connection button ──────────────────────────────
-      const testBtn = document.createElement("button");
-      testBtn.type = "button";
-      testBtn.className = "ace-test-connection-btn";
-      testBtn.innerHTML = '<i class="fas fa-plug"></i> Test Connection';
-      testBtn.style.cssText = "margin-top:8px;padding:5px 14px;background:#1a1a1e;border:1px solid #c9a84c;border-radius:4px;color:#c9a84c;cursor:pointer;font-size:0.85em;transition:all 0.2s;";
-      testBtn.addEventListener("mouseenter", () => { testBtn.style.background = "#2a2a2e"; testBtn.style.boxShadow = "0 0 6px rgba(212,175,55,0.3)"; });
-      testBtn.addEventListener("mouseleave", () => { testBtn.style.background = "#1a1a1e"; testBtn.style.boxShadow = "none"; });
+      // Click — pulls the current saved settings (no edit fields on this
+      // page anymore) and runs testConnection against them.
       testBtn.addEventListener("click", async () => {
         testBtn.disabled = true;
-        testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing…';
-        const result = await AceSettings.testConnection(
-          providerSelect.value,
-          apiKeyInput?.value ?? "",
-          getEffectiveUrl(),
-          getEffectiveModel(),
-        );
-        if (result.ok) {
-          testBtn.innerHTML = '<i class="fas fa-check" style="color:#5db88a;"></i> Connected!';
+        testBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Testing…';
+        let result;
+        try {
+          const provider = game.settings.get(MODULE_ID, "aiProvider") || "";
+          const apiKey   = game.settings.get(MODULE_ID, "apiKey")     || "";
+          const apiUrl   = game.settings.get(MODULE_ID, "apiUrl")     || "";
+          const model    = game.settings.get(MODULE_ID, "modelName")  || "";
+          result = await AceSettings.testConnection(provider, apiKey, apiUrl, model);
+        } catch (err) {
+          result = { ok: false, error: err?.message ?? String(err) };
+        }
+        if (result?.ok) {
+          testBtn.innerHTML = '<i class="fa-solid fa-check" style="color:#5db88a;"></i> Connected!';
           testBtn.style.borderColor = "#5db88a";
-          ui.notifications?.info(`ACE: Connection successful — ${result.model} responded.`);
+          ui.notifications?.info(`ACE: Connection successful — ${result.model ?? "OK"} responded.`);
         } else {
-          testBtn.innerHTML = '<i class="fas fa-times" style="color:#c43b3b;"></i> Failed';
+          testBtn.innerHTML = '<i class="fa-solid fa-times" style="color:#c43b3b;"></i> Failed';
           testBtn.style.borderColor = "#c43b3b";
-          ui.notifications?.error(`ACE: ${result.error}`);
+          ui.notifications?.error(`ACE: ${result?.error ?? "Connection failed"}`);
         }
         setTimeout(() => {
-          testBtn.innerHTML = '<i class="fas fa-plug"></i> Test Connection';
+          testBtn.innerHTML = '<i class="fa-solid fa-plug"></i> Test Connection';
           testBtn.style.borderColor = "#c9a84c";
           testBtn.disabled = false;
         }, 4000);
       });
 
-      // Attach Test Connection button — uses buttonHost (resolved earlier)
-      buttonHost?.appendChild(testBtn);
-
-      // ── Refresh Model List button — force live re-fetch from provider's API ──
-      const refreshBtn = document.createElement("button");
-      refreshBtn.type = "button";
-      refreshBtn.className = "ace-refresh-models-btn";
-      refreshBtn.innerHTML = '<i class="fas fa-rotate"></i> Refresh Model List';
-      refreshBtn.style.cssText = "margin-top:8px;margin-left:6px;padding:5px 14px;background:#1a1a1e;border:1px solid #c9a84c;border-radius:4px;color:#c9a84c;cursor:pointer;font-size:0.85em;transition:all 0.2s;";
-      refreshBtn.addEventListener("mouseenter", () => { refreshBtn.style.background = "#2a2a2e"; refreshBtn.style.boxShadow = "0 0 6px rgba(212,175,55,0.3)"; });
-      refreshBtn.addEventListener("mouseleave", () => { refreshBtn.style.background = "#1a1a1e"; refreshBtn.style.boxShadow = "none"; });
-      refreshBtn.addEventListener("click", async () => {
-        refreshBtn.disabled = true;
-        refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing…';
-        try {
-          const { fetchModelsForProvider, clearModelCatalogCache } = await import("./model-catalog.mjs");
-          clearModelCatalogCache();
-          const provider = providerSelect.value;
-          const models = await fetchModelsForProvider(provider, {
-            apiKey: apiKeyInput?.value ?? "",
-            apiUrl: getEffectiveUrl(),
-            forceRefresh: true,
-          });
-          if (models.length) {
-            // If the model dropdown is visible on this page, replace its options
-            // with the live list. Otherwise just cache + announce — the popup
-            // panel will pick up the cached list next time it renders.
-            if (modelSelect) {
-              modelSelect.innerHTML = "";
-              const currentValue = modelSelect.value;
-              let hasCurrent = false;
-              for (const m of models) {
-                const opt = document.createElement("option");
-                opt.value = m.value;
-                const badge = m.free ? "🆓 " : "";
-                const visionBadge = m.vision ? " 👁" : "";
-                opt.textContent = `${badge}${m.label}${visionBadge}`;
-                if (m.value === currentValue) { opt.selected = true; hasCurrent = true; }
-                modelSelect.appendChild(opt);
-              }
-              if (currentValue && !hasCurrent) {
-                const opt = document.createElement("option");
-                opt.value = currentValue;
-                opt.textContent = `${currentValue} (custom)`;
-                opt.selected = true;
-                modelSelect.prepend(opt);
-              }
-            }
-            ui.notifications?.info(`ACE: refreshed ${models.length} models for ${provider}.`);
-          } else {
-            ui.notifications?.warn(`ACE: no models returned from ${provider}. Check connection.`);
-          }
-        } catch (err) {
-          ui.notifications?.error(`ACE: refresh failed — ${err.message?.slice(0, 100) || "unknown error"}`);
-        } finally {
-          refreshBtn.disabled = false;
-          refreshBtn.innerHTML = '<i class="fas fa-rotate"></i> Refresh Model List';
-        }
-      });
-      buttonHost?.appendChild(refreshBtn);
-
-      // When provider changes: update URL, update model dropdown (if visible), select default
-      providerSelect.addEventListener("change", () => {
-        const newProvider = providerSelect.value;
-        const defaults = AceSettings.PROVIDER_DEFAULTS[newProvider];
-        if (!defaults) return;
-
-        // Auto-fill URL if it's a known default (don't overwrite custom URLs) — only if visible
-        if (urlInput) {
-          const knownUrls = Object.values(AceSettings.PROVIDER_DEFAULTS).map(d => d.apiUrl);
-          if (!urlInput.value || knownUrls.includes(urlInput.value)) {
-            urlInput.value = defaults.apiUrl;
-          }
-        }
-
-        // Repopulate model dropdown and select the default for this provider — only if visible
-        if (modelSelect) populateModels(newProvider, defaults.modelName);
-
-        // Update signup link
-        updateSignupLink(newProvider);
-      });
-    });
+      // Inject above the moduleEnabled toggle
+      enabledGroup.parentElement?.insertBefore(status, enabledGroup);
   }
 
   /**

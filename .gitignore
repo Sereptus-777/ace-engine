@@ -13,3 +13,10 @@ config.local.json
 
 # Node
 node_modules/
+
+# API keys - never commit
+**/FOUNDRY OpenAI key.txt
+**/*OpenAI key*.txt
+**/*api*key*.txt
+**/*.env
+**/*.secret
