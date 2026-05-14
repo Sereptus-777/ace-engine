@@ -518,7 +518,13 @@ export function registerUiHooks() {
     // ── Player right-click on NPC tokens → force Token HUD ──────────────
     // By default Foundry may not show Token HUD for unowned NPC tokens.
     // We intercept right-clicks on NPC tokens so players can access the chat icon.
-    Hooks.on("canvasReady", () => {
+    //
+    // Run BOTH immediately (canvas is typically already drawn by the time
+    // registerUiHooks is invoked from activateNpcChat — initial canvasReady
+    // has already fired and won't fire again until scene switch) AND on
+    // future canvasReady fires (handles scene switches and the rare case
+    // where the canvas isn't drawn yet at invocation time).
+    const _attachPlayerRightClick = () => {
         if (game.user.isGM) return;
 
         const board = document.getElementById("board");
@@ -562,7 +568,9 @@ export function registerUiHooks() {
             ev.stopPropagation();
             canvas.hud.token.bind(clickedToken);
         }, true);
-    });
+    };
+    _attachPlayerRightClick();                       // handle current canvas (initial boot)
+    Hooks.on("canvasReady", _attachPlayerRightClick); // handle future scene switches
 
     // ── Orphaned spectator window cleanup on scene change ───────────────
     Hooks.on("canvasReady", async () => {

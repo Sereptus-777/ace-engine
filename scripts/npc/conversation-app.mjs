@@ -249,8 +249,30 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (!isReRender) {
             this._sendBtn.addEventListener("click",   () => this.handleSend());
             this._micBtn.addEventListener("click",    () => this.handleMic());
-            this._inputField.addEventListener("keypress", (ev) => {
-                if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); this.handleSend(); }
+            // Use `keydown` (not the deprecated `keypress`) and stop ALL
+            // keyboard events from propagating to Foundry's global keybinding
+            // system. Without `stopPropagation`, Backspace inside the chat
+            // textarea triggers Foundry's "delete selected token" hotkey and
+            // obliterates the player's character. Same risk exists for
+            // Delete, Tab, Ctrl+Z, arrow keys, and any future Foundry binding.
+            //
+            // `isComposing` check prevents IME composition-end events from
+            // firing a phantom Enter — that was the source of the
+            // "duplicate message on fast Enter" symptom: IME flushes its
+            // buffer with an Enter keydown that we'd otherwise treat as a
+            // send command alongside the user's actual Enter.
+            this._inputField.addEventListener("keydown", (ev) => {
+                ev.stopPropagation();
+                if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+                    ev.preventDefault();
+                    this.handleSend();
+                }
+            });
+            // ALSO stop keyup propagation — Foundry's keybinding system fires
+            // on keyup for some bindings (e.g., release-delete for token
+            // delete), so a keydown-only stopPropagation isn't sufficient.
+            this._inputField.addEventListener("keyup", (ev) => {
+                ev.stopPropagation();
             });
             // Auto-grow textarea as user types or dictates (capped at max-height)
             this._inputField.addEventListener("input", () => {

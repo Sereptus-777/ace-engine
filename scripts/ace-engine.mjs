@@ -626,6 +626,19 @@ Hooks.once("ready", async () => {
   // ── Register password masking for API key fields in Settings ──
   AceSettings.maskSecretFields();
 
+  // ── NPC chat activation — MUST run for ALL users, BEFORE the GM gate ──
+  // Players need the chat-bubble HUD on NPC tokens to initiate conversations
+  // with Strahd, merchants, etc. The hooks registered inside activateNpcChat
+  // (notably the renderTokenHUD listener and the canvasReady-tied player
+  // right-click handler in ui-hooks.mjs) are MANDATORY player-side.
+  // Pre-Envoy→Engine merger, this lived in ace-envoy/src/main.js with no
+  // GM gate — players got the hooks automatically. The merger placed it
+  // AFTER the GM-only return below, silently locking players out.
+  // activateNpcChat is idempotent — the second invocation from the
+  // migration-completion .then() (line ~1832) safely no-ops on the GM client.
+  try { activateNpcChat(); }
+  catch (err) { console.warn(`${MODULE_ID} | NPC chat activation (pre-GM-gate) failed:`, err); }
+
   // ── GM-only initialization ────────────────────────────────────
   if (!game.user.isGM) return;
 
