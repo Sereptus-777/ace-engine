@@ -26,7 +26,7 @@ import { MODULE_ID } from "./ace-engine.mjs";
 const TAG = "ACE: Engine | Token Art";
 const IMG_EXT_RE = /\.(webp|png|jpg|jpeg|svg|gif|avif)$/i;
 const VARIANT_SEP = / - /;          // " - " — what splits base from variant
-const CHOOSER_TIMEOUT_MS = 4000;     // auto-dismiss after this many ms
+const CHOOSER_TIMEOUT_MS = 10000;    // 10s auto-dismiss for non-first-time picks
 
 // ─── In-memory index ───────────────────────────────────────────────────────
 // Built on world load + on demand via rescan. Cleared and re-built atomically.
@@ -449,9 +449,13 @@ function _showChooser(tokenDoc, matches, { actorName } = {}) {
             } catch (_) { /* fallback to center */ }
         }
 
-        // Determine highlight index from recent-choices memory
+        // Determine highlight index from recent-choices memory.
+        // isFirstTimePick = no remembered choice for this creature in this
+        // world → user has never seen these variants before → no auto-pick
+        // timer at all (wait for explicit input).
         const recent = _getRecentChoices();
         const lastPath = recent[(actorName || "").toLowerCase().trim()] ?? null;
+        const isFirstTimePick = !lastPath;
         let highlightIdx = matches.findIndex(m => m.path === lastPath);
         if (highlightIdx < 0) highlightIdx = 0;
 
@@ -464,7 +468,7 @@ function _showChooser(tokenDoc, matches, { actorName } = {}) {
 
         const header = document.createElement("div");
         header.className = "ace-tap-header";
-        header.innerHTML = `<i class="fas fa-image"></i> <strong>${actorName ?? "Token"}</strong> — pick variant <span class="ace-tap-hint">(Enter • 1-9 • R random • Esc)</span>`;
+        header.innerHTML = `<i class="fas fa-image"></i> <strong>${actorName ?? "Token"}</strong> — pick variant <span class="ace-tap-hint">(click • Enter • 1-9 • R random • Esc)</span>`;
         root.appendChild(header);
 
         const grid = document.createElement("div");
@@ -492,10 +496,9 @@ function _showChooser(tokenDoc, matches, { actorName } = {}) {
         });
         root.appendChild(grid);
 
-        // Footer hint
+        // Footer — different message depending on first-time vs returning pick
         const footer = document.createElement("div");
         footer.className = "ace-tap-footer";
-        footer.textContent = `Auto-uses "${matches[highlightIdx]?.displayVariant ?? "Base"}" in 4s`;
         root.appendChild(footer);
 
         document.body.appendChild(root);
@@ -503,9 +506,22 @@ function _showChooser(tokenDoc, matches, { actorName } = {}) {
         root.focus();
 
         let settled = false;
-        let timeoutId = null;
-        let countdownId = null;
-        const startTime = Date.now();
+        let tickId = null;
+        let remainingMs = CHOOSER_TIMEOUT_MS;
+        let lastTickTime = Date.now();
+        let isPaused = false;
+
+        const updateFooter = () => {
+            if (isFirstTimePick) {
+                footer.textContent = `First time picking for "${actorName}" — take your time.`;
+                return;
+            }
+            const sec = Math.max(0, Math.ceil(remainingMs / 1000));
+            const variantLabel = matches[highlightIdx]?.displayVariant ?? "Base";
+            footer.textContent = isPaused
+                ? `Paused (mouse over) — "${variantLabel}" will be used after ${sec}s`
+                : `Auto-uses "${variantLabel}" in ${sec}s`;
+        };
 
         const finish = (entry) => {
             if (settled) return;
@@ -515,8 +531,7 @@ function _showChooser(tokenDoc, matches, { actorName } = {}) {
         };
 
         const cleanup = () => {
-            if (timeoutId) clearTimeout(timeoutId);
-            if (countdownId) clearInterval(countdownId);
+            if (tickId) clearInterval(tickId);
             document.removeEventListener("keydown", onKey, true);
             document.removeEventListener("mousedown", onOutsideClick, true);
             _dismissActiveChooser();
@@ -543,7 +558,7 @@ function _showChooser(tokenDoc, matches, { actorName } = {}) {
                 highlightIdx = next;
                 grid.querySelectorAll(".ace-tap-thumb").forEach((t, i) =>
                     t.classList.toggle("is-highlight", i === highlightIdx));
-                footer.textContent = `Auto-uses "${matches[highlightIdx]?.displayVariant ?? "Base"}" in 4s`;
+                updateFooter();
             }
         };
         document.addEventListener("keydown", onKey, true);
@@ -553,13 +568,52 @@ function _showChooser(tokenDoc, matches, { actorName } = {}) {
         };
         document.addEventListener("mousedown", onOutsideClick, true);
 
-        // Auto-dismiss countdown
-        timeoutId = setTimeout(() => finish(matches[highlightIdx]), CHOOSER_TIMEOUT_MS);
-        countdownId = setInterval(() => {
-            const left = Math.max(0, CHOOSER_TIMEOUT_MS - (Date.now() - startTime));
-            const sec = Math.ceil(left / 1000);
-            footer.textContent = `Auto-uses "${matches[highlightIdx]?.displayVariant ?? "Base"}" in ${sec}s`;
-        }, 250);
+        // Pause/resume the timer based on mouse hover over the chooser. So
+        // just LOOKING at the thumbnails doesn't burn the clock — the
+        // countdown only ticks when your mouse is outside.
+        root.addEventListener("mouseenter", () => {
+            if (isFirstTimePick) return;
+            isPaused = true;
+            updateFooter();
+        });
+        root.addEventListener("mouseleave", () => {
+            if (isFirstTimePick) return;
+            isPaused = false;
+            lastTickTime = Date.now();
+            updateFooter();
+        });
+        // After one frame, check if mouse is ALREADY inside the chooser
+        // (common — chooser pops where the token was dropped). If so,
+        // start paused so the user doesn't lose seconds before the
+        // mouseenter event ever has a chance to fire.
+        requestAnimationFrame(() => {
+            try {
+                if (!isFirstTimePick && root.matches(":hover")) {
+                    isPaused = true;
+                    updateFooter();
+                }
+            } catch (_) {}
+        });
+
+        // Show the initial footer
+        updateFooter();
+
+        // Start the timer — but only for non-first-time picks
+        if (!isFirstTimePick) {
+            tickId = setInterval(() => {
+                const now = Date.now();
+                const delta = now - lastTickTime;
+                lastTickTime = now;
+                if (isPaused) return;
+                remainingMs -= delta;
+                if (remainingMs <= 0) {
+                    clearInterval(tickId);
+                    finish(matches[highlightIdx]);
+                    return;
+                }
+                updateFooter();
+            }, 250);
+        }
     });
 }
 
