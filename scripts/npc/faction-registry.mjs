@@ -2589,8 +2589,22 @@ export async function processTokenFaction(tokenDoc) {
             console.log(`${TAG} | AI recommendations for ${actor.name}:`, recommendations.map(r => r.name));
         }
 
-        // ── Step 2: Show smart setup dialog ────────────────────────────
-        const setup = await showSmartSetupDialog(actor.name, creatureBase, recommendations, creatureType, defaultTier);
+        // ── Step 2: Show smart setup dialog (OR auto-accept #1) ────────
+        // If tokenDoc has _aceAutoAccept set (auto-pipeline mode), skip
+        // the dialog entirely and accept the AI's #1 recommendation.
+        let setup;
+        if (tokenDoc._aceAutoAccept) {
+            setup = {
+                choice: "accept",
+                selectedIndex: 0,
+                rename: false,
+                autoLink: false,
+                tier: defaultTier,
+            };
+            console.log(`${TAG} | ${actor.name} — AUTO-ACCEPT recommendation #1: ${recommendations[0]?.name}`);
+        } else {
+            setup = await showSmartSetupDialog(actor.name, creatureBase, recommendations, creatureType, defaultTier);
+        }
 
         // Store rename preference and tier override for bio-generator downstream
         if (setup && !setup.rename) tokenDoc._aceSkipRename = true;

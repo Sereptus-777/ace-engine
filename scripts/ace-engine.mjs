@@ -1120,6 +1120,18 @@ Hooks.once("ready", async () => {
     console.warn(`${MODULE_ID} | NPC→PC converter activation failed:`, err);
   }
 
+  // ── Auto-Pipeline (review-card click wiring) ──────────────────
+  // Registers the renderChatMessage hook so the "Open Sheet" / "Revert
+  // Bio" buttons on auto-generation review cards become clickable. The
+  // batching / rate-limiting / auto-accept logic gets lazy-imported from
+  // the createToken hook in activate.mjs when a token drops.
+  try {
+    const mod = await import("./npc/auto-pipeline.mjs");
+    mod.activateAutoPipeline();
+  } catch (err) {
+    console.warn(`${MODULE_ID} | Auto-pipeline activation failed:`, err);
+  }
+
   // ── Load baked-in credentials from config.local.json (optional) ─
   // GM-only: players don't need ElevenLabs keys or other credentials.
   // If the file exists and contains your ElevenLabs key/voice, those

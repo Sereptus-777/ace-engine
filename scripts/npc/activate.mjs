@@ -173,6 +173,22 @@ function _registerHooks() {
         // setting via the Smart Token Drop dialog.
         if (tier === "off") return;
 
+        // ── Auto-pipeline branch ───────────────────────────────────────
+        // When autoGenerateOnDrop is ON, every drop goes through the
+        // auto-pipeline which batches simultaneous drops, applies a rate
+        // limit, shows a single confirmation for big batches, and serially
+        // processes each token with auto-accept on the smart-setup dialog.
+        // Bio path only — items-only mode (bioEnabled=false) bypasses
+        // because there's no popup to skip in that path anyway.
+        let autoMode = false;
+        try { autoMode = !!game.settings.get(MODULE_ID, "autoGenerateOnDrop"); } catch (_) {}
+        if (autoMode && bioEnabled) {
+            import("./auto-pipeline.mjs").then(({ enqueueAutoGeneration }) => {
+                enqueueAutoGeneration(tokenDocument);
+            }).catch(err => console.error(`${TAG} | Auto-pipeline load failed:`, err));
+            return;
+        }
+
         if (bioEnabled) {
             // Normal path — full bio + items + loot pipeline
             import("./bio-generator.mjs").then(({ queueBioGeneration }) => {

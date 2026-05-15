@@ -800,6 +800,33 @@ export class AceSettings {
       default: true,
     });
 
+    // ── Auto-Generate on Drop ─────────────────────────────────
+    // When ON, the smart-setup popup is skipped and the AI's top
+    // faction recommendation is auto-accepted. Bio generates in
+    // the background. Comes with guardrails (rate limit, batch
+    // confirmation, post-generation whisper card for review/revert)
+    // so you don't burn AI credits on runaway batch drops.
+    s("autoGenerateOnDrop", {
+      name: "Auto-Generate Bio & Faction on Token Drop",
+      hint: "When ON, the smart-setup popup is SKIPPED on every NPC drop. The AI's #1 faction suggestion is auto-accepted and a bio writes in the background. Defaults to OFF because the popup serves as a sanity check — turn ON only if you want speed over review. Guardrails apply automatically: rate-limit of N generations per minute (see below), single confirmation popup for big batches (>N tokens), and a whispered chat card after each auto-generation with a Revert button so you can roll back bad AI calls. Respects the Token Drop AI Level setting — if that's set to Off, nothing runs regardless of this toggle.",
+      type: Boolean,
+      default: false,
+    });
+    s("autoGenerateBatchConfirmThreshold", {
+      name: "Auto-Gen — Batch Confirm Threshold",
+      hint: "When auto-generate is ON and MORE than this many tokens drop within 2 seconds, ONE confirmation popup appears asking 'Auto-generate bios for N creatures? (~$X estimated)' before any AI calls fire. Lower = catches smaller batches; higher = quieter. Set to 0 to disable the confirmation entirely (not recommended — runaway scripts can burn credits fast).",
+      type: Number,
+      default: 5,
+      range: { min: 0, max: 50, step: 1 },
+    });
+    s("autoGenerateCapPerMinute", {
+      name: "Auto-Gen — Max Generations Per 60s",
+      hint: "Rolling rate-limit. When auto-generate is ON, no more than this many bio+faction generations will fire in any 60-second window. Hits to the cap are skipped with a toast (the tokens still drop, just without auto AI work — you can still manually generate later). Protects against batch drops blowing through your AI credit budget.",
+      type: Number,
+      default: 10,
+      range: { min: 1, max: 60, step: 1 },
+    });
+
     s("skipBioForSummons", {
       name: "Skip Bio for Summoned Creatures",
       hint: "When ON (default), creatures summoned by ACE Forge traps (Mimic Chest, Summoning Rune) and other modules that mark spawns with the shared 'summonedByTrap' flag don't trigger automatic bio generation, voice assignment, or items/loot. Summons are usually generic disposable creatures — bios on them clutter the world. Turn OFF if you want every summon (including transient conjured beasts) to get the full NPC treatment.",
