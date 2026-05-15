@@ -1813,11 +1813,21 @@ Hooks.once("ready", async () => {
         return out;
       },
       listSuspectedJunkNpcs: () => {
-        // An NPC actor is "suspected junk" if it lives in ACE NPCs (or
-        // its subfolders) OR at the root, AND its name matches one of
-        // a long list of vanilla D&D creature names with no unique
-        // suffix. These are the leftovers from the pre-flag auto-link
-        // bug that created generic-named actors.
+        // An NPC actor is "suspected junk" if it matches ANY of:
+        //   (a) Created by dnd5e's Summon activity auto-import
+        //       (flags.dnd5e.isAutoImported = true). Every Conjure
+        //       Elemental / Conjure Animals / Find Familiar / Summon
+        //       Beast etc. drops one of these into the actor sidebar
+        //       at root and never cleans them up.
+        //   (b) Lives in "ACE NPCs" folder tree OR at the root, AND
+        //       its name matches a vanilla D&D compendium creature
+        //       name with no unique suffix. Catches leftovers from
+        //       the pre-flag auto-link bug that created generic-named
+        //       actors.
+        //
+        // Skips actors with compendium sourceId at root WITHOUT the
+        // isAutoImported flag — those are intentional drag-from-
+        // compendium-to-sidebar imports.
         const COMPENDIUM_PATTERN = /^(Aboleth|Acolyte|Air Elemental|Animated Armor|Ankheg|Ape|Archmage|Assassin|Awakened (Shrub|Tree)|Azer|Baboon|Badger|Banshee|Basilisk|Bandit( Captain)?|Bat|Bearded Devil|Beholder|Berserker|Black (Bear|Dragon|Pudding)|Blink Dog|Blood Hawk|Blue Dragon|Boar|Bone Devil|Brass Dragon|Bronze Dragon|Brown Bear|Bugbear( Chief)?|Bulette|Camel|Cat|Centaur|Chain Devil|Chimera|Chuul|Clay Golem|Cloaker|Cloud Giant|Cockatrice|Commoner|Constrictor Snake|Copper Dragon|Couatl|Crab|Crocodile|Cult Fanatic|Cultist|Cyclops|Dao|Death Dog|Deep Gnome|Deer|Demilich|Deva|Dire Wolf|Djinni|Doppelganger|Dragon Turtle|Dretch|Drider|Drow( Elite Warrior)?|Druid|Dryad|Duergar|Dust Mephit|Eagle|Earth Elemental|Efreeti|Elephant|Elf|Erinyes|Ettercap|Ettin|Fire Elemental|Fire Giant|Fire Snake|Flameskull|Flesh Golem|Flying Snake|Flying Sword|Frog|Frost Giant|Fungus|Gargoyle|Gas Spore|Gelatinous Cube|Ghast|Ghost|Ghoul|Giant Ape|Giant Badger|Giant Bat|Giant Boar|Giant Centipede|Giant Constrictor Snake|Giant Crab|Giant Crocodile|Giant Eagle|Giant Elk|Giant Fire Beetle|Giant Frog|Giant Goat|Giant Hyena|Giant Lizard|Giant Octopus|Giant Owl|Giant Poisonous Snake|Giant Rat|Giant Scorpion|Giant Sea Horse|Giant Shark|Giant Spider|Giant Toad|Giant Vulture|Giant Wasp|Giant Weasel|Giant Wolf Spider|Gibbering Mouther|Glabrezu|Gladiator|Gnoll|Gnome|Goat|Goblin|Gold Dragon|Gorgon|Gray Ooze|Green Dragon|Green Hag|Grell|Grick|Griffon|Grimlock|Guard|Guardian Naga|Half-Dragon|Half-Ogre|Halfling|Harpy|Hawk|Hell Hound|Hezrou|Hill Giant|Hippogriff|Hobgoblin|Homunculus|Horned Devil|Hunter Shark|Hydra|Hyena|Ice Devil|Imp|Invisible Stalker|Iron Golem|Jackal|Killer Whale|Knight|Kobold|Kraken|Kuo[\s-]toa|Lamia|Lemure|Lich|Lion|Lizard|Lizardfolk|Magma Mephit|Magmin|Mammoth|Manticore|Marid|Marilith|Mastiff|Medusa|Merfolk|Merrow|Mimic|Mind Flayer|Minotaur|Mule|Mummy( Lord)?|Naga|Nalfeshnee|Night Hag|Nightmare|Noble|Nothic|Ochre Jelly|Octopus|Ogre|Oni|Orc( War Chief)?|Otyugh|Owl|Owlbear|Panther|Pegasus|Peryton|Phase Spider|Pit Fiend|Pixie|Planetar|Plesiosaurus|Poisonous Snake|Polar Bear|Pony|Pseudodragon|Pteranodon|Purple Worm|Quasit|Quipper|Rakshasa|Rat|Raven|Red Dragon|Reef Shark|Remorhaz|Revenant|Rhinoceros|Riding Horse|Roc|Roper|Rust Monster|Saber-Toothed Tiger|Sahuagin|Salamander|Satyr|Scorpion|Scout|Sea Hag|Sea Horse|Shadow|Shambling Mound|Shark|Shield Guardian|Shrieker|Silver Dragon|Skeleton|Solar|Specter|Spider|Spirit Naga|Sprite|Spy|Stirge|Stone Giant|Stone Golem|Storm Giant|Succubus|Swarm of .+|Tarrasque|Thug|Tiger|Treant|Tribal Warrior|Triceratops|Troll|Twig Blight|Tyrannosaurus|Unicorn|Vampire( Spawn)?|Veteran|Violet Fungus|Vrock|Vulture|Warhorse|Water Elemental|Weasel|Werebear|Wereboar|Wererat|Weretiger|Werewolf|White Dragon|Wight|Will-o'-Wisp|Winter Wolf|Wolf|Worg|Wraith|Wyvern|Xorn|Yeti|Young (Black|Blue|Brass|Bronze|Copper|Gold|Green|Red|Silver|White) Dragon|Yuan[\s-]ti.*|Zombie)( \(\d+\))?( #?\d+)?$/i;
         const parent = game.folders?.find(f => f.name === "ACE NPCs" && f.type === "Actor");
         const aceFolderIds = new Set();
@@ -1839,19 +1849,37 @@ Hooks.once("ready", async () => {
           if (a.type !== "npc") continue;
           const inAce = aceFolderIds.has(a.folder?.id);
           const atRoot = !a.folder;
+          const isSummonImport = !!a.flags?.dnd5e?.isAutoImported;
+
+          // Path (a): dnd5e summon auto-import. Always a junk candidate.
+          if (isSummonImport) {
+            out.push({
+              id: a.id,
+              name: a.name,
+              folder: a.folder?.name ?? "(root)",
+              location: "root (dnd5e summon import)",
+              source: "dnd5e-summon",
+              hasAceFlag: !!a.flags?.[MODULE_ID]?.autoLinked,
+              sourceId: a.flags?.core?.sourceId ?? null,
+            });
+            continue;
+          }
+
+          // Path (b): in ACE NPCs tree OR root + name matches vanilla pattern
           if (!inAce && !atRoot) continue;
           if (!COMPENDIUM_PATTERN.test(a.name ?? "")) continue;
           // Skip if the actor was clearly imported from a compendium and
-          // user wants it as a reference (sourceId points back to pack).
-          // Heuristic: if it's at root AND has a compendium sourceId, it's
-          // probably an intentional drag from compendium to sidebar —
-          // skip from the suspect list.
+          // user wants it as a reference (sourceId without summon flag).
+          // Heuristic: if it's at root AND has a compendium sourceId AND
+          // no summon-import flag, it's probably an intentional drag
+          // from compendium to sidebar — skip.
           if (atRoot && a.flags?.core?.sourceId) continue;
           out.push({
             id: a.id,
             name: a.name,
             folder: a.folder?.name ?? "(root)",
-            location: inAce ? "ACE NPCs tree" : "root",
+            location: inAce ? "ACE NPCs tree" : "root (name-pattern match)",
+            source: inAce ? "ace-engine-legacy" : "name-pattern",
             hasAceFlag: !!a.flags?.[MODULE_ID]?.autoLinked,
             sourceId: a.flags?.core?.sourceId ?? null,
           });
