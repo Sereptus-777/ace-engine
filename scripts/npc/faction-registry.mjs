@@ -2306,16 +2306,14 @@ async function showSmartSetupDialog(actorName, creatureBase, recommendations, cr
             </div>
         </label>`).join("");
 
-    const renameChecked = isNonSentient ? "" : "checked";
+    // Both checkboxes default to UNCHECKED per GM preference — rename + auto-link
+    // are opt-in actions, not opt-out. (Save-as-persistent in particular: many
+    // dropped NPCs are disposable, so persisting by default litters the sidebar.)
+    const renameChecked = "";
     const renameDisabled = isNonSentient ? "disabled" : "";
     const renameNote = isNonSentient ? " (beasts keep species name)" : "";
     const factionHidden = (currentTier === "bio-only") ? "display:none;" : "";
-
-    // Default for the auto-link checkbox: read the global setting. Matches the
-    // checkbox on the Customize dialog so both popups behave the same way.
-    let autoLinkDefault = true;
-    try { autoLinkDefault = game.settings.get(MODULE_ID, "enableAutoLink") ?? true; } catch (_) {}
-    const autoLinkChecked = autoLinkDefault ? "checked" : "";
+    const autoLinkChecked = "";
 
     const content = `
         <div style="font-family:sans-serif;">

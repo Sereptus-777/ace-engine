@@ -1115,6 +1115,20 @@ async function _generateBio(tokenDocument) {
         }
     }
 
+    // ── Re-read tier in case the Smart Setup dialog overrode it ─────────
+    // The dialog's "Skip All" button sets tokenDocument._aceDropTier="off"
+    // mid-flow. The local `tier` was captured BEFORE the dialog so we
+    // need to refresh it now. If GM hit Skip All, bail completely — no
+    // bio, no items, no loot, nothing.
+    if (tokenDocument._aceDropTier && tokenDocument._aceDropTier !== tier) {
+        tier = tokenDocument._aceDropTier;
+        console.log(`${TAG} | Tier updated by dialog → "${tier}" for ${actor.name}`);
+    }
+    if (tier === "off") {
+        console.log(`${TAG} | GM chose Skip All — no further generation for ${actor.name}`);
+        return;
+    }
+
     // If faction-only, skip bio + social profile. But the master toggle says
     // items + loot still run regardless of the bio decision, so honor it here.
     if (tier === "faction-only") {
