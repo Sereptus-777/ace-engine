@@ -35,6 +35,10 @@ const _index = {
     byBase: new Map(),
     /** Map<fullNameLower, Entry>    — for "Goblin Archer" → exact entry */
     byFullName: new Map(),
+    /** Map<keyTokenString, Entry[]> — for fuzzy word-set matching. Lets
+     *  "Air Elemental" match files keyed as "air elemental" regardless
+     *  of size adjectives, numeric suffixes, underscores, etc. */
+    byKey: new Map(),
     /** All entries, in scan order. */
     all: [],
     /** Whether the index has been built at least once. */
@@ -44,6 +48,49 @@ const _index = {
 // Active chooser DOM element — tracked so we can dismiss the previous one
 // before a new spawn pops a new chooser on top of it.
 let _activeChooser = null;
+
+// Folder names that are "generic containers" — when a token file lives
+// inside one of these, we DON'T treat the folder name as the creature
+// name (it's just an organizational bucket). Anything else becomes the
+// creature-name source of truth, so e.g. `MM/Air Elemental/Air_01.png`
+// uses "Air Elemental" as the base regardless of what's in the filename.
+const GENERIC_FOLDERS = new Set([
+    "npcs", "tokens", "token", "bestiary", "monsters", "monster",
+    "creatures", "creature", "portraits", "portrait",
+    "art", "artwork", "images", "img",
+    "mm", "phb", "vgm", "mtof", "mpmm", "tcoe", "ftod", "boem",
+    "srd", "srd5e", "system", "systems", "good", "pngs", "png",
+    "monster png-good only", "monster-png-good-only",
+]);
+
+// Words to ignore when computing a creature's "key signature" — sizes,
+// numeric tokens, "v01"-style variant markers, and the common modifier
+// prefixes already in STRIP_TOKENS. Used to make
+//   "Air_Large_Elemental_01"  match
+//   "Air Elemental"           (after stripping Large + 01).
+const SIZE_TOKENS = new Set(["tiny", "small", "medium", "large", "huge", "gargantuan"]);
+const NUMERIC_RE  = /^\d+$|^v\d+$|^\(\d+\)$/i;
+
+/** Normalize underscores → spaces, collapse whitespace. */
+function _normalizeFilename(s) {
+    return (s || "")
+        .replace(/[_]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+/** Compute the "key signature" of a name — sorted, lowercased, dedup'd
+ *  word set with sizes / numbers / modifier prefixes stripped. Used for
+ *  fuzzy matching by word set. */
+function _keyTokensOf(name) {
+    const words = _normalizeFilename(name).toLowerCase().split(" ");
+    const kept = words.filter(w =>
+        w && !SIZE_TOKENS.has(w) && !STRIP_TOKENS.has(w) && !NUMERIC_RE.test(w)
+    );
+    // Dedup + sort for stable signature
+    const uniq = [...new Set(kept)].sort();
+    return uniq.join(" ");
+}
 
 /** Plain entry shape. */
 function _makeEntry({ path, displayBase, displayVariant, fullName }) {
@@ -55,15 +102,68 @@ function _makeEntry({ path, displayBase, displayVariant, fullName }) {
         baseLower: displayBase.toLowerCase().trim(),
         fullLower: fullName.toLowerCase().trim(),
         variantLower: displayVariant ? displayVariant.toLowerCase().trim() : null,
+        keyTokens:    _keyTokensOf(fullName),
     };
 }
 
-/** Parse "NPCs/Goblin - Archer.webp" → entry. */
-function _parsePath(path) {
-    const filename = path.split("/").pop().replace(/\.[^.]+$/, "");
-    const parts = filename.split(VARIANT_SEP);
-    const displayBase = parts[0].trim();
-    const displayVariant = parts.length > 1 ? parts.slice(1).join(" - ").trim() : null;
+/**
+ * Parse a token-art file path → entry.
+ *
+ * Naming logic:
+ *  1. If the file lives inside a non-generic subfolder, USE THE FOLDER
+ *     NAME as the creature's base. The filename becomes a variant. This
+ *     handles "MM/Air Elemental/Air_Large_Elemental_01.png" properly —
+ *     base "Air Elemental", variant "Large 01".
+ *  2. Otherwise, fall back to filename parsing with " - " separator.
+ *
+ * @param {string} path        e.g. "NPCs/Goblin/Goblin Boss.webp"
+ * @param {Set<string>} scanRoots  Lower-cased set of scan-root paths so
+ *                                 we know which folder names to ignore.
+ */
+function _parsePath(path, scanRoots) {
+    const parts = path.split("/");
+    const filenameRaw = parts.pop().replace(/\.[^.]+$/, "");
+    const filename = _normalizeFilename(filenameRaw);
+
+    // Walk up from the file looking for the deepest non-generic folder.
+    // Stop at any directory whose path matches one of the scan roots.
+    let creatureFolder = null;
+    for (let i = parts.length - 1; i >= 0; i--) {
+        const folderName = _normalizeFilename(parts[i]);
+        const lower = folderName.toLowerCase();
+        // Stop if we hit a scan-root boundary
+        const pathSoFar = parts.slice(0, i + 1).join("/").toLowerCase();
+        if (scanRoots.has(pathSoFar)) break;
+        // Skip generic container names
+        if (GENERIC_FOLDERS.has(lower)) continue;
+        // Skip empty / unusable
+        if (!folderName) continue;
+        // Found the deepest meaningful folder
+        creatureFolder = folderName;
+        break;
+    }
+
+    let displayBase, displayVariant;
+    if (creatureFolder) {
+        // ── Use folder name as base ────────────────────────────────
+        displayBase = creatureFolder;
+        // Variant: strip the folder's words out of the filename (case-
+        // insensitive, ignoring word order). Whatever's left is the
+        // distinguishing variant info ("Large 01", "Boss", etc.).
+        const baseWordSet = new Set(
+            creatureFolder.toLowerCase().split(" ").filter(Boolean)
+        );
+        const filenameWords = filename.split(" ");
+        const variantWords = filenameWords.filter(w => !baseWordSet.has(w.toLowerCase()));
+        const variantText = variantWords.join(" ").trim();
+        displayVariant = variantText || null;
+    } else {
+        // ── Fall back to "BaseName - Variant.ext" filename parsing ──
+        const split = filename.split(VARIANT_SEP);
+        displayBase = split[0].trim();
+        displayVariant = split.length > 1 ? split.slice(1).join(" - ").trim() : null;
+    }
+
     const fullName = displayVariant ? `${displayBase} ${displayVariant}` : displayBase;
     return _makeEntry({ path, displayBase, displayVariant, fullName });
 }
@@ -131,28 +231,40 @@ export async function rebuildTokenArtIndex() {
     // Dedupe by path
     const uniquePaths = [...new Set(allPaths)];
 
+    // Set of scan-root paths (lowercased, no trailing slash) so _parsePath
+    // knows where to stop when walking up looking for a creature folder.
+    const scanRoots = new Set(folders.map(f => f.toLowerCase().replace(/\/+$/, "")));
+
     // Build maps
     const byBase = new Map();
     const byFullName = new Map();
+    const byKey = new Map();
     const all = [];
     for (const p of uniquePaths) {
-        const entry = _parsePath(p);
+        const entry = _parsePath(p, scanRoots);
         all.push(entry);
         // Full-name lookup
         if (!byFullName.has(entry.fullLower)) byFullName.set(entry.fullLower, entry);
         // Base lookup → list of variants
-        const arr = byBase.get(entry.baseLower);
-        if (arr) arr.push(entry);
+        const baseArr = byBase.get(entry.baseLower);
+        if (baseArr) baseArr.push(entry);
         else byBase.set(entry.baseLower, [entry]);
+        // Key-token lookup → list of variants by normalized word set
+        if (entry.keyTokens) {
+            const keyArr = byKey.get(entry.keyTokens);
+            if (keyArr) keyArr.push(entry);
+            else byKey.set(entry.keyTokens, [entry]);
+        }
     }
 
     _index.byBase = byBase;
     _index.byFullName = byFullName;
+    _index.byKey = byKey;
     _index.all = all;
     _index.ready = true;
 
     const ms = (performance.now() - t0).toFixed(0);
-    console.log(`${TAG} | Index built in ${ms}ms — ${all.length} files, ${byBase.size} unique base names.`);
+    console.log(`${TAG} | Index built in ${ms}ms — ${all.length} files, ${byBase.size} unique base names, ${byKey.size} key signatures.`);
 
     return { fileCount: all.length, baseCount: byBase.size };
 }
@@ -199,7 +311,7 @@ function _stripModifierPrefixes(lower) {
 
 /**
  * Find candidate art for an actor by name.
- * Returns { matches: Entry[], reason: "exact" | "base" | "stripped" | "substring" | "none" }
+ * Returns { matches: Entry[], reason: "exact" | "base" | "stripped" | "key" | "substring" | "none" }
  */
 function _findMatches(actorName) {
     const lower = (actorName || "").toLowerCase().trim();
@@ -225,7 +337,20 @@ function _findMatches(actorName) {
         if (strippedBase?.length) return { matches: strippedBase.slice(), reason: "stripped" };
     }
 
-    // 4. Substring fallback — actor "Goblin Boss" might match base "Goblin"
+    // 4. Key-token match — normalize underscores/sizes/numbers and look
+    //    up by sorted word set. Catches the user's SRD-pack layout:
+    //      actor "Air Elemental"            → key "air elemental"
+    //      files "Air_Large_Elemental_01..." → also key "air elemental"
+    //    All 9 numbered variants resolve to the same actor.
+    //    Try the original name first, then the modifier-stripped name.
+    for (const candidate of [lower, stripped].filter(Boolean)) {
+        const key = _keyTokensOf(candidate);
+        if (!key) continue;
+        const keyHits = _index.byKey.get(key);
+        if (keyHits?.length) return { matches: keyHits.slice(), reason: "key" };
+    }
+
+    // 5. Substring fallback — actor "Goblin Boss" might match base "Goblin"
     //    if no "Goblin Boss.webp" exists. Picks the LONGEST matching base.
     //    Also catches cases the prefix-strip missed.
     let bestBase = null;
