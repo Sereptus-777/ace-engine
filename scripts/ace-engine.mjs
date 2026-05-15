@@ -1766,6 +1766,117 @@ Hooks.once("ready", async () => {
         return { requested: targets.length, deleted };
       },
 
+      // ── Folder-based cleanup (catches pre-flag legacy junk) ─────
+      // The flag-based cleanup above only sees actors created AFTER
+      // the autoLinked flag was added. For your existing graveyard,
+      // these scan by FOLDER LOCATION + name pattern instead.
+      //
+      // listAceNpcFolderTree() — every NPC actor inside the "ACE NPCs"
+      //   folder + any subfolders (including ☠ Fallen).
+      // listSuspectedJunkNpcs() — root-level NPC actors PLUS the
+      //   above, filtered to those whose name looks generic
+      //   (matches a known compendium creature pattern: "Goblin",
+      //   "Aboleth", "Air Elemental", etc. with no unique tail).
+      //   These are the prime candidates for "I never wanted this
+      //   saved" cleanup.
+      // cleanupSuspectedJunkNpcs({dryRun}) — deletes the suspect
+      //   list. Dry-run by default; pass {dryRun:false} to commit.
+      listAceNpcFolderTree: () => {
+        // Build set of folder IDs under "ACE NPCs"
+        const parent = game.folders?.find(f => f.name === "ACE NPCs" && f.type === "Actor");
+        if (!parent) return [];
+        const folderIds = new Set([parent.id]);
+        let added = true;
+        while (added) {
+          added = false;
+          for (const f of game.folders ?? []) {
+            if (f.type !== "Actor") continue;
+            if (folderIds.has(f.id)) continue;
+            if (f.folder && folderIds.has(f.folder?.id ?? f.folder)) {
+              folderIds.add(f.id);
+              added = true;
+            }
+          }
+        }
+        const out = [];
+        for (const a of game.actors ?? []) {
+          if (a.type !== "npc") continue;
+          if (!folderIds.has(a.folder?.id)) continue;
+          out.push({
+            id: a.id,
+            name: a.name,
+            folder: a.folder?.name ?? "(root)",
+            hasUniqueName: !!a.flags?.[MODULE_ID]?.autoLinkedFrom &&
+              a.name?.toLowerCase() !== (a.flags[MODULE_ID].autoLinkedFrom || "").toLowerCase(),
+          });
+        }
+        return out;
+      },
+      listSuspectedJunkNpcs: () => {
+        // An NPC actor is "suspected junk" if it lives in ACE NPCs (or
+        // its subfolders) OR at the root, AND its name matches one of
+        // a long list of vanilla D&D creature names with no unique
+        // suffix. These are the leftovers from the pre-flag auto-link
+        // bug that created generic-named actors.
+        const COMPENDIUM_PATTERN = /^(Aboleth|Acolyte|Air Elemental|Animated Armor|Ankheg|Ape|Archmage|Assassin|Awakened (Shrub|Tree)|Azer|Baboon|Badger|Banshee|Basilisk|Bandit( Captain)?|Bat|Bearded Devil|Beholder|Berserker|Black (Bear|Dragon|Pudding)|Blink Dog|Blood Hawk|Blue Dragon|Boar|Bone Devil|Brass Dragon|Bronze Dragon|Brown Bear|Bugbear( Chief)?|Bulette|Camel|Cat|Centaur|Chain Devil|Chimera|Chuul|Clay Golem|Cloaker|Cloud Giant|Cockatrice|Commoner|Constrictor Snake|Copper Dragon|Couatl|Crab|Crocodile|Cult Fanatic|Cultist|Cyclops|Dao|Death Dog|Deep Gnome|Deer|Demilich|Deva|Dire Wolf|Djinni|Doppelganger|Dragon Turtle|Dretch|Drider|Drow( Elite Warrior)?|Druid|Dryad|Duergar|Dust Mephit|Eagle|Earth Elemental|Efreeti|Elephant|Elf|Erinyes|Ettercap|Ettin|Fire Elemental|Fire Giant|Fire Snake|Flameskull|Flesh Golem|Flying Snake|Flying Sword|Frog|Frost Giant|Fungus|Gargoyle|Gas Spore|Gelatinous Cube|Ghast|Ghost|Ghoul|Giant Ape|Giant Badger|Giant Bat|Giant Boar|Giant Centipede|Giant Constrictor Snake|Giant Crab|Giant Crocodile|Giant Eagle|Giant Elk|Giant Fire Beetle|Giant Frog|Giant Goat|Giant Hyena|Giant Lizard|Giant Octopus|Giant Owl|Giant Poisonous Snake|Giant Rat|Giant Scorpion|Giant Sea Horse|Giant Shark|Giant Spider|Giant Toad|Giant Vulture|Giant Wasp|Giant Weasel|Giant Wolf Spider|Gibbering Mouther|Glabrezu|Gladiator|Gnoll|Gnome|Goat|Goblin|Gold Dragon|Gorgon|Gray Ooze|Green Dragon|Green Hag|Grell|Grick|Griffon|Grimlock|Guard|Guardian Naga|Half-Dragon|Half-Ogre|Halfling|Harpy|Hawk|Hell Hound|Hezrou|Hill Giant|Hippogriff|Hobgoblin|Homunculus|Horned Devil|Hunter Shark|Hydra|Hyena|Ice Devil|Imp|Invisible Stalker|Iron Golem|Jackal|Killer Whale|Knight|Kobold|Kraken|Kuo[\s-]toa|Lamia|Lemure|Lich|Lion|Lizard|Lizardfolk|Magma Mephit|Magmin|Mammoth|Manticore|Marid|Marilith|Mastiff|Medusa|Merfolk|Merrow|Mimic|Mind Flayer|Minotaur|Mule|Mummy( Lord)?|Naga|Nalfeshnee|Night Hag|Nightmare|Noble|Nothic|Ochre Jelly|Octopus|Ogre|Oni|Orc( War Chief)?|Otyugh|Owl|Owlbear|Panther|Pegasus|Peryton|Phase Spider|Pit Fiend|Pixie|Planetar|Plesiosaurus|Poisonous Snake|Polar Bear|Pony|Pseudodragon|Pteranodon|Purple Worm|Quasit|Quipper|Rakshasa|Rat|Raven|Red Dragon|Reef Shark|Remorhaz|Revenant|Rhinoceros|Riding Horse|Roc|Roper|Rust Monster|Saber-Toothed Tiger|Sahuagin|Salamander|Satyr|Scorpion|Scout|Sea Hag|Sea Horse|Shadow|Shambling Mound|Shark|Shield Guardian|Shrieker|Silver Dragon|Skeleton|Solar|Specter|Spider|Spirit Naga|Sprite|Spy|Stirge|Stone Giant|Stone Golem|Storm Giant|Succubus|Swarm of .+|Tarrasque|Thug|Tiger|Treant|Tribal Warrior|Triceratops|Troll|Twig Blight|Tyrannosaurus|Unicorn|Vampire( Spawn)?|Veteran|Violet Fungus|Vrock|Vulture|Warhorse|Water Elemental|Weasel|Werebear|Wereboar|Wererat|Weretiger|Werewolf|White Dragon|Wight|Will-o'-Wisp|Winter Wolf|Wolf|Worg|Wraith|Wyvern|Xorn|Yeti|Young (Black|Blue|Brass|Bronze|Copper|Gold|Green|Red|Silver|White) Dragon|Yuan[\s-]ti.*|Zombie)( \(\d+\))?( #?\d+)?$/i;
+        const parent = game.folders?.find(f => f.name === "ACE NPCs" && f.type === "Actor");
+        const aceFolderIds = new Set();
+        if (parent) {
+          aceFolderIds.add(parent.id);
+          let added = true;
+          while (added) {
+            added = false;
+            for (const f of game.folders ?? []) {
+              if (f.type !== "Actor" || aceFolderIds.has(f.id)) continue;
+              if (f.folder && aceFolderIds.has(f.folder?.id ?? f.folder)) {
+                aceFolderIds.add(f.id); added = true;
+              }
+            }
+          }
+        }
+        const out = [];
+        for (const a of game.actors ?? []) {
+          if (a.type !== "npc") continue;
+          const inAce = aceFolderIds.has(a.folder?.id);
+          const atRoot = !a.folder;
+          if (!inAce && !atRoot) continue;
+          if (!COMPENDIUM_PATTERN.test(a.name ?? "")) continue;
+          // Skip if the actor was clearly imported from a compendium and
+          // user wants it as a reference (sourceId points back to pack).
+          // Heuristic: if it's at root AND has a compendium sourceId, it's
+          // probably an intentional drag from compendium to sidebar —
+          // skip from the suspect list.
+          if (atRoot && a.flags?.core?.sourceId) continue;
+          out.push({
+            id: a.id,
+            name: a.name,
+            folder: a.folder?.name ?? "(root)",
+            location: inAce ? "ACE NPCs tree" : "root",
+            hasAceFlag: !!a.flags?.[MODULE_ID]?.autoLinked,
+            sourceId: a.flags?.core?.sourceId ?? null,
+          });
+        }
+        return out;
+      },
+      cleanupSuspectedJunkNpcs: async ({ dryRun = true } = {}) => {
+        const targets = mod.api.listSuspectedJunkNpcs();
+        console.log(`ACE | Junk cleanup ${dryRun ? "DRY-RUN" : "LIVE"} — ${targets.length} suspect NPCs:`);
+        for (const t of targets) console.log(`  • ${t.name} — ${t.location} ("${t.folder}")${t.sourceId ? ` [src: ${t.sourceId}]` : ""}`);
+        if (dryRun) {
+          console.log(`ACE | Pass { dryRun:false } to actually delete these.`);
+          return targets;
+        }
+        let deleted = 0;
+        for (const t of targets) {
+          try {
+            const a = game.actors.get(t.id);
+            if (a) { await a.delete(); deleted++; }
+          } catch (err) { console.warn(`ACE | Delete failed for "${t.name}":`, err); }
+        }
+        ui.notifications?.info(`ACE: Cleanup deleted ${deleted} suspected-junk NPC(s).`);
+        return { requested: targets.length, deleted };
+      },
+
       // ── Party Reputation API (used by ACE: Envoy) ─────────────────
       /** Get the ReputationEngine instance. */
       getReputationEngine: () => reputationEngine,
