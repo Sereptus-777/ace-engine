@@ -163,8 +163,43 @@ export function getTokenArtIndex() { return _index; }
 // ─── Matching ──────────────────────────────────────────────────────────────
 
 /**
+ * Common modifier prefixes (and adjectives elsewhere) we strip out so a
+ * summoned/conjured/spectral version of a creature still matches the
+ * base creature's art. Spell-summoned creatures get prefixes like
+ * "Conjured Air Elemental" or "Summoned Wolf"; resurrection effects
+ * produce things like "Skeletal Ogre"; etc.
+ */
+const STRIP_TOKENS = new Set([
+    "conjured", "summoned", "spectral", "phantasmal", "phantom", "ghostly",
+    "skeletal", "zombified", "possessed", "shadow", "spirit", "young",
+    "adult", "ancient", "wyrmling", "elder", "greater", "lesser", "dire",
+    "giant", "swarm",
+]);
+
+/**
+ * Build a normalized lookup string from the actor name by stripping
+ * one or more leading modifier words. Returns the stripped form.
+ *   "Conjured Air Elemental"  → "air elemental"
+ *   "Adult Red Dragon"        → "red dragon"
+ *   "Goblin Boss"             → "goblin boss"  (no leading modifier)
+ *   "Summoned Spectral Wolf"  → "wolf"          (two strips)
+ */
+function _stripModifierPrefixes(lower) {
+    let words = lower.split(/\s+/);
+    let changed = true;
+    while (changed && words.length > 1) {
+        changed = false;
+        if (STRIP_TOKENS.has(words[0])) {
+            words = words.slice(1);
+            changed = true;
+        }
+    }
+    return words.join(" ").trim();
+}
+
+/**
  * Find candidate art for an actor by name.
- * Returns { matches: Entry[], reason: "exact" | "base" | "substring" | "none" }
+ * Returns { matches: Entry[], reason: "exact" | "base" | "stripped" | "substring" | "none" }
  */
 function _findMatches(actorName) {
     const lower = (actorName || "").toLowerCase().trim();
@@ -179,8 +214,20 @@ function _findMatches(actorName) {
     const baseHits = _index.byBase.get(lower);
     if (baseHits?.length) return { matches: baseHits.slice(), reason: "base" };
 
-    // 3. Substring fallback — actor "Goblin Boss" might match base "Goblin"
+    // 3. Strip modifier prefixes (Conjured/Summoned/Adult/...) and retry
+    //    exact + base lookups. Most useful for spell-summoned creatures
+    //    like "Conjured Air Elemental" → "Air Elemental".
+    const stripped = _stripModifierPrefixes(lower);
+    if (stripped && stripped !== lower) {
+        const strippedExact = _index.byFullName.get(stripped);
+        if (strippedExact) return { matches: [strippedExact], reason: "stripped" };
+        const strippedBase = _index.byBase.get(stripped);
+        if (strippedBase?.length) return { matches: strippedBase.slice(), reason: "stripped" };
+    }
+
+    // 4. Substring fallback — actor "Goblin Boss" might match base "Goblin"
     //    if no "Goblin Boss.webp" exists. Picks the LONGEST matching base.
+    //    Also catches cases the prefix-strip missed.
     let bestBase = null;
     for (const [base, entries] of _index.byBase.entries()) {
         if (lower.includes(base) && (!bestBase || base.length > bestBase.length)) {
