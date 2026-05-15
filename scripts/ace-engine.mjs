@@ -27,8 +27,6 @@ import { SceneIntelligence }   from "./scene-intelligence.mjs";
 import { injectReorderButtons } from "./combat/initiative-reorder.mjs";
 // NPC Chat — gated activation entry point (moved from ACE: Envoy, merger Phase 3)
 import { activateNpcChat, npcChatState } from "./npc/activate.mjs";
-// Auto Token Art — scans configured folders + swaps token images on create
-import { activateTokenArtEngine, rebuildTokenArtIndex, getTokenArtIndex } from "./token-art-engine.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -1103,11 +1101,9 @@ Hooks.once("ready", async () => {
 
   console.log(`${MODULE_ID} | ACE ready — GM mode active`);
 
-  // ── Auto Token Art ─────────────────────────────────────────────
-  // Scans configured folders + listens for new tokens. GM-only — players
-  // don't have permission to update token textures anyway.
-  try { activateTokenArtEngine(); }
-  catch (err) { console.warn(`${MODULE_ID} | Token art activation failed:`, err); }
+  // Auto Token Art lives in its own module now (ace-token-art). The engine
+  // file, settings, CSS, and API all moved over there. Install ace-token-art
+  // alongside ace-engine to keep that feature.
 
   // ── NPC → PC Converter ─────────────────────────────────────────
   // Adds a "Convert NPC to PC..." entry to the actor-directory right-click
@@ -1706,35 +1702,10 @@ Hooks.once("ready", async () => {
       narrate:   (text) => panel?.narrateText?.(text),
       stopAllAudio: _stopAllAudio,
 
-      // ── Auto Token Art API ──────────────────────────────────────
-      /** Rescan the token-art folders + rebuild the in-memory index. */
-      rescanTokenArt: async () => {
-        const result = await rebuildTokenArtIndex();
-        ui.notifications?.info(`ACE: Token art rescanned — ${result.fileCount} files, ${result.baseCount} base names.`);
-        return result;
-      },
-      /** Inspect the current token-art index (for debugging). */
-      getTokenArtIndex,
-      /**
-       * Search the token-art index by substring. Returns an array of
-       * { base, fullName, variant, path } for every file whose base or
-       * full name contains the query (case-insensitive).
-       *
-       * Usage: game.modules.get("ace-engine").api.searchTokenArt("elemental")
-       */
-      searchTokenArt: (query) => {
-        const idx = getTokenArtIndex();
-        const q = (query || "").toLowerCase().trim();
-        if (!q) return idx.all.slice();
-        return idx.all.filter(e =>
-          e.baseLower.includes(q) || e.fullLower.includes(q)
-        ).map(e => ({
-          base:     e.displayBase,
-          variant:  e.displayVariant,
-          fullName: e.fullName,
-          path:     e.path,
-        }));
-      },
+      // Auto Token Art API moved to module "ace-token-art":
+      //   game.modules.get("ace-token-art").api.rescanTokenArt()
+      //   game.modules.get("ace-token-art").api.searchTokenArt(query)
+      //   game.modules.get("ace-token-art").api.getTokenArtIndex()
 
       // ── Party Reputation API (used by ACE: Envoy) ─────────────────
       /** Get the ReputationEngine instance. */

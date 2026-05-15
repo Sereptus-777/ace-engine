@@ -450,38 +450,14 @@ export class AceSettings {
       default: false,
     });
 
-    // ── Auto Token Art ──────────────────────────────────────
-    // Scans user-defined folders for token art on world load, swaps in
-    // matching art on every new token created. Filename convention:
-    //   "Goblin.webp"             — base art for "Goblin"
-    //   "Goblin - Archer.webp"    — variant art ("Goblin" can spawn this)
-    //   "Goblin Archer.webp"      — exact match for actor named "Goblin Archer"
-    s("tokenArtEnabled", {
-      scope: "world",
-      name: "Auto Token Art",
-      hint: "When ON, freshly created tokens that don't already use art from your configured folders will be auto-matched to your token art collection. Tokens whose image is already inside one of your folders are left alone. The variant-chooser pops over the canvas; tap a thumbnail (or 1-9, R for random, Enter for highlighted) to pick. Drop new art any time and run \"Rescan Token Art Folders\" from the macros (or via the API: game.modules.get('ace-engine').api.rescanTokenArt()).",
-      type: Boolean,
-      default: true,
-    });
-    s("tokenArtFolders", {
-      scope: "world",
-      config: false,    // exposed via the menu helper below
-      type: Array,
-      default: ["NPCs", "assets/srd5e/img/bestiary/tokens/MM"],
-    });
-    s("tokenArtAutoRename", {
-      scope: "world",
-      name: "Auto-Rename Token on Variant Pick",
-      hint: "When ON, picking a variant from the chooser (e.g. \"Archer\" for a Goblin) auto-renames the token from \"Goblin\" to \"Goblin Archer\" so the initiative tracker shows which variant is which. Doesn't touch the underlying actor — only the placed token.",
-      type: Boolean,
-      default: true,
-    });
-    s("tokenArtRecentChoices", {
-      scope: "world",
-      config: false,
-      type: Object,
-      default: {},
-    });
+    // Auto Token Art settings moved to module "ace-token-art" (1.0.0+).
+    // Settings remain registered briefly below as no-ops so that legacy
+    // migration in ace-token-art's init can read them once and copy
+    // values over; remove on a future version once everyone has migrated.
+    s("tokenArtEnabled",        { scope: "world", config: false, type: Boolean, default: true });
+    s("tokenArtFolders",        { scope: "world", config: false, type: Array,   default: ["NPCs", "assets/srd5e/img/bestiary/tokens/MM"] });
+    s("tokenArtAutoRename",     { scope: "world", config: false, type: Boolean, default: true });
+    s("tokenArtRecentChoices",  { scope: "world", config: false, type: Object,  default: {} });
 
     // ── ElevenLabs Narration (client-scoped) ────────────────
     s("elevenLabsApiKey", {
