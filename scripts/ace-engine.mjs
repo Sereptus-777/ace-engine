@@ -1128,6 +1128,109 @@ Hooks.once("ready", async () => {
     console.warn(`${MODULE_ID} | Auto-pipeline activation failed:`, err);
   }
 
+  // ── Junk-NPC Cleanup button (Actor sidebar header) ─────────────
+  // Injects a small "ACE: Clean Junk NPCs" button at the top of the
+  // Actors sidebar. Click → scans for junk NPCs (dnd5e summon imports,
+  // ACE-NPCs-tree generic-name leftovers, root-level pattern matches),
+  // shows a confirmation dialog with the list, deletes on confirm.
+  Hooks.on("renderActorDirectory", (app, html) => {
+    if (!game.user.isGM) return;
+    try {
+      const root = (html instanceof HTMLElement) ? html
+                 : html?.[0] instanceof HTMLElement ? html[0]
+                 : app?.element instanceof HTMLElement ? app.element
+                 : app?.element?.[0] ?? null;
+      if (!root) return;
+      // Don't duplicate if a re-render already added it
+      if (root.querySelector(".ace-junk-cleanup-btn")) return;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ace-junk-cleanup-btn";
+      btn.style.cssText = `
+        width: calc(100% - 12px); margin: 6px; padding: 7px 10px;
+        background: linear-gradient(135deg, rgba(212,175,55,0.22), rgba(212,175,55,0.08));
+        border: 1px solid rgba(212,175,55,0.55);
+        border-radius: 4px; color: #f0e4c0;
+        font-family: 'Orbitron','Rajdhani',sans-serif;
+        font-size: 12px; font-weight: 700;
+        text-transform: uppercase; letter-spacing: 0.5px;
+        cursor: pointer; transition: all 0.15s;
+      `;
+      btn.innerHTML = '<i class="fas fa-broom"></i> ACE: Clean Junk NPCs';
+      btn.addEventListener("mouseenter", () => {
+        btn.style.background = "linear-gradient(135deg, rgba(212,175,55,0.40), rgba(212,175,55,0.18))";
+        btn.style.boxShadow = "0 0 8px rgba(212,175,55,0.45)";
+      });
+      btn.addEventListener("mouseleave", () => {
+        btn.style.background = "linear-gradient(135deg, rgba(212,175,55,0.22), rgba(212,175,55,0.08))";
+        btn.style.boxShadow = "none";
+      });
+
+      btn.addEventListener("click", async () => {
+        const list = mod.api.listSuspectedJunkNpcs?.() ?? [];
+        if (!list.length) {
+          ui.notifications?.info("ACE: No junk NPCs found — your sidebar is clean.");
+          return;
+        }
+        // Build a grouped summary
+        const bySource = {};
+        for (const t of list) {
+          bySource[t.source] = bySource[t.source] ?? [];
+          bySource[t.source].push(t);
+        }
+        const SOURCE_LABELS = {
+          "dnd5e-summon":      "dnd5e summon auto-imports (Conjure spells, etc.)",
+          "ace-engine-legacy": "ACE NPCs folder tree (legacy generic-name)",
+          "name-pattern":      "Root-level compendium-name actors",
+        };
+        const groupHtml = Object.entries(bySource).map(([source, items]) => {
+          const label = SOURCE_LABELS[source] ?? source;
+          const names = items.map(t => `<li style="color:#c0b288;">${t.name} <span style="color:#888;font-size:11px;">— ${t.folder}</span></li>`).join("");
+          return `<div style="margin-bottom:10px;">
+            <div style="color:#f0e4c0;font-weight:700;margin-bottom:4px;">${items.length}× ${label}</div>
+            <ul style="margin:0;padding-left:22px;font-size:12px;max-height:200px;overflow-y:auto;">${names}</ul>
+          </div>`;
+        }).join("");
+
+        const confirmed = await Dialog.confirm({
+          title: `ACE: Clean ${list.length} Junk NPC${list.length === 1 ? "" : "s"}?`,
+          content: `
+            <div style="font-family:'Rajdhani',sans-serif;padding:8px;max-width:540px;">
+              <p style="color:#f0e4c0;margin:0 0 12px;">
+                Found <strong>${list.length}</strong> NPC actor${list.length === 1 ? "" : "s"} that look like junk.
+                Delete all of them?
+              </p>
+              ${groupHtml}
+              <p style="color:#b8a78a;font-size:11px;font-style:italic;margin:8px 0 0;">
+                Safe to delete — active scene tokens won't break. Cast a summon spell again
+                and dnd5e auto-imports a fresh copy. Permanent NPCs you've renamed
+                (Boris keepers) aren't on this list.
+              </p>
+            </div>
+          `,
+          yes: () => true,
+          no: () => false,
+          defaultYes: false,
+        });
+        if (!confirmed) return;
+
+        const result = await mod.api.cleanupSuspectedJunkNpcs?.({ dryRun: false });
+        ui.notifications?.info(`ACE: Deleted ${result?.deleted ?? 0} junk NPC${result?.deleted === 1 ? "" : "s"}.`);
+      });
+
+      // Insert at the very top of the directory's header area
+      const header = root.querySelector(".directory-header") || root.querySelector("header") || root.querySelector(".header-actions");
+      if (header) {
+        header.insertBefore(btn, header.firstChild);
+      } else {
+        root.insertBefore(btn, root.firstChild);
+      }
+    } catch (err) {
+      console.warn(`${MODULE_ID} | Junk-cleanup button inject failed:`, err);
+    }
+  });
+
   // ── Load baked-in credentials from config.local.json (optional) ─
   // GM-only: players don't need ElevenLabs keys or other credentials.
   // If the file exists and contains your ElevenLabs key/voice, those
