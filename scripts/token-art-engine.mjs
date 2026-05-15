@@ -467,8 +467,13 @@ async function _onTokenCreated(tokenDoc, options, userId) {
     const { matches, reason } = _findMatches(actor.name);
 
     if (matches.length === 0) {
-        // Toast — once per actor name per session to avoid spam
-        _notifyMissing(actor.name);
+        // Toast — once per actor name per session to avoid spam.
+        // Also include the prefix-stripped form so the GM knows what
+        // filename to drop in (e.g. "Conjured Air Elemental" → tried
+        // "air elemental"; drop "Air Elemental.webp" to fix).
+        const lower = (actor.name || "").toLowerCase().trim();
+        const stripped = _stripModifierPrefixes(lower);
+        _notifyMissing(actor.name, stripped !== lower ? stripped : null);
         return;
     }
 
@@ -497,12 +502,15 @@ async function _onTokenCreated(tokenDoc, options, userId) {
 // Throttle "no art" toasts to once per actor name per session so a swarm
 // of identical missing-art creatures doesn't drown the screen.
 const _missingNotified = new Set();
-function _notifyMissing(actorName) {
+function _notifyMissing(actorName, strippedName = null) {
     const key = (actorName || "").toLowerCase().trim();
     if (_missingNotified.has(key)) return;
     _missingNotified.add(key);
-    ui.notifications?.warn(`ACE: No token art found for "${actorName}". Drop art in your configured folders and run "Rescan Token Art" from settings.`);
-    console.warn(`${TAG} | No match for "${actorName}". Add art to one of the configured folders and rescan.`);
+    const suggestion = strippedName
+        ? ` Tried "${strippedName}" too — drop "${strippedName.replace(/\b\w/g, c => c.toUpperCase())}.webp" in your folder, or art for "${actorName}" specifically.`
+        : ` Drop "${actorName}.webp" in your folder.`;
+    ui.notifications?.warn(`ACE: No token art for "${actorName}".${suggestion} Then run game.modules.get("ace-engine").api.rescanTokenArt() in the console.`);
+    console.warn(`${TAG} | No match for "${actorName}"${strippedName ? ` (stripped: "${strippedName}")` : ""}. Add art to one of the configured folders and rescan.`);
 }
 
 // ─── Public entry point ────────────────────────────────────────────────────

@@ -1703,6 +1703,26 @@ Hooks.once("ready", async () => {
       },
       /** Inspect the current token-art index (for debugging). */
       getTokenArtIndex,
+      /**
+       * Search the token-art index by substring. Returns an array of
+       * { base, fullName, variant, path } for every file whose base or
+       * full name contains the query (case-insensitive).
+       *
+       * Usage: game.modules.get("ace-engine").api.searchTokenArt("elemental")
+       */
+      searchTokenArt: (query) => {
+        const idx = getTokenArtIndex();
+        const q = (query || "").toLowerCase().trim();
+        if (!q) return idx.all.slice();
+        return idx.all.filter(e =>
+          e.baseLower.includes(q) || e.fullLower.includes(q)
+        ).map(e => ({
+          base:     e.displayBase,
+          variant:  e.displayVariant,
+          fullName: e.fullName,
+          path:     e.path,
+        }));
+      },
 
       // ── Party Reputation API (used by ACE: Envoy) ─────────────────
       /** Get the ReputationEngine instance. */
