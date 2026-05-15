@@ -467,7 +467,13 @@ export function registerUiHooks() {
             return;
         }
 
-        // ── GM view: chat + AI Setup icons ─────────────────────────────
+        // ── GM view: Speak-As icon + AI Setup icon ─────────────────────
+        // The chat icon used to open the same AI conversation window as
+        // players. That broadcast every line back through the engine, which
+        // then popped spectator windows for the players — stepping on the
+        // chat they were already having. The GM tool is a pure puppet now:
+        // GM types/dictates, NPC voice plays for everyone, a chat card is
+        // posted, no spectator window pops on players, no AI involvement.
         jHtml.find(".ai-token-controls").remove();
         const controlsHtml = `
         <div class="ai-token-controls"
@@ -475,7 +481,7 @@ export function registerUiHooks() {
                     display:flex; gap:16px; pointer-events:all; z-index:70; width:max-content;">
             <img class="ace-engine-trigger"
                  src="modules/${MODULE_ID}/assets/chat-icon.png"
-                 title="Start NPC Chat"
+                 title="Speak as ${actor.name}"
                  style="width:46px; height:46px; cursor:pointer; filter:drop-shadow(0 0 6px black);" />
             <img class="setup-trigger"
                  src="modules/${MODULE_ID}/assets/robot-icon.png"
@@ -483,27 +489,24 @@ export function registerUiHooks() {
                  style="width:46px; height:46px; cursor:pointer; filter:drop-shadow(0 0 6px black);" />
         </div>`;
 
-        const controls = $(controlsHtml);
-        const gmTokenDoc = token.document;
-        const gmConvoKey = _convoKey(actor.id, gmTokenDoc);
+        const controls    = $(controlsHtml);
+        const gmTokenDoc  = token.document;
+        const gmPuppetKey = _convoKey(actor.id, gmTokenDoc);
         controls.find(".ace-engine-trigger").on("click", async (ev) => {
             ev.preventDefault();
             ev.stopPropagation();
-            const existing = openConversations.get(gmConvoKey);
-            if (existing) {
-                if (existing.readOnly) {
-                    existing.readOnly = false;
-                    existing._isOwner = true;
-                    if (typeof existing._setUILocked === "function") existing._setUILocked(false);
-                }
-                existing.render(true);
-                return;
+            const gmPuppets = npcChatState.gmPuppets;
+            const existing  = gmPuppets?.get?.(gmPuppetKey);
+            if (existing) { existing.render(true); return; }
+            try {
+                const { GmPuppetApp } = await import("./gm-puppet-app.mjs");
+                const puppet = new GmPuppetApp(actor, { tokenDocument: gmTokenDoc });
+                gmPuppets.set(gmPuppetKey, puppet);
+                puppet.render(true);
+            } catch (err) {
+                console.error(`${TAG} | GM puppet open failed:`, err);
+                ui.notifications.error("Failed to open NPC speak window — see console.");
             }
-            const speakerToken = await _resolveSpeakerToken(actor.id);
-            if (speakerToken === false) return;
-            const convoApp = new ConversationApp(actor, { isOwner: true, tokenDocument: gmTokenDoc, speakerToken: speakerToken || undefined });
-            openConversations.set(gmConvoKey, convoApp);
-            convoApp.render(true);
         });
 
         controls.find(".setup-trigger").on("click", (ev) => {
@@ -705,6 +708,26 @@ export function registerUiHooks() {
                                font-size:0.85em;">
                     <i class="fas fa-robot"></i> Open Full NPC Config (Personality, Lore, Memory…)
                 </button>
+            </div>
+
+            <div style="border-top:1px solid #443a1a;margin-top:8px;padding-top:10px;
+                        background:rgba(80, 50, 20, 0.18);border-radius:4px;padding:10px;">
+                <div style="color:#e8a040;font-size:0.78em;font-weight:bold;
+                            text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">
+                    <i class="fas fa-arrow-up-right-from-square"></i> NPC → PC
+                </div>
+                <p style="color:#c0b288;font-size:0.78em;margin:0 0 8px;line-height:1.4;">
+                    Permanent party member? Convert this NPC into a real PC actor so
+                    levels, spell slots, and class progression actually work.
+                    Items, abilities, AC, HP, and biography all transfer.
+                </p>
+                <button type="button" id="ace-engine-convert-to-pc-${actor.id}"
+                        style="width:100%;padding:8px;background:linear-gradient(135deg,#d4af37 0%,#b8922a 100%);
+                               color:#1a1508;border:1px solid #f0d060;border-radius:4px;cursor:pointer;
+                               font-size:0.9em;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;
+                               box-shadow:0 0 8px rgba(212,175,55,0.4);">
+                    <i class="fas fa-user-plus"></i> Convert to PC…
+                </button>
             </div>`;
 
         // ── Per-actor "Reset ACE Bio" button ─────────────────────────
@@ -818,6 +841,19 @@ export function registerUiHooks() {
         tabContent.querySelector(`#ace-engine-open-config-${actor.id}`)
             .addEventListener("click", () => {
                 new AIConfigDialog(actor).render(true);
+            });
+
+        // Convert NPC → PC button. Opens the converter dialog so the GM
+        // can pick class + level for permanent-party-member NPCs.
+        tabContent.querySelector(`#ace-engine-convert-to-pc-${actor.id}`)
+            ?.addEventListener("click", async () => {
+                try {
+                    const mod = await import("./npc-to-pc-converter.mjs");
+                    await mod.openConvertDialog(actor);
+                } catch (err) {
+                    console.error(`${TAG} | Convert-to-PC failed:`, err);
+                    ui.notifications?.error(`ACE: Couldn't open converter — see console.`);
+                }
             });
 
         // ── Tab switching logic ──────────────────────────────────────

@@ -139,6 +139,8 @@ export class CategoryStore {
 
   /**
    * Save to disk via FilePicker upload.
+   * Writes BOTH the canonical .json AND a human-readable .txt companion.
+   * The .txt is best-effort — if it fails, the .json save still succeeds.
    * @param {string} worldId
    */
   async save(worldId) {
@@ -157,6 +159,82 @@ export class CategoryStore {
       console.log(`${MODULE_ID} | ${this.category}: saved (${(this._size / 1024).toFixed(1)} KB, ${this.recordCount} records).`);
     } catch (err) {
       console.error(`${MODULE_ID} | ${this.category}: save failed:`, err);
+      return; // skip .txt if .json failed
+    }
+
+    // ── Human-readable .txt companion (best-effort, non-blocking) ──
+    // Saved alongside the canonical .json so the user can open the
+    // ace-engine folder and read what's in each store without
+    // navigating raw JSON. Filename mirrors the .json (deeds.json →
+    // deeds.txt). Generated fresh on every save. If this write fails,
+    // we log and move on — the canonical .json save already succeeded.
+    try {
+      const txt = this._formatAsText();
+      const txtName = this.fileName.replace(/\.json$/i, ".txt");
+      const txtFile = new File([txt], txtName, { type: "text/plain" });
+      await _silentUpload("data", `worlds/${worldId}/ace-engine`, txtFile);
+    } catch (err) {
+      console.warn(`${MODULE_ID} | ${this.category}: .txt companion write failed:`, err);
+    }
+  }
+
+  /**
+   * Build a human-readable text rendering of this store's contents.
+   * Subclasses override `_formatRecord()` to customize per-record output;
+   * this base method handles the header and iteration. The default
+   * `_formatRecord` falls back to pretty-printed JSON if no override.
+   *
+   * Output structure:
+   *   === ace-engine <category> — saved <iso-timestamp> ===
+   *   Total: N records
+   *
+   *   [1] <record-formatted-text>
+   *
+   *   [2] <record-formatted-text>
+   *   ...
+   */
+  _formatAsText() {
+    const records = this._recordsForText();
+    const header = [
+      `=== ace-engine ${this.category} — saved ${this._data.savedAt ?? new Date().toISOString()} ===`,
+      `Total: ${records.length} record${records.length === 1 ? "" : "s"}`,
+      `World: ${this._data.worldId ?? "?"}`,
+      `Version: ${this._data.version ?? "?"}`,
+      "",
+    ].join("\n");
+
+    if (records.length === 0) return header + "(no records)\n";
+
+    const body = records.map((rec, i) => {
+      const formatted = this._formatRecord(rec, i);
+      return `[${i + 1}] ${formatted}`;
+    }).join("\n\n");
+
+    return header + body + "\n";
+  }
+
+  /**
+   * Return the array of records that should appear in the .txt output.
+   * Subclasses override to point at the right field (e.g. `_data.deeds`).
+   * Base default: empty array.
+   */
+  _recordsForText() {
+    return [];
+  }
+
+  /**
+   * Format a single record as text. Override per-category for nice output;
+   * base falls back to indented JSON. Two-space indent so blocks line up
+   * under the `[N]` index header.
+   */
+  _formatRecord(rec, _idx) {
+    try {
+      return JSON.stringify(rec, null, 2)
+        .split("\n")
+        .map((l, j) => j === 0 ? l : "    " + l)
+        .join("\n");
+    } catch (_) {
+      return String(rec);
     }
   }
 
@@ -964,6 +1042,86 @@ export class WorldStore extends CategoryStore {
 
   /** Get the time note. */
   getTimeNote() { return this._data.calendar?.timeNote ?? ""; }
+
+  /**
+   * World data is heterogeneous (calendar + sessions + notes + factions),
+   * so we override _formatAsText directly rather than route through the
+   * base flat-record-list helpers.
+   */
+  _formatAsText() {
+    const d = this._data;
+    const out = [
+      `=== ace-engine world — saved ${d.savedAt ?? new Date().toISOString()} ===`,
+      `World: ${d.worldId ?? "?"}`,
+      `Version: ${d.version ?? "?"}`,
+      `Name: ${d.worldName || "(unnamed)"}`,
+      `Campaign Start: ${d.campaignStart ? new Date(d.campaignStart * 1000).toISOString().slice(0, 10) : "(unset)"}`,
+      `Scene Counter: ${d.sceneCounter ?? 0}`,
+      "",
+    ];
+
+    const cal = d.calendar ?? {};
+    out.push("── Calendar ──");
+    out.push(`Day:          ${cal.dayCounter ?? 1}`);
+    out.push(`Time of Day:  ${cal.timeOfDay ?? "morning"}`);
+    if (cal.timeNote)   out.push(`Note:         ${cal.timeNote}`);
+    if (cal.lastUpdate) out.push(`Last Update:  ${new Date(cal.lastUpdate * 1000).toISOString().slice(0, 19).replace("T", " ")}`);
+    out.push("");
+
+    const sessions = d.sessions ?? [];
+    out.push(`── Sessions (${sessions.length}) ──`);
+    if (!sessions.length) {
+      out.push("(none)");
+    } else {
+      sessions.forEach((s, i) => {
+        const ts = s.t ? new Date(s.t * 1000).toISOString().slice(0, 19).replace("T", " ") : "?";
+        out.push(`[${i + 1}] Session ${s.num ?? "?"} — ${s.date ?? ts}`);
+        if (s.scene)         out.push(`    scene:   ${s.scene}`);
+        if (s.party?.length) out.push(`    party:   ${s.party.join(", ")}`);
+        if (s.summary) {
+          const lines = String(s.summary).split("\n");
+          out.push(`    summary: ${lines[0] ?? ""}`);
+          for (let j = 1; j < lines.length; j++) out.push(`             ${lines[j]}`);
+        }
+      });
+    }
+    out.push("");
+
+    const notes = d.worldNotes ?? [];
+    out.push(`── World Notes (${notes.length}) ──`);
+    if (!notes.length) {
+      out.push("(none)");
+    } else {
+      notes.forEach((n, i) => {
+        const ts  = n.t ? new Date(n.t * 1000).toISOString().slice(0, 19).replace("T", " ") : "?";
+        const sc  = n.s ? ` [${n.s}]` : "";
+        const tag = n.category ? ` (${n.category})` : "";
+        out.push(`[${i + 1}] ${ts}${sc}${tag}`);
+        out.push(`    ${n.txt ?? ""}`);
+      });
+    }
+    out.push("");
+
+    const factions = d.factions ?? {};
+    const facKeys = Object.keys(factions);
+    out.push(`── Factions (${facKeys.length}) ──`);
+    if (!facKeys.length) {
+      out.push("(none)");
+    } else {
+      facKeys.forEach((key, i) => {
+        const f = factions[key] ?? {};
+        out.push(`[${i + 1}] ${key}${f.name && f.name !== key ? `: ${f.name}` : ""}`);
+        for (const [k, v] of Object.entries(f)) {
+          if (k === "name") continue;
+          const display = typeof v === "object" ? JSON.stringify(v) : String(v);
+          out.push(`    ${k.padEnd(12)} ${display}`);
+        }
+      });
+    }
+    out.push("");
+
+    return out.join("\n");
+  }
 }
 
 
@@ -1033,6 +1191,24 @@ export class HistoryStore extends CategoryStore {
     }
     this._dirty = true;
     return event;
+  }
+
+  /** Records used by the .txt companion. */
+  _recordsForText() { return this._data.events ?? []; }
+
+  /** Human-readable single-event format. Events use compact keys (t, k, a, tgt, etc.) — translate to readable labels. */
+  _formatRecord(rec, _idx) {
+    const ts = rec.t ? new Date(rec.t * 1000).toISOString().slice(0, 19).replace("T", " ") : "?";
+    const kind = rec.k ?? "?";
+    const lines = [`${kind.toUpperCase()} — ${ts}`];
+    for (const [key, val] of Object.entries(rec)) {
+      if (key === "t" || key === "k") continue;
+      const labelMap = { a: "actor", tgt: "target", s: "scene", txt: "text", v: "value", d: "data" };
+      const label = labelMap[key] ?? key;
+      const display = typeof val === "object" ? JSON.stringify(val) : String(val);
+      lines.push(`    ${label.padEnd(8)} ${display}`);
+    }
+    return lines.join("\n");
   }
 
   /** Get events since the last session_summary marker. */
@@ -1166,6 +1342,26 @@ export class DeedStore extends CategoryStore {
 
     this._dirty = true;
     return record;
+  }
+
+  /** Records used by the .txt companion. */
+  _recordsForText() { return this._data.deeds ?? []; }
+
+  /** Human-readable single-deed format. */
+  _formatRecord(rec, _idx) {
+    const ts = rec.timestamp ? new Date(rec.timestamp * 1000).toISOString().slice(0, 19).replace("T", " ") : "?";
+    const mag = (rec.magnitude ?? "?").toUpperCase();
+    const lines = [
+      `${mag} — ${ts}`,
+      `    text:     ${rec.text ?? "(no text)"}`,
+      `    source:   ${rec.source ?? "?"}`,
+      `    day:      ${rec.day ?? "?"}`,
+      `    session:  ${rec.session ?? "?"}`,
+      `    scene:    ${rec.scene || "(none)"}`,
+    ];
+    if (rec.pcs?.length) lines.push(`    pcs:      ${rec.pcs.join(", ")}`);
+    if (rec.id) lines.push(`    id:       ${rec.id}`);
+    return lines.join("\n");
   }
 
   /** Get all deeds (read-only). */

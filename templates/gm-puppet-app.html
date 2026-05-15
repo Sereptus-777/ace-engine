@@ -1,0 +1,17 @@
+<div class="gm-puppet-container">
+    <div class="gm-puppet-portrait-area">
+        <img id="gm-puppet-portrait" src="{{actorImg}}" crossorigin="anonymous" alt="{{actorName}}" />
+        <div id="gm-puppet-name" class="gm-puppet-name">{{actorName}}</div>
+    </div>
+
+    <div id="gm-puppet-log" class="gm-puppet-log"></div>
+
+    <div class="gm-puppet-controls">
+        <textarea id="gm-puppet-input" placeholder="Type a line, or tap the mic to dictate..." autocomplete="off" rows="2"></textarea>
+        <div class="gm-puppet-btn-row">
+            <button id="gm-puppet-voice" title="Toggle dictation"><i class="fas fa-microphone"></i></button>
+            <button id="gm-puppet-send"  title="Speak as NPC"><i class="fas fa-paper-plane"></i></button>
+            <button id="gm-puppet-stop"  title="Stop audio playback"><i class="fas fa-stop"></i></button>
+        </div>
+    </div>
+</div>

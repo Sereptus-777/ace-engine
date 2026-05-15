@@ -11,6 +11,7 @@ import { summarizeAndSaveSession }                   from "./memory.mjs";
 import { ttsEngine }                                 from "./tts.mjs";
 import { getVoiceConfig, getDynamicVoiceSettings }   from "./voice-engine.mjs";
 import { getCreatureSoundFolder, getVoicePitch }     from "./creature-sounds.mjs";
+import { npcChatState }                              from "./activate.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -389,18 +390,32 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             this._playerName = this.speakingAs?.name ?? game.user.character?.name ?? game.user.name;
         }
 
-        const { lockNPC, isNPCLocked, isLockedByMe } = window._aceEnvoy ?? {};
-        if (lockNPC && !game.user.isGM) {
-            const actorId = this.actor.id;
-            if (!isNPCLocked(actorId)) {
-                lockNPC(actorId, game.user.id, game.user.name, this.tokenDocument?.id || null);
-                this._lockPlayerToken(true);
-                this._watchForSceneChange();
-            } else if (!isLockedByMe(actorId)) {
-                // NPC is locked by another player — demote to spectator permanently
+        // Conversation lock — at most ONE player at a time owns an open
+        // chat. Acquire here when a player opens a new window. If a lock
+        // is already held by someone else (any NPC, any player), demote
+        // this window to read-only spectator. GM is exempt.
+        const npcLocks = npcChatState?.npcLocks;
+        if (!game.user.isGM && npcLocks) {
+            const heldBySomeoneElse = [...npcLocks.values()].some(l => l?.userId && l.userId !== game.user.id);
+            if (heldBySomeoneElse) {
                 this.readOnly = true;
                 this._isOwner = false;
-                this._setUILocked(true, `${escapeHtml(this.npcName)} is already in conversation.`);
+                this._setUILocked(true, `${escapeHtml(this.npcName)} — another player is in conversation.`);
+            } else {
+                const actorId = this.actor.id;
+                const lockInfo = {
+                    userId:   game.user.id,
+                    userName: game.user.name,
+                    tokenId:  this.tokenDocument?.id || null,
+                    convoKey: this._convoKey,
+                };
+                npcLocks.set(actorId, lockInfo);
+                game.socket.emit(`module.${MODULE_ID}`, {
+                    action: "lockSet", actorId, lockInfo,
+                });
+                this._lockedActorId = actorId;
+                this._lockPlayerToken(true);
+                this._watchForSceneChange();
             }
         }
 
@@ -452,9 +467,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             tokenId: this.tokenDocument?.id || null,
             source:  "gm"
         });
-        const { unlockNPC, openConversations } = window._aceEnvoy ?? {};
-        unlockNPC?.(this.actor.id);
-        openConversations?.delete(this._convoKey);
+        npcChatState?.openConversations?.delete?.(this._convoKey);
         this._gmForced = true;
         // close() handles summarization in the background — no need to double-summarize
         this.close();
@@ -556,13 +569,11 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     async handleMic() {
-        // Hard block: only the lock owner or GM can use mic
+        // Hard block: only spectators (readOnly) and locked-out players
+        // are denied. Lock-helper plumbing was lost in the merger — see
+        // the comment in _onRender. Until it returns, all conversation
+        // owners (i.e. not readOnly) can mic.
         if (!game.user.isGM && this.readOnly) return;
-        const { isNPCLocked, isLockedByMe } = window._aceEnvoy ?? {};
-        if (!game.user.isGM && isNPCLocked && isNPCLocked(this.actor.id) && !isLockedByMe(this.actor.id)) {
-            console.warn("ACE: Engine | Blocked mic — not the active speaker.");
-            return;
-        }
 
         // ── Toggle OFF: stop listening and send what we have ─────────────
         if (this._recognition) {
@@ -709,13 +720,10 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             text = EngineBridge.filterProfanity(text);
         } catch (err) { console.debug("ACE: Engine | ConversationApp profanity filter not loaded:", err); }
 
-        // Hard block: only the lock owner or GM can send messages
+        // Hard block: spectators (readOnly) can never send. Lock-based
+        // multi-player conflict checks were lost in the envoy merger —
+        // see _onRender for the cleanup note.
         if (!game.user.isGM && this.readOnly) return;
-        const { isNPCLocked, isLockedByMe } = window._aceEnvoy ?? {};
-        if (!game.user.isGM && isNPCLocked && isNPCLocked(this.actor.id) && !isLockedByMe(this.actor.id)) {
-            console.warn("ACE: Engine | Blocked send — not the active speaker.");
-            return;
-        }
 
         // Kill any active voice recognition so it doesn't re-fill the input
         if (this._recognition) {
@@ -930,12 +938,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
         if (this._inactivityTimer) clearTimeout(this._inactivityTimer);
         this._inactivityTimer = setTimeout(async () => {
-            console.warn("ACE: Engine | Inactivity timeout — releasing lock");
-            const { unlockNPC, isLockedByMe, openConversations } = window._aceEnvoy ?? {};
-            if (unlockNPC && isLockedByMe?.(this.actor.id)) {
-                unlockNPC(this.actor.id);
-            }
-            openConversations?.delete(this._convoKey);
+            console.warn("ACE: Engine | Inactivity timeout — releasing window");
+            npcChatState?.openConversations?.delete?.(this._convoKey);
             this.renderMessage("system", "Conversation timed out due to inactivity.");
             await this._summarizeSession();
             this._setUILocked(true, "");
@@ -1125,19 +1129,33 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     async close(options = {}) {
-        // ── GM closes silently — just switching NPCs ─────────────────────────
         // Raw history is already saved per-exchange via _saveMemorySafe().
-        // Journal summary fires automatically when the PLAYER ends the conversation
-        // (handled by the gmDismiss socket handler in main.js).
-        //
-        // openConversations and npcLocks are GLOBAL state shared via the
-        // window._aceEnvoy bridge object. Other paths in this file pull them
-        // via destructuring; the close path was previously assuming bare
-        // identifiers (which threw "ReferenceError: openConversations is not
-        // defined" — the chat window then couldn't be closed). Pull them
-        // explicitly here so the refs always resolve, with safe fallbacks
-        // when the bridge is missing.
-        const { openConversations, npcLocks, unlockNPC } = window._aceEnvoy ?? {};
+        // Journal summary fires automatically when the PLAYER ends the
+        // conversation (handled by the gmDismiss socket handler in
+        // ace-engine.mjs).
+        const openConversations = npcChatState?.openConversations;
+
+        // ── Spectator (readOnly) windows close instantly. The conversation
+        // owner — the player who's actually chatting — is the only client
+        // that summarizes and writes the journal entry. If a spectator
+        // (GM or another player watching) ran _summarizeSession too, we'd
+        // get duplicate journal entries AND a multi-second freeze while
+        // the AI summarizer runs. ─────────────────────────────────────
+        if (this.readOnly) {
+            try {
+                const log = this.element?.querySelector?.("#ace-engine-log");
+                if (log) log.innerHTML = "";
+            } catch (_) {}
+            if (this._inactivityTimer) clearTimeout(this._inactivityTimer);
+            if (this._sceneChangeHookId != null) { Hooks.off("canvasReady", this._sceneChangeHookId); this._sceneChangeHookId = null; }
+            if (this._dialogueStartHookId != null) { Hooks.off("ace-engine.npcDialogueStart", this._dialogueStartHookId); this._dialogueStartHookId = null; }
+            if (this._dialogueEndHookId != null)   { Hooks.off("ace-engine.npcDialogueEnd",   this._dialogueEndHookId);   this._dialogueEndHookId   = null; }
+            ttsEngine.stop();
+            if (openConversations?.get?.(this._convoKey) === this) {
+                openConversations.delete(this._convoKey);
+            }
+            return super.close(options);
+        }
 
         // ── DOM wipe — clear stale content before closing ────────────────────
         try {
@@ -1157,33 +1175,48 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         this._lockPlayerToken(false);
         ttsEngine.stop();
 
+        // ── Release conversation lock (player-owner path) ───────────────────
+        // If we acquired a lock on open, release it now and broadcast so
+        // every other client's chat icons go back to gold.
+        if (this._lockedActorId) {
+            const npcLocks = npcChatState?.npcLocks;
+            if (npcLocks) npcLocks.delete(this._lockedActorId);
+            game.socket.emit(`module.${MODULE_ID}`, {
+                action: "lockClear", actorId: this._lockedActorId, userId: game.user.id,
+            });
+            this._lockedActorId = null;
+        }
+
         if (!this._gmForced) {
             const isConversationOwner = this._isOwner && !game.user.isGM;
 
             if (isConversationOwner) {
                 const closingPlayerName = this.speakingAs?.name ?? game.user.name;
 
+                // Ship the FULL history to the GM in the gmDismiss payload.
+                // The GM-side handler (in ace-engine.mjs ready hook) persists
+                // it to actor flags AND runs summarizeAndSaveSession so a
+                // journal entry is written. Without history in the payload,
+                // the GM has nothing to summarize and the conversation
+                // silently disappears on close.
                 game.socket.emit(`module.${MODULE_ID}`, {
                     action:     "gmDismiss",
                     actorId:    this.actor.id,
                     tokenId:    this.tokenDocument?.id || null,
                     source:     "player",
-                    playerName: closingPlayerName
+                    playerName: closingPlayerName,
+                    history:    this.history,
                 });
-                // Release the lock if it's mine — give a short grace period so the
-                // GM can see the close happen before the slot reopens.
-                if (npcLocks) {
-                    const myLock = npcLocks.get(this.actor.id);
-                    if (myLock?.userId === game.user.id) {
-                        setTimeout(() => {
-                            if (npcLocks.get(this.actor.id)?.userId === game.user.id) {
-                                npcLocks.delete(this.actor.id);
-                            }
-                        }, 3000);
-                    }
-                }
-                openConversations?.delete(this._convoKey);
+                openConversations?.delete?.(this._convoKey);
             } else if (game.user.isGM) {
+                // GM closes the conversation directly (GM-owned chat, e.g.
+                // puppeting an NPC). Summarize so the journal entry gets
+                // written. Spectator GM closes are handled by the early
+                // readOnly branch above and never reach this code.
+                if (this.history?.length > 0) {
+                    try { await this._summarizeSession(); }
+                    catch (err) { console.warn(`ACE: Engine | GM close: summarize failed:`, err); }
+                }
                 openConversations?.delete(this._convoKey);
             } else {
                 game.socket.emit(`module.${MODULE_ID}`, {
@@ -1460,11 +1493,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                     source:     "player",
                     playerName: this._playerName ?? game.user.character?.name ?? game.user.name
                 });
-                const { unlockNPC, isLockedByMe, openConversations } = window._aceEnvoy ?? {};
-                if (unlockNPC && isLockedByMe?.(this.actor.id)) {
-                    unlockNPC(this.actor.id);
-                }
-                openConversations?.delete(this._convoKey);
+                npcChatState?.openConversations?.delete?.(this._convoKey);
                 this._gmForced = true;
                 this.close();
             }

@@ -137,11 +137,20 @@ export function getCreatureSoundFolder(actor) {
 
     const type = (actor.system?.details?.type?.value || "").toLowerCase().trim();
     const name = (actor.name || "").toLowerCase();
-    const race = (
-        actor.system?.details?.race?.value
-        ?? actor.system?.details?.race
-        ?? ""
-    ).toLowerCase();
+
+    // dnd5e 5.x: race on PCs is an embedded Item document — extract its
+    // .name. Older shapes stored a {value:""} object or a plain string.
+    // Defensive read keeps this working across dnd5e versions.
+    const raceField = actor.system?.details?.race;
+    let raceStr = "";
+    if (typeof raceField === "string") {
+        raceStr = raceField;
+    } else if (raceField?.name && typeof raceField.name === "string") {
+        raceStr = raceField.name;
+    } else if (typeof raceField?.value === "string") {
+        raceStr = raceField.value;
+    }
+    const race = raceStr.toLowerCase();
 
     // 0. D&D 5e swarm flag — swarms are typed "beast" but have a swarm size field
     const swarmSize = (actor.system?.details?.type?.swarm || "").toLowerCase();

@@ -104,8 +104,14 @@ export class AIHandler {
         const playerIntScore   = playerActor?.system?.abilities?.int?.value ?? 10;
         const playerWisScore   = playerActor?.system?.abilities?.wis?.value ?? 10;
         const playerChaScore   = playerActor?.system?.abilities?.cha?.value ?? 10;
-        const playerRace       = playerActor?.system?.details?.race?.value
-                              ?? playerActor?.system?.details?.race ?? "";
+        // Race on PCs in dnd5e 5.x is an embedded Item document; extract .name.
+        // Older shapes stored a {value:""} object or a plain string.
+        const _raceField = playerActor?.system?.details?.race;
+        const playerRace = typeof _raceField === "string"
+            ? _raceField
+            : (typeof _raceField?.name === "string"
+                ? _raceField.name
+                : (typeof _raceField?.value === "string" ? _raceField.value : ""));
         const playerClass      = playerActor?.items?.find(i => i.type === "class")?.name ?? "";
         const playerLevel      = playerActor?.system?.details?.level ?? 0;
         const playerActiveEffects = playerActor ? this.getActiveEffects(playerActor) : [];

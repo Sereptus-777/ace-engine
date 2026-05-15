@@ -14,13 +14,21 @@ const _FP = () =>
   globalThis.FilePicker;                                     // v12 fallback
 
 // ── Shared label constants ─────────────────────────────────────
+// Ordered most-rolled (top) → least-rolled (bottom). Based on community
+// data (CritRoleStats: Perception ~31%, Stealth ~19% — those two dominate
+// every dataset; Investigation + Insight round out the top 4). Then a
+// middle band of action / social skills, then knowledge skills, with the
+// rarely-rolled cluster (Sleight of Hand, Animal Handling, Medicine,
+// Performance) bottom-anchored. Object literal key order is preserved
+// when we iterate with Object.entries in _buildTccRollOptions, so this
+// IS the dropdown order.
 const TCC_SKILL_LABELS = {
-  acr: "Acrobatics",  ani: "Animal Handling", arc: "Arcana",
-  ath: "Athletics",   dec: "Deception",       his: "History",
-  ins: "Insight",     itm: "Intimidation",    inv: "Investigation",
-  med: "Medicine",    nat: "Nature",          prc: "Perception",
-  prf: "Performance", per: "Persuasion",      rel: "Religion",
-  slt: "Sleight of Hand", ste: "Stealth",     sur: "Survival",
+  prc: "Perception",       ste: "Stealth",          inv: "Investigation",
+  ins: "Insight",          ath: "Athletics",        per: "Persuasion",
+  acr: "Acrobatics",       dec: "Deception",        itm: "Intimidation",
+  sur: "Survival",         arc: "Arcana",           his: "History",
+  rel: "Religion",         nat: "Nature",           slt: "Sleight of Hand",
+  ani: "Animal Handling",  med: "Medicine",         prf: "Performance",
 };
 
 // Skills where failure is NOT obvious to the player — suitable for blind/subtle rolls.
@@ -199,6 +207,13 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this._tccExpanded  = { stats: false, rolls: false, bulk: false, initiative: false };
     this._tccRollType  = "skill";   // "skill" | "save" | "check"
     this._tccRollMode  = "gm";     // "gm" | "subtle" | "request"
+    // Per-roll-type selection memory. Toggling Skill/Save/Check or
+    // GM/Subtle/Request used to wipe these back to defaults — now they
+    // persist independently per roll type so the GM doesn't have to
+    // re-pick Perception every time they tap Subtle.
+    this._tccRollIds   = { skill: "prc", save: "wis", check: "wis" };
+    this._tccDc        = 15;
+    this._tccFlavor    = "";
     // ── Select panel collapsible sections ────────────────
     this._collapsedSections = { players: false, npcs: false, tiles: true, items: true };
     // ── Adventure / Survival Tracker ──────────────────────
@@ -292,6 +307,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       npcSpeechSend:       AcePanel._onNpcSpeechSend,
       npcSpeechVoice:      AcePanel._onNpcSpeechVoice,
       npcSpeechStop:       AcePanel._onNpcSpeechStop,
+      openSpeakAs:         AcePanel._onOpenSpeakAs,
       // Social Profile moved to ace-envoy
       // ── Tactical Command Center ────────────────────────
       tccToggleSection:    AcePanel._onTccToggleSection,
@@ -931,57 +947,39 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     return npcs[0];
   }
 
+  /**
+   * Like _getSelectedNpcForSpeech but accepts ANY single selected actor —
+   * NPC or player character. Used by the "Speak as" button so the GM can
+   * voice player characters too (fun for cutscene narration / out-of-game
+   * moments).
+   */
+  _getSelectedTokenForSpeakAs() {
+    const selected = this._resolveSelectedActors();
+    if (selected.length !== 1) return null;
+    const only = selected[0];
+    if (!only?.actor) return null;
+    return only;
+  }
+
   _buildNpcSpeechBox() {
-    const npc = this._getSelectedNpcForSpeech();
-    if (!npc) return "";
+    // Replaced the old inline speech box with a single full-width button.
+    // Pressing it opens the floating Speak-As window (the same compact
+    // dictation tool the chat icon on an NPC token opens). Works for ANY
+    // single selected token — NPC or player character.
+    const sel = this._getSelectedTokenForSpeakAs();
+    if (!sel) return "";
 
-    const { actor } = npc;
-    const safeName = this._escapeHtml(actor.name);
-    const envoyActive = !!game.modules?.get("ace-envoy")?.active;
-    const voiceId = envoyActive ? (actor.getFlag("ace-envoy", "voiceId") || "") : "";
-    const voiceAccent = envoyActive ? (actor.getFlag("ace-envoy", "voiceAccent") || "") : "";
-    const voiceMuted = envoyActive ? (actor.getFlag("ace-envoy", "voiceMuted") || false) : false;
-
-    // Voice status indicator
-    let voiceStatus = "";
-    if (!envoyActive) {
-      voiceStatus = `<span class="ace-speech-voice-status ace-speech-no-voice" title="ACE: Envoy not installed — no NPC voice available"><i class="fas fa-volume-mute"></i> No voice</span>`;
-    } else if (voiceMuted) {
-      voiceStatus = `<span class="ace-speech-voice-status ace-speech-muted" title="This NPC is muted (gender set to None in Envoy)"><i class="fas fa-volume-mute"></i> Muted</span>`;
-    } else if (voiceId) {
-      voiceStatus = `<span class="ace-speech-voice-status ace-speech-has-voice" title="Voice: ${voiceAccent || "default"}"><i class="fas fa-volume-up"></i> ${voiceAccent || "Voice ready"}</span>`;
-    } else {
-      voiceStatus = `<span class="ace-speech-voice-status ace-speech-no-voice" title="No voice assigned — drop token on scene or open AI Setup in Envoy"><i class="fas fa-volume-mute"></i> No voice</span>`;
-    }
+    const { actor } = sel;
+    const safeName  = this._escapeHtml(actor.name);
+    const kind      = actor.hasPlayerOwner ? "Player" : "NPC";
 
     return `
-      <section class="ace-npc-speech-box">
-        <div class="ace-speech-header">
-          <img class="ace-speech-portrait" src="${actor.prototypeToken?.texture?.src || actor.img || 'icons/svg/mystery-man.svg'}"
-               alt="${safeName}" onerror="this.src='icons/svg/mystery-man.svg'" />
-          <div class="ace-speech-header-info">
-            <span class="ace-speech-label"><i class="fas fa-comments"></i> Speaking as <strong>${safeName}</strong></span>
-            ${voiceStatus}
-          </div>
-        </div>
-        <textarea id="ace-npc-speech-input" class="ace-npc-speech-input"
-                  placeholder="Type what ${safeName} says…"
-                  spellcheck="true" rows="2"></textarea>
-        <div class="ace-speech-btn-row">
-          <button class="ace-btn ace-btn-mic" data-action="npcSpeechVoice"
-                  title="Voice input — speak as this NPC">
-            <i class="fas fa-microphone"></i>
-          </button>
-          <button class="ace-btn ace-btn-send" data-action="npcSpeechSend"
-                  title="Send to players — posts to chat and speaks aloud">
-            <i class="fas fa-paper-plane"></i> Send
-          </button>
-          <button class="ace-btn ace-btn-stop" data-action="npcSpeechStop"
-                  title="Stop audio playback">
-            <i class="fas fa-stop"></i>
-          </button>
-        </div>
-      </section>
+      <button class="ace-speak-as-btn" data-action="openSpeakAs"
+              title="Open the Speak-As window — type or dictate what ${safeName} says, voice plays for everyone">
+        <i class="fas fa-comment-dots"></i>
+        Speak as <strong>${safeName}</strong>
+        <span class="ace-speak-as-kind">${kind}</span>
+      </button>
     `;
   }
 
@@ -1107,36 +1105,27 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     this._wireSelectPanelEvents();
   }
 
-  // ── NPC Speech Box — Actions & Helpers ───────────────────
+  // ── Speak-As Button — Actions & Helpers ──────────────────
 
-  /** Re-render just the speech box area without touching the rest of the select panel. */
+  /**
+   * Re-render the Speak-As button (or remove it) without touching the
+   * rest of the Select panel. Called whenever the token selection
+   * changes so the button always reflects the current single-selection.
+   */
   _refreshNpcSpeechBox() {
-    const existing = this.element?.querySelector(".ace-npc-speech-box");
-    const newHtml = this._buildNpcSpeechBox();
+    const existing = this.element?.querySelector(".ace-speak-as-btn");
+    const newHtml  = this._buildNpcSpeechBox();
 
     if (existing && !newHtml) {
-      // NPC deselected — remove the box
-      if (this._npcSpeechListening) this._stopNpcSpeechVoice();
+      // Selection cleared / multi-select — remove the button
       existing.remove();
     } else if (!existing && newHtml) {
-      // NPC selected — insert after the NPC section
-      const npcSection = this.element?.querySelectorAll(".ace-el-section")?.[1]; // 2nd section = NPCs
+      // Single token selected — insert after the NPC section
+      const npcSection = this.element?.querySelectorAll(".ace-el-section")?.[1];
       if (npcSection) npcSection.insertAdjacentHTML("afterend", newHtml);
-      this._wireNpcSpeechEvents();
-      // Auto-scroll to show the speech box
-      requestAnimationFrame(() => {
-        const box = this.element?.querySelector(".ace-npc-speech-box");
-        box?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      });
     } else if (existing && newHtml) {
-      // Selection changed (different NPC) — replace
-      if (this._npcSpeechListening) this._stopNpcSpeechVoice();
+      // Different token selected — replace in place
       existing.outerHTML = newHtml;
-      this._wireNpcSpeechEvents();
-      requestAnimationFrame(() => {
-        const box = this.element?.querySelector(".ace-npc-speech-box");
-        box?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      });
     }
   }
 
@@ -1199,28 +1188,37 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     // ── Save to memory ──
     this.lkMemory?.logNarration?.(`[${actor.name}] "${text}"`, canvas?.scene?.name);
 
-    // ── TTS via Envoy voice ──
-    const envoyActive = !!game.modules?.get("ace-envoy")?.active;
-    if (!envoyActive) {
-      ui.notifications?.warn("ACE: Envoy not installed — text posted to chat but no NPC voice available.");
-      return;
-    }
-
-    const voiceId = actor.getFlag("ace-envoy", "voiceId") || "";
-    const voiceMuted = actor.getFlag("ace-envoy", "voiceMuted") || false;
+    // ── TTS lookup — voice flags moved from ace-envoy to ace-engine in
+    //                 the merger. Try engine flags first (canonical),
+    //                 fall back to envoy flags for legacy data. For
+    //                 unlinked tokens, voice may sit on the synthetic
+    //                 ActorDelta actor so check it first.
+    const tokenDoc       = npc.token?.document ?? null;
+    const effectiveActor = (tokenDoc && !tokenDoc.actorLink && tokenDoc.actor)
+                         ? tokenDoc.actor
+                         : actor;
+    const voiceId    = effectiveActor.getFlag(MODULE_ID, "voiceId")
+                    || actor.getFlag(MODULE_ID, "voiceId")
+                    || actor.getFlag("ace-envoy", "voiceId")
+                    || "";
+    const voiceMuted = effectiveActor.getFlag(MODULE_ID, "voiceMuted")
+                    ?? actor.getFlag(MODULE_ID, "voiceMuted")
+                    ?? actor.getFlag("ace-envoy", "voiceMuted")
+                    ?? false;
 
     if (voiceMuted) {
       ui.notifications?.info(`ACE: ${actor.name} is muted — text posted to chat only.`);
       return;
     }
     if (!voiceId) {
-      ui.notifications?.warn(`ACE: ${actor.name} has no voice assigned. Drop the token on the scene or open AI Setup in Envoy.`);
+      ui.notifications?.warn(`ACE: ${actor.name} has no voice assigned. Open AI Setup on this NPC to pick a voice.`);
       return;
     }
 
-    const voiceSettings = actor.getFlag("ace-envoy", "voiceSettings") || {
-      stability: 0.5, similarity_boost: 0.8, style: 0.35,
-    };
+    const voiceSettings = effectiveActor.getFlag(MODULE_ID, "voiceSettings")
+                       || actor.getFlag(MODULE_ID, "voiceSettings")
+                       || actor.getFlag("ace-envoy", "voiceSettings")
+                       || { stability: 0.5, similarity_boost: 0.8, style: 0.35 };
 
     await this._speakAsNpc(text, voiceId, voiceSettings);
   }
@@ -1328,6 +1326,40 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
   }
 
   // ── NPC Speech — Action handlers ──
+
+  /**
+   * Open the floating Speak-As window for whichever single token is
+   * currently selected in the panel. Works for both NPC and PC tokens.
+   * If a window is already open for this actor, focus it instead of
+   * spawning a duplicate.
+   */
+  static async _onOpenSpeakAs(event, target) {
+    const sel = this._getSelectedTokenForSpeakAs();
+    if (!sel) {
+      ui.notifications?.warn("ACE: Select a single token first.");
+      return;
+    }
+    try {
+      const { npcChatState } = await import("./npc/activate.mjs");
+      const tokenDoc = sel.token?.document ?? null;
+      const puppetKey = (tokenDoc && !tokenDoc.actorLink)
+                     ? `tok:${tokenDoc.id}`
+                     : sel.actor.id;
+      const existing = npcChatState?.gmPuppets?.get?.(puppetKey);
+      if (existing) {
+        existing.render(true);
+        try { existing.bringToTop?.(); } catch (_) {}
+        return;
+      }
+      const { GmPuppetApp } = await import("./npc/gm-puppet-app.mjs");
+      const puppet = new GmPuppetApp(sel.actor, { tokenDocument: tokenDoc });
+      npcChatState?.gmPuppets?.set?.(puppetKey, puppet);
+      puppet.render(true);
+    } catch (err) {
+      console.error(`${MODULE_ID} | Open Speak-As failed:`, err);
+      ui.notifications?.error("ACE: Failed to open Speak-As window — see console.");
+    }
+  }
 
   static async _onNpcSpeechSend(event, target) {
     await this._npcSpeechSend();
@@ -2004,6 +2036,8 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     const exp  = this._tccExpanded.rolls;
     const type = this._tccRollType;
     const mode = this._tccRollMode;
+    const dc   = this._tccDc ?? 15;
+    const flav = this._tccFlavor ?? "";
 
     const modeLabels = { gm: "Roll for Selected", subtle: "Send Subtle Roll", request: "Request from Players" };
 
@@ -2021,11 +2055,11 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
           </div>
           <div class="ace-roll-system">
             <select class="ace-tcc-roll-select" id="ace-tcc-roll-id">
-              ${this._buildTccRollOptions(type)}
+              ${this._buildTccRollOptions(type, mode === "subtle", this._tccRollIds[type])}
             </select>
             <div class="ace-roll-dc-wrap">
               <label for="ace-tcc-dc">DC</label>
-              <input id="ace-tcc-dc" type="number" class="ace-roll-dc-input" value="15" min="1" max="30" step="1" />
+              <input id="ace-tcc-dc" type="number" class="ace-roll-dc-input" value="${dc}" min="1" max="30" step="1" />
             </div>
           </div>
           <div class="ace-roll-mode-btns">
@@ -2038,6 +2072,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
           </div>
           <div class="ace-roll-flavor-wrap ${mode === "subtle" ? "visible" : ""}">
             <input id="ace-tcc-flavor" type="text" class="ace-roll-flavor"
+                   value="${this._escapeHtmlAttr ? this._escapeHtmlAttr(flav) : flav.replace(/"/g, "&quot;")}"
                    placeholder="Flavor text: 'Something feels off about this place...'" />
           </div>
           <button class="ace-btn ace-btn-roll-execute" data-action="tccGroupRoll">
@@ -2047,14 +2082,19 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       </div>`;
   }
 
-  _buildTccRollOptions(type, subtleOnly = false) {
+  /**
+   * Build dropdown options for the current roll-type, optionally restricted
+   * to skills/saves where failure isn't immediately obvious (subtle mode),
+   * and pre-selecting `selectedId` if it's in the resulting list.
+   */
+  _buildTccRollOptions(type, subtleOnly = false, selectedId = null) {
     const labels = type === "skill" ? TCC_SKILL_LABELS : TCC_ABILITY_LABELS;
     const filter = subtleOnly
       ? (type === "skill" ? TCC_SUBTLE_SKILLS : TCC_SUBTLE_SAVES)
       : null;
     return Object.entries(labels)
       .filter(([id]) => !filter || filter.has(id))
-      .map(([id, name]) => `<option value="${id}">${name}</option>`)
+      .map(([id, name]) => `<option value="${id}"${id === selectedId ? " selected" : ""}>${name}</option>`)
       .join("");
   }
 
@@ -2301,20 +2341,33 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
 
     // ── GM Roll mode: silent roll, real dice GM, blind dice players, GM-only card ──
     const gmResults = [];
+    const rollErrors = [];
     for (const { actor, token } of actors) {
       try {
         const displayName = token?.document?.name ?? token?.name ?? actor.prototypeToken?.name ?? actor.name;
         const displayImg  = token?.document?.texture?.src ?? actor.prototypeToken?.texture?.src ?? actor.img;
 
-        // Get modifier based on roll type
+        // Get modifier based on roll type. dnd5e 5.x changed several
+        // shapes from plain numbers to objects with .value — we accept
+        // either to keep the math working across versions.
         let mod = 0;
+        const numericOrValue = (x) =>
+          (typeof x === "number" ? x : x?.value);
+
         if (rollType === "skill") {
-          mod = actor.system?.skills?.[rollId]?.total ?? actor.system?.skills?.[rollId]?.mod ?? 0;
+          const s = actor.system?.skills?.[rollId];
+          mod = numericOrValue(s?.total) ?? numericOrValue(s?.mod) ?? 0;
         } else if (rollType === "save") {
-          mod = actor.system?.abilities?.[rollId]?.save ?? 0;
+          // In dnd5e 5.x abilities.<abl>.save is an OBJECT { value, dc, ... }
+          // not a raw number — extract .value. Older dnd5e versions had it
+          // as a plain number, so accept either.
+          mod = numericOrValue(actor.system?.abilities?.[rollId]?.save) ?? 0;
         } else {
-          mod = actor.system?.abilities?.[rollId]?.mod ?? 0;
+          mod = numericOrValue(actor.system?.abilities?.[rollId]?.mod) ?? 0;
         }
+        // Coerce to a finite number so the Roll formula can't end up with
+        // "[object Object]" / "NaN" / undefined interpolation garbage.
+        mod = Number.isFinite(mod) ? mod : 0;
 
         // Roll silently — no chat message
         const roll = await new Roll(`1d20 + ${mod}`).evaluate();
@@ -2337,7 +2390,16 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
         rolled++;
       } catch (err) {
         console.error(`${MODULE_ID} | TCC GM roll error for ${actor.name}:`, err);
+        rollErrors.push(`${actor.name}: ${err?.message ?? err}`);
       }
+    }
+
+    // If every roll threw, surface the first error to the GM instead of
+    // a silent "0 rolls executed" toast that gives no clue what broke.
+    if (rolled === 0 && rollErrors.length) {
+      ui.notifications?.error(`ACE: All rolls failed — ${rollErrors[0]}. See console for details.`);
+      target.disabled = false;
+      return;
     }
 
     // Build GM-only results card
@@ -2482,37 +2544,90 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
   // ── TCC Event Wiring ──────────────────────────────────────
 
   _wireTccEvents() {
-    // Roll type buttons (Skill / Save / Check)
+    // ── Persistence wiring ───────────────────────────────────────
+    // Keep the live form values mirrored into instance state so toggling
+    // Skill/Save/Check or GM/Subtle/Request doesn't blow away the GM's
+    // current picks. Each roll type (skill/save/check) gets its OWN last
+    // selection so switching back restores what was there.
+
+    const select = this.element.querySelector("#ace-tcc-roll-id");
+    if (select) {
+      select.addEventListener("change", () => {
+        this._tccRollIds[this._tccRollType] = select.value;
+      });
+    }
+
+    const dcInput = this.element.querySelector("#ace-tcc-dc");
+    if (dcInput) {
+      const persistDc = () => {
+        const v = parseInt(dcInput.value, 10);
+        if (Number.isFinite(v)) this._tccDc = v;
+      };
+      dcInput.addEventListener("input",  persistDc);
+      dcInput.addEventListener("change", persistDc);
+    }
+
+    const flavorInput = this.element.querySelector("#ace-tcc-flavor");
+    if (flavorInput) {
+      flavorInput.addEventListener("input", () => {
+        this._tccFlavor = flavorInput.value || "";
+      });
+    }
+
+    // ── Roll type buttons (Skill / Save / Check) ────────────────
+    // On switch: remember the current dropdown value under the OLD type's
+    // slot, swap the dropdown contents for the new type's labels, then
+    // restore the LAST value the GM had picked for the new type (or its
+    // default). DC + flavor are not touched.
     const typeButtons = this.element.querySelectorAll(".ace-tcc-roll-type-btn");
     for (const btn of typeButtons) {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        this._tccRollType = btn.dataset.rollType;
+        const oldType = this._tccRollType;
+        const newType = btn.dataset.rollType;
+        if (oldType === newType) return;
+        // Stash the current dropdown value for the OLD type before we swap
+        const sel = this.element.querySelector("#ace-tcc-roll-id");
+        if (sel) this._tccRollIds[oldType] = sel.value;
+        this._tccRollType = newType;
         typeButtons.forEach(b => b.classList.toggle("active", b === btn));
-        const select = this.element.querySelector("#ace-tcc-roll-id");
-        if (select) select.innerHTML = this._buildTccRollOptions(this._tccRollType, this._tccRollMode === "subtle");
+        if (sel) sel.innerHTML = this._buildTccRollOptions(newType, this._tccRollMode === "subtle", this._tccRollIds[newType]);
       });
     }
 
-    // Mode buttons (GM Roll / Subtle / Request)
+    // ── Mode buttons (GM Roll / Subtle / Request) ───────────────
+    // Switching modes preserves the current skill/save/check pick AND
+    // the DC. Only the dropdown's option list filters narrow (subtle
+    // mode restricts to skills where failure isn't obvious). If the
+    // current pick is still eligible under the new filter, it stays
+    // selected; if not, falls back to the first eligible option.
     const modeButtons = this.element.querySelectorAll(".ace-roll-mode-btn");
     for (const btn of modeButtons) {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        this._tccRollMode = btn.dataset.rollMode;
+        const newMode = btn.dataset.rollMode;
+        if (this._tccRollMode === newMode) return;
+        // Capture the current pick BEFORE rebuilding so we can restore it
+        const sel = this.element.querySelector("#ace-tcc-roll-id");
+        if (sel) this._tccRollIds[this._tccRollType] = sel.value;
+        this._tccRollMode = newMode;
         modeButtons.forEach(b => b.classList.toggle("active", b === btn));
-        // Show/hide flavor text input (only for subtle mode)
+        // Show/hide flavor text input (subtle mode only)
         const flavorWrap = this.element.querySelector(".ace-roll-flavor-wrap");
-        if (flavorWrap) flavorWrap.classList.toggle("visible", this._tccRollMode === "subtle");
-        // Refresh skill dropdown — Subtle mode filters to eligible skills only
-        const select = this.element.querySelector("#ace-tcc-roll-id");
-        if (select) select.innerHTML = this._buildTccRollOptions(this._tccRollType, this._tccRollMode === "subtle");
+        if (flavorWrap) flavorWrap.classList.toggle("visible", newMode === "subtle");
+        // Rebuild dropdown with new filter, restoring selection
+        if (sel) {
+          sel.innerHTML = this._buildTccRollOptions(this._tccRollType, newMode === "subtle", this._tccRollIds[this._tccRollType]);
+          // If our preferred id wasn't in the filtered list, store whatever
+          // ended up selected (first option) so the state stays consistent
+          this._tccRollIds[this._tccRollType] = sel.value;
+        }
         // Update execute button label
         const execBtn = this.element.querySelector(".ace-btn-roll-execute");
         if (execBtn) {
           const labels = { gm: "Roll for Selected", subtle: "Send Subtle Roll", request: "Request from Players" };
           const icons  = { gm: "fa-dice-d20", subtle: "fa-eye-slash", request: "fa-paper-plane" };
-          execBtn.innerHTML = `<i class="fas ${icons[this._tccRollMode] ?? "fa-dice-d20"}"></i> ${labels[this._tccRollMode] ?? labels.gm}`;
+          execBtn.innerHTML = `<i class="fas ${icons[newMode] ?? "fa-dice-d20"}"></i> ${labels[newMode] ?? labels.gm}`;
         }
       });
     }
@@ -3912,7 +4027,12 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     target.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Weaving...';
     try {
       const promptInput = this.element.querySelector("#ace-encounter-prompt");
-      await this._generateEncounter(promptInput?.value?.trim() ?? "");
+      const promptText  = promptInput?.value?.trim() ?? "";
+      // Clear the textarea immediately so the GM has a fresh field to type
+      // the next prompt into while this one is generating. Same pattern as
+      // every other chat input in the engine.
+      if (promptInput) promptInput.value = "";
+      await this._generateEncounter(promptText);
     } catch (err) {
       ui.notifications.error(`ACE: ${err.message}`);
     }
@@ -6756,7 +6876,64 @@ Appropriate loot, XP, and story rewards.
    * @returns {Promise<object|null>}
    */
   async _searchCompendiumCreature(name) {
-    const lowerName = name.toLowerCase().trim();
+    const baseName = name.toLowerCase().trim();
+
+    // ── Alias resolution ──────────────────────────────────────
+    // D&D NPCs frequently have a "common" name in lore but a different
+    // canonical name in the official stat block. AIs (and GMs) tend to
+    // use the lore name, but compendiums store the canonical one. The
+    // map below converts the lore name into the canonical name (or
+    // a set of alternates to try in order) so the search hits.
+    //
+    // Most common offender: Illithid → Mind Flayer. The AI generates
+    // "Illithid" all day, but the actor in every Monster Manual / SRD
+    // pack is named "Mind Flayer." Without this map, every Illithid
+    // encounter card shows the orange "Not found in compendiums" stub.
+    const CREATURE_NAME_ALIASES = {
+      "illithid":          ["mind flayer", "mind flayer arcanist"],
+      "mind flayer":       ["mind flayer", "illithid"],
+      "tarrasque":         ["tarrasque"],
+      "lich king":         ["lich"],
+      "demilich":          ["demilich", "lich"],
+      "vampire spawn":     ["vampire spawn"],
+      "wererat":           ["wererat"],
+      "werewolf":          ["werewolf"],
+      "kraken":            ["kraken"],
+      "dragon turtle":     ["dragon turtle"],
+      "displacer beast":   ["displacer beast"],
+      "beholder":          ["beholder", "spectator"],
+      "spectator":         ["spectator", "beholder"],
+      "drow":              ["drow", "drow elite warrior", "drow mage"],
+      "duergar":           ["duergar"],
+      "deep gnome":        ["deep gnome", "svirfneblin"],
+      "svirfneblin":       ["svirfneblin", "deep gnome"],
+      "githyanki":         ["githyanki warrior", "githyanki knight"],
+      "githzerai":         ["githzerai monk", "githzerai zerth"],
+      "kuo-toa":           ["kuo-toa"],
+      "kuo toa":           ["kuo-toa"],
+      "yuan-ti":           ["yuan-ti pureblood", "yuan-ti malison"],
+      "yuan ti":           ["yuan-ti pureblood", "yuan-ti malison"],
+      "owl bear":          ["owlbear"],
+      "owlbear":           ["owlbear", "owl bear"],
+      "hell hound":        ["hell hound"],
+      "hellhound":         ["hell hound"],
+      "devil dog":         ["hell hound"],
+    };
+
+    // Build the lookup list — alias hits first (in order), then the
+    // original name as a fallback.
+    const aliasList = CREATURE_NAME_ALIASES[baseName] ?? null;
+    const candidates = aliasList ? [...aliasList, baseName] : [baseName];
+
+    // Dedupe while preserving order
+    const lookups = [...new Set(candidates)];
+
+    // Also strip common monster adjectives ("Adult Red Dragon" → "Red Dragon")
+    // as a LAST-resort try.
+    const ADJ_RE = /^(adult|young|ancient|wyrmling|elder|greater|lesser|gnoll|dire|giant|swarm of)\s+/i;
+    const stripped = baseName.replace(ADJ_RE, "").trim();
+    if (stripped && stripped !== baseName) lookups.push(stripped);
+
     let bestMatch = null;
 
     for (const pack of game.packs) {
@@ -6780,35 +6957,43 @@ Appropriate loot, XP, and story rewards.
         } catch (err) { console.debug("ace-engine | Panel compendium index build failed:", err); continue; }
       }
 
-      // Exact match (case-insensitive)
-      for (const entry of index) {
-        if (entry.name.toLowerCase() === lowerName) {
-          return this._buildCreatureResult(pack, entry);
+      // Exact match (case-insensitive) — try every lookup variant in order
+      for (const variant of lookups) {
+        for (const entry of index) {
+          if (entry.name.toLowerCase() === variant) {
+            return this._buildCreatureResult(pack, entry);
+          }
         }
       }
 
-      // Partial match — store first hit as fallback
+      // Partial match — substring either direction. Try every variant.
       if (!bestMatch) {
-        for (const entry of index) {
-          if (entry.name.toLowerCase().includes(lowerName) ||
-              lowerName.includes(entry.name.toLowerCase())) {
-            bestMatch = this._buildCreatureResult(pack, entry);
+        for (const variant of lookups) {
+          for (const entry of index) {
+            const entryLower = entry.name.toLowerCase();
+            if (entryLower.includes(variant) || variant.includes(entryLower)) {
+              bestMatch = this._buildCreatureResult(pack, entry);
+              break;
+            }
           }
+          if (bestMatch) break;
         }
       }
     }
 
-    // Also check world actors
-    const worldActor = game.actors?.find(a => a.name.toLowerCase() === lowerName);
-    if (worldActor) {
-      return {
-        uuid:  worldActor.uuid,
-        name:  worldActor.name,
-        img:   worldActor.prototypeToken?.texture?.src || worldActor.img,
-        cr:    worldActor.system?.details?.cr ?? null,
-        hp:    worldActor.system?.attributes?.hp?.max ?? null,
-        ac:    worldActor.system?.attributes?.ac?.value ?? worldActor.system?.attributes?.ac?.flat ?? null,
-      };
+    // Also check world actors (with alias support)
+    for (const variant of lookups) {
+      const worldActor = game.actors?.find(a => a.name.toLowerCase() === variant);
+      if (worldActor) {
+        return {
+          uuid:  worldActor.uuid,
+          name:  worldActor.name,
+          img:   worldActor.prototypeToken?.texture?.src || worldActor.img,
+          cr:    worldActor.system?.details?.cr ?? null,
+          hp:    worldActor.system?.attributes?.hp?.max ?? null,
+          ac:    worldActor.system?.attributes?.ac?.value ?? worldActor.system?.attributes?.ac?.flat ?? null,
+        };
+      }
     }
 
     return bestMatch;  // may be null

@@ -450,6 +450,39 @@ export class AceSettings {
       default: false,
     });
 
+    // ── Auto Token Art ──────────────────────────────────────
+    // Scans user-defined folders for token art on world load, swaps in
+    // matching art on every new token created. Filename convention:
+    //   "Goblin.webp"             — base art for "Goblin"
+    //   "Goblin - Archer.webp"    — variant art ("Goblin" can spawn this)
+    //   "Goblin Archer.webp"      — exact match for actor named "Goblin Archer"
+    s("tokenArtEnabled", {
+      scope: "world",
+      name: "Auto Token Art",
+      hint: "When ON, freshly created tokens that don't already use art from your configured folders will be auto-matched to your token art collection. Tokens whose image is already inside one of your folders are left alone. The variant-chooser pops over the canvas; tap a thumbnail (or 1-9, R for random, Enter for highlighted) to pick. Drop new art any time and run \"Rescan Token Art Folders\" from the macros (or via the API: game.modules.get('ace-engine').api.rescanTokenArt()).",
+      type: Boolean,
+      default: true,
+    });
+    s("tokenArtFolders", {
+      scope: "world",
+      config: false,    // exposed via the menu helper below
+      type: Array,
+      default: ["NPCs", "assets/srd5e/img/bestiary/tokens/MM"],
+    });
+    s("tokenArtAutoRename", {
+      scope: "world",
+      name: "Auto-Rename Token on Variant Pick",
+      hint: "When ON, picking a variant from the chooser (e.g. \"Archer\" for a Goblin) auto-renames the token from \"Goblin\" to \"Goblin Archer\" so the initiative tracker shows which variant is which. Doesn't touch the underlying actor — only the placed token.",
+      type: Boolean,
+      default: true,
+    });
+    s("tokenArtRecentChoices", {
+      scope: "world",
+      config: false,
+      type: Object,
+      default: {},
+    });
+
     // ── ElevenLabs Narration (client-scoped) ────────────────
     s("elevenLabsApiKey", {
       scope: "client",
@@ -537,13 +570,13 @@ export class AceSettings {
     s("voiceProvider", {
       scope: "client",
       name: "NPC Voice Provider",
-      hint: "Choose which voice engine to use for NPC speech in conversations. ElevenLabs requires an API key. Browser TTS is free but lower quality.",
+      hint: "Choose which voice engine to use for NPC speech. ElevenLabs gives premium voices — players don't need their own key; the GM's client generates the audio and streams it to all players. Browser TTS is free, robotic, and offline-only — use it only if no GM is online.",
       type: String,
       choices: {
-        elevenlabs: "ElevenLabs (Recommended)",
-        browser:    "Browser TTS (Free)",
+        elevenlabs: "ElevenLabs (Recommended — GM proxies audio to players)",
+        browser:    "Browser TTS (Free, robotic)",
       },
-      default: "browser",
+      default: "elevenlabs",
     });
 
     // ── Browser TTS (client-scoped) ─────────────────────────
@@ -863,6 +896,12 @@ export class AceSettings {
 
     // ── Migration tracking — true once migrateFromEnvoy() has run ────
     s("envoyMigrated", {
+      scope: "world", config: false, type: Boolean, default: false,
+    });
+
+    // ── Folder consolidation — true once legacy "🎙 ACE Envoy" journal
+    //    folder has been merged into "📖 ACE Engine". One-time per world.
+    s("envoyJournalsConsolidated", {
       scope: "world", config: false, type: Boolean, default: false,
     });
 

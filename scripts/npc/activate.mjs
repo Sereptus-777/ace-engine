@@ -26,6 +26,7 @@ const TAG       = "ACE: Engine | NPC Chat";
 let _activated = false;
 const openConversations = new Map(); // convoKey → ConversationApp instance
 const npcLocks          = new Map(); // actorId → { userId, userName }
+const gmPuppets         = new Map(); // puppetKey → GmPuppetApp instance (GM-side speak-as-NPC tool)
 
 /** Compute conversation Map key — token-specific for unlinked tokens. */
 function _convoKey(actorId, tokenDoc) {
@@ -121,6 +122,7 @@ export function activateNpcChat() {
 export const npcChatState = {
     openConversations,
     npcLocks,
+    gmPuppets,
     isActivated: () => _activated,
 };
 

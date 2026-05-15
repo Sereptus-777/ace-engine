@@ -118,27 +118,45 @@ export async function summarizeAndSaveSession(actor, history, playerName) {
             `${m.role === "user" ? playerName : actor.name}: ${m.content}`
         ).join("\n");
 
-        const summaryPrompt = `You are writing a brief campaign journal entry about a conversation between ${playerName} (a player character) and ${actor.name} (an NPC) in a tabletop RPG campaign.
+        const summaryPrompt = `You are a STRICTLY FACTUAL transcript summarizer. Your job is to summarize what was LITERALLY SAID in a conversation between ${playerName} (player character) and ${actor.name} (NPC) — NOTHING ELSE.
 
-PART 1 — DIARY ENTRY:
-Write 2-4 sentences in past tense, third person, like a campaign chronicle or diary entry. Cover: what was discussed, any deals or promises made, how the interaction ended, and any important revelations or turning points. Be vivid but concise. Do NOT include direct dialogue quotes, game stats, or mechanical details.
+ABSOLUTE RULES (violating these is the worst possible failure):
+- Do NOT invent characters, items, locations, events, motivations, deals, alliances, betrayals, artifacts, quests, revelations, or any narrative content not LITERALLY spoken in the transcript.
+- Do NOT embellish, elaborate, dramatize, or "make the story interesting." A boring conversation gets a boring summary.
+- Do NOT use words like "delving into," "confronted," "uneasy bargain," "darkness," "balance of power," "revelations" UNLESS those exact concepts appear in the transcript.
+- If the transcript is a greeting and farewell with no substance, write ONE sentence: "${playerName} greeted ${actor.name}, and they exchanged brief words." That is the ENTIRE summary. Nothing more.
+- If only one party spoke meaningfully, say so plainly.
+- Past tense, third person, no quoted dialogue, no game mechanics.
 
-PART 2 — DEED EXTRACTION:
-If any notable commitments, discoveries, quest acceptances, alliances, betrayals, or significant agreements were made during this conversation, list them. Only include genuinely significant narrative events — NOT small talk, routine transactions, or pleasantries.
+PART 1 — DIARY ENTRY (1-4 sentences, strictly grounded in transcript):
+${transcript.length < 200 ? "The transcript is short — your summary should be at most 1 sentence summarizing whatever brief exchange occurred. Do NOT invent context to fill space." : "Summarize ONLY what was discussed. If only small talk happened, say so."}
 
-Format your response EXACTLY like this:
+PART 2 — DEED EXTRACTION (be RUTHLESS):
+A deed is a SPECIFIC COMMITMENT, AGREEMENT, REVELATION, or DECLARATION that is QUOTED OR PARAPHRASED FROM THE TRANSCRIPT. If you can't point to a specific line in the transcript that contains the deed, IT IS NOT A DEED.
+
+Greetings, small talk, dismissals, refusals to talk, and pleasantries are NEVER deeds.
+
+If the transcript contains no clear specific commitment/agreement/revelation/declaration, you MUST output:
+DEEDS:
+NONE
+
+Do not invent deeds. Do not "find" deeds that aren't there. When in doubt, output NONE.
+
+OUTPUT FORMAT (exact):
 DIARY:
-[Your narrative summary here]
+[Your strictly factual summary]
 
 DEEDS:
-- DEED: "[description in past tense]" | MAGNITUDE: [local/regional/major/legendary]
+- DEED: "[description, in past tense, traceable to a specific line in the transcript]" | MAGNITUDE: [local/regional/major/legendary]
 
-If no notable deeds occurred, write:
+OR if no deeds:
 DEEDS:
 NONE
 
 TRANSCRIPT:
-${transcript}`;
+${transcript}
+
+FINAL REMINDER: If you fabricate ANY detail not in the transcript, you fail. A short transcript means a short summary. NONE deeds is correct most of the time.`;
 
         const rawResponse = await AIHandler.callAI("You are a campaign chronicler.", [], summaryPrompt, provider, apiKey);
         if (!rawResponse || rawResponse.includes("magic is unset")) return;

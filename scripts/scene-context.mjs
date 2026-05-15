@@ -796,7 +796,14 @@ export class SceneContext {
     const pf2eClass = actor?.items?.find((i) => i.type === "class");
     if (pf2eClass) return pf2eClass.name;
     const sys = actor?.system;
-    return sys?.details?.race ?? sys?.details?.ancestry?.name ?? "";
+    // Race on PCs in dnd5e 5.x is an embedded Item document; extract .name.
+    // Older shapes stored a plain string or {value:""}. Always return a
+    // string here — callers do toLowerCase / interpolation on the result.
+    const raceField = sys?.details?.race;
+    if (typeof raceField === "string") return raceField;
+    if (typeof raceField?.name === "string") return raceField.name;
+    if (typeof raceField?.value === "string") return raceField.value;
+    return sys?.details?.ancestry?.name ?? "";
   }
 
   _extractLevel(actor) {

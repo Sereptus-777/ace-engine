@@ -370,10 +370,19 @@ export function detectGender(actor) {
         if (maleHits   > 0 && maleHits   >= femaleHits * 2) return "male";
     }
 
-    // 3) Name + race/type keywords
+    // 3) Name + race/type keywords. Race on PC actors in dnd5e 5.x is
+    // an embedded Item document — extract .name. Older shapes used a
+    // {value:""} object or a plain string. Without this, .join produces
+    // "[object Object]" and the regex tests miss.
+    const raceField = actor.system?.details?.race;
+    let raceForSearch = "";
+    if (typeof raceField === "string") raceForSearch = raceField;
+    else if (typeof raceField?.name === "string") raceForSearch = raceField.name;
+    else if (typeof raceField?.value === "string") raceForSearch = raceField.value;
+
     const searchText = [
         actor.name,
-        actor.system?.details?.race?.value ?? actor.system?.details?.race ?? "",
+        raceForSearch,
         actor.system?.details?.type?.value ?? "",
         actor.system?.details?.type?.subtype ?? "",
     ].join(" ");
@@ -421,17 +430,30 @@ export function resolveAccent(actor) {
 /**
  * Check actor race/subrace against RACE_ACCENT_MAP.
  * Tries most-specific first (e.g., "hill dwarf" before "dwarf").
+ *
+ * dnd5e 5.x note: on PC actors `system.details.race` is no longer a
+ * string — it's the embedded race Item document. We accept all three
+ * historical shapes (Item document, {value:"..."} object, plain string)
+ * and extract a usable lowercase name for matching.
  */
 function _getRaceAccent(actor) {
     if (!actor) return null;
 
-    const raceRaw = (
-        actor.system?.details?.race?.value
-        ?? actor.system?.details?.race
-        ?? ""
-    ).toLowerCase().trim();
+    const raceField = actor.system?.details?.race;
+    let raceStr = "";
+    if (typeof raceField === "string") {
+        raceStr = raceField;
+    } else if (raceField?.name && typeof raceField.name === "string") {
+        // dnd5e 5.x — race is an Item document with .name
+        raceStr = raceField.name;
+    } else if (typeof raceField?.value === "string") {
+        // older shape — { value: "human" }
+        raceStr = raceField.value;
+    }
+    const raceRaw = raceStr.toLowerCase().trim();
 
-    const subtypeRaw = (actor.system?.details?.type?.subtype || "").toLowerCase().trim();
+    const subtypeField = actor.system?.details?.type?.subtype;
+    const subtypeRaw = (typeof subtypeField === "string" ? subtypeField : "").toLowerCase().trim();
     const nameRaw = (actor.name || "").toLowerCase();
 
     // Build search strings from most to least specific

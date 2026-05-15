@@ -37,13 +37,33 @@ function _getElevenLabsModel() {
     catch (_) { return "eleven_multilingual_v2"; }
 }
 
-/** Whether to use browser TTS instead of ElevenLabs (no key, or explicit setting). */
-function _useBrowserTTS() {
-    try {
-        const provider = game.settings.get(MODULE_ID, "voiceProvider");
-        if (provider === "browser") return true;
-    } catch (_) {}
-    return !_getElevenLabsKey();
+/** Whether the user explicitly chose browser TTS. */
+function _userPickedBrowser() {
+    try { return game.settings.get(MODULE_ID, "voiceProvider") === "browser"; }
+    catch (_) { return false; }
+}
+
+/** Is there an active GM session we can proxy ElevenLabs requests to? */
+function _gmAvailable() {
+    return !!game.users?.some?.(u => u.isGM && u.active);
+}
+
+/**
+ * Decide which TTS path this client should take.
+ *   "local"   — generate via ElevenLabs on this client, broadcast result.
+ *   "proxy"   — ask the GM to generate; we play the audio it sends back.
+ *   "browser" — fall back to free browser speechSynthesis (robotic).
+ *
+ * GM proxy is the right answer for any non-GM client without a local
+ * key, so the player hears ElevenLabs paid for by the GM's account
+ * instead of the OS's built-in voice.
+ */
+function _ttsMode() {
+    if (_userPickedBrowser()) return "browser";
+    const hasLocalKey = !!_getElevenLabsKey();
+    if (hasLocalKey) return "local";
+    if (!game.user.isGM && _gmAvailable()) return "proxy";
+    return "browser";
 }
 
 class TTSEngine {
@@ -362,7 +382,9 @@ class TTSEngine {
     async speak(text, voiceId, voiceSettings = {}, pitch = 1.0) {
         if (!text?.trim()) return "empty";
 
-        if (_useBrowserTTS()) {
+        const mode = _ttsMode();
+
+        if (mode === "browser") {
             if (!this._browserTTSNotified) {
                 this._browserTTSNotified = true;
                 console.log("TTS | Using free browser voices. Add an ElevenLabs key in module settings for premium AI voices.");
@@ -374,6 +396,17 @@ class TTSEngine {
             return "ok";
         }
 
+        if (mode === "proxy") {
+            const r = await this._speakViaGm(text, voiceId, voiceSettings, pitch);
+            if (r === "ok") return "ok";
+            // Proxy failed (GM offline mid-request, key invalid, network) —
+            // fall back to browser so the player still hears something.
+            console.warn(`TTS | GM proxy returned "${r}" — falling back to browser TTS.`);
+            await this._speakBrowser(text, pitch);
+            return "ok";
+        }
+
+        // mode === "local" — generate on this client and broadcast.
         const result = await this._fetch(text, voiceId, voiceSettings);
         if (result.status !== "ok") {
             console.warn(`TTS | speak() got status "${result.status}" for voice ${voiceId} — falling back to browser TTS`);
@@ -402,6 +435,71 @@ class TTSEngine {
 
         await this.playBuffer(result.arrayBuffer.slice(0), pitch);
         return "ok";
+    }
+
+    /**
+     * Ask the GM client to generate ElevenLabs audio with their API key.
+     *
+     * Flow:
+     *   1. Emit ttsRequest with our user id + requestId.
+     *   2. GM handler in ace-engine.mjs fetches ElevenLabs, broadcasts a
+     *      `playAudio` event to OTHER clients (so spectators hear it too)
+     *      and replies to us with `ttsResponse` carrying the base64 audio.
+     *   3. We decode and play locally, awaiting playBuffer so the speak
+     *      pipeline's segment loop only advances when audio actually ends.
+     *
+     * If the GM doesn't respond inside 30 s, or returns an error, resolves
+     * with a non-"ok" status so the caller can fall back to browser TTS.
+     */
+    _speakViaGm(text, voiceId, voiceSettings = {}, pitch = 1.0) {
+        return new Promise((resolve) => {
+            const requestId = foundry.utils.randomID();
+            let settled = false;
+            const finish = (status) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                game.socket.off(`module.${MODULE_ID}`, handler);
+                resolve(status);
+            };
+            const timeout = setTimeout(() => {
+                console.warn(`TTS | _speakViaGm: GM did not respond within 30s (req ${requestId.slice(0, 6)}).`);
+                finish("error");
+            }, 30000);
+            const handler = async (msg) => {
+                if (!msg || msg.action !== "ttsResponse" || msg.requestId !== requestId) return;
+                if (msg.error) {
+                    console.warn(`TTS | _speakViaGm: GM returned error: ${msg.error}`);
+                    finish("error");
+                    return;
+                }
+                if (!msg.base64) {
+                    console.warn(`TTS | _speakViaGm: GM ack without audio payload.`);
+                    finish("error");
+                    return;
+                }
+                try {
+                    const binary = atob(msg.base64);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                    await this.playBuffer(bytes.buffer, msg.pitch ?? pitch);
+                    finish("ok");
+                } catch (err) {
+                    console.warn(`TTS | _speakViaGm: playback failed:`, err);
+                    finish("error");
+                }
+            };
+            game.socket.on(`module.${MODULE_ID}`, handler);
+            game.socket.emit(`module.${MODULE_ID}`, {
+                action:  "ttsRequest",
+                requestId,
+                userId:  game.user.id,
+                text,
+                voiceId,
+                voiceSettings,
+                pitch
+            });
+        });
     }
 
     /**

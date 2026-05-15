@@ -26,7 +26,9 @@ import { SceneIntelligence }   from "./scene-intelligence.mjs";
 // Combat — Initiative Reorder (moved from ACE: Envoy, merger Phase 1A)
 import { injectReorderButtons } from "./combat/initiative-reorder.mjs";
 // NPC Chat — gated activation entry point (moved from ACE: Envoy, merger Phase 3)
-import { activateNpcChat }      from "./npc/activate.mjs";
+import { activateNpcChat, npcChatState } from "./npc/activate.mjs";
+// Auto Token Art — scans configured folders + swaps token images on create
+import { activateTokenArtEngine, rebuildTokenArtIndex, getTokenArtIndex } from "./token-art-engine.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -262,6 +264,64 @@ function _aceEngineEnabled() {
 //   2. NPC actor flags (factionId, voiceId, personality, memoryLog, etc.)
 //   3. World data stores (factionRegistry, factionMemory, voiceLibraryCache)
 //
+// ─── Legacy journal folder consolidation ───────────────────────────────
+// Pre-merger, ace-envoy created its NPC memory journals in a folder named
+// "🎙 ACE Envoy" (or older variants). Post-merger, ace-engine writes new
+// entries to "📖 ACE Engine". This function moves any [AI Memory] journals
+// from the legacy folder into the new folder ONCE per world, then deletes
+// the empty legacy folder. Idempotent via the `envoyJournalsConsolidated`
+// world setting.
+async function _consolidateLegacyJournalFolders() {
+  if (!game.user.isGM) return;
+  let already = false;
+  try { already = game.settings.get(MODULE_ID, "envoyJournalsConsolidated"); } catch (_) {}
+  if (already) return;
+
+  const NEW_FOLDER_NAME = "📖 ACE Engine";
+  const LEGACY_NAMES = ["🎙 ACE Envoy", "ACE: NPC Memories", "AI NPC Memories"];
+
+  try {
+    // Find / create the destination folder
+    let destFolder = game.folders.find(f =>
+      f.type === "JournalEntry" && f.name === NEW_FOLDER_NAME
+    );
+
+    let movedTotal = 0;
+    for (const legacyName of LEGACY_NAMES) {
+      const legacyFolder = game.folders.find(f =>
+        f.type === "JournalEntry" && f.name === legacyName
+      );
+      if (!legacyFolder) continue;
+
+      // Lazy-create destination only if we actually have legacy data to move
+      if (!destFolder) {
+        destFolder = await Folder.create({
+          name: NEW_FOLDER_NAME,
+          type: "JournalEntry",
+          color: "#d4af37",
+        });
+      }
+
+      const entries = game.journal.filter(j => j.folder?.id === legacyFolder.id);
+      if (entries.length) {
+        const updates = entries.map(j => ({ _id: j.id, folder: destFolder.id }));
+        await JournalEntry.updateDocuments(updates);
+        movedTotal += entries.length;
+      }
+      // Delete the now-empty legacy folder
+      await legacyFolder.delete();
+      console.log(`${MODULE_ID} | Consolidated ${entries.length} journal(s) from "${legacyName}" → "${NEW_FOLDER_NAME}"`);
+    }
+
+    if (movedTotal > 0) {
+      ui.notifications?.info(`ACE Engine: consolidated ${movedTotal} legacy NPC memory journal(s) into "${NEW_FOLDER_NAME}".`);
+    }
+    await game.settings.set(MODULE_ID, "envoyJournalsConsolidated", true);
+  } catch (err) {
+    console.warn(`${MODULE_ID} | Legacy journal folder consolidation failed:`, err);
+  }
+}
+
 // Idempotent: marks completion via the "envoyMigrated" world setting and
 // skips on subsequent runs. Safe to call even if envoy is no longer installed.
 async function migrateFromEnvoy() {
@@ -496,6 +556,15 @@ function _stopAllAudio() {
   if (window.speechSynthesis?.speaking) window.speechSynthesis.cancel();
   // Stop panel TTS (if panel is open)
   if (panel?._cancelTTS) panel._cancelTTS();
+  // Stop the NPC-chat TTS engine — this is the singleton that handles
+  // both the conversation window's NPC speech AND incoming proxied
+  // playAudio broadcasts. Without this call, GM-side Stop only kills
+  // panel narration, while a player chatting with an NPC keeps
+  // hearing the rest of Strahd's monologue. Lazy-imported so the TTS
+  // engine isn't loaded on clients that don't need it.
+  import("./npc/tts.mjs").then(({ ttsEngine }) => {
+    try { ttsEngine.stop(); } catch (_) {}
+  }).catch(() => {});
   // Stop any SFX
   if (panel?.stopSfx) panel.stopSfx();
   console.log(`${MODULE_ID} | All audio stopped`);
@@ -621,6 +690,354 @@ Hooks.once("ready", async () => {
       if (vol <= 0) return;  // muted
       _speakBrowserTTS(data.text, vol);
     }
+
+    // ── NPC chat flag write / session dismiss — GM-side handlers ──
+    // Players can't write actor flags directly (Foundry permission system).
+    // The conversation-app emits these socket actions and the GM client
+    // applies the writes on its end. Without this handler, ALL player-side
+    // conversation saves silently disappear — memoryLog never persists,
+    // journal summaries never write, NPCs never remember prior chats.
+    //
+    // SECURITY: gate to GM client (only GM applies) + key allowlist (don't
+    // let a player overwrite arbitrary flags, just the ones the conversation
+    // app legitimately needs to write).
+    if (data?.action === "setFlag" || data?.action === "unsetFlag") {
+      if (!game.user.isGM) return;
+      const ALLOWED_FLAG_KEYS = new Set([
+        "memoryLog", "voiceId", "voiceSettings", "voiceAccent", "voiceMuted",
+        "nameRevealed", "personality", "gmNotes", "factionId",
+      ]);
+      if (!ALLOWED_FLAG_KEYS.has(data.key)) {
+        console.warn(`${MODULE_ID} | Socket flag op rejected — key "${data.key}" not in allowlist`);
+        return;
+      }
+      try {
+        // Resolve target — unlinked tokens write to the synthetic actor
+        // (tokenDoc.actor), linked tokens / generic actor write to base.
+        let target = null;
+        if (data.tokenId) {
+          for (const scene of game.scenes) {
+            const tdoc = scene.tokens.get(data.tokenId);
+            if (tdoc) { target = tdoc.actor; break; }
+          }
+        }
+        if (!target && data.actorId) target = game.actors.get(data.actorId);
+        if (!target) {
+          console.warn(`${MODULE_ID} | Socket flag op: target actor not found (actorId=${data.actorId}, tokenId=${data.tokenId})`);
+          return;
+        }
+        if (data.action === "setFlag") {
+          target.setFlag(MODULE_ID, data.key, data.value).catch(err =>
+            console.warn(`${MODULE_ID} | Socket setFlag(${data.key}) failed:`, err)
+          );
+        } else {
+          target.unsetFlag(MODULE_ID, data.key).catch(err =>
+            console.warn(`${MODULE_ID} | Socket unsetFlag(${data.key}) failed:`, err)
+          );
+        }
+      } catch (err) {
+        console.warn(`${MODULE_ID} | Socket flag op threw:`, err);
+      }
+    }
+
+    // gmDismiss — player closed an NPC conversation. The history was
+    // accumulated on the player's client; they ship it to us so we can
+    // run summarizeAndSaveSession and write the journal entry. Without
+    // this, conversations with NPCs vanish from the journal sidebar
+    // even though the player just had them.
+    if (data?.action === "gmDismiss") {
+      // ── First: auto-close any spectator window on THIS client for the
+      // ended conversation. Runs for every receiver, but GM clients are
+      // intentionally skipped so the GM can keep reviewing what happened
+      // after the player walks away. Player-side spectators close so the
+      // sidebar doesn't fill up with stale windows from completed chats.
+      try {
+        const map = npcChatState?.openConversations;
+        if (map && !game.user.isGM) {
+          for (const [key, app] of map.entries()) {
+            if (!app?.readOnly) continue;
+            if (app.actor?.id !== data.actorId) continue;
+            if (data.tokenId && app.tokenDocument?.id !== data.tokenId) continue;
+            app._gmForced = true; // suppress dismiss broadcast on close
+            app.close().catch(() => {});
+            map.delete(key);
+          }
+        }
+      } catch (err) {
+        console.warn(`${MODULE_ID} | gmDismiss spectator close failed:`, err);
+      }
+
+      // ── Second: GM-only persistence + journal summary ─────────────
+      if (!game.user.isGM) return;
+      if (!Array.isArray(data.history) || !data.history.length) return;
+      try {
+        let actor = null;
+        if (data.tokenId) {
+          for (const scene of game.scenes) {
+            const tdoc = scene.tokens.get(data.tokenId);
+            if (tdoc) { actor = tdoc.actor; break; }
+          }
+        }
+        if (!actor && data.actorId) actor = game.actors.get(data.actorId);
+        if (!actor) {
+          console.warn(`${MODULE_ID} | gmDismiss: target actor not found`);
+          return;
+        }
+        // Persist raw history to flag first (in case summarize fails)
+        actor.setFlag(MODULE_ID, "memoryLog", data.history).catch(err =>
+          console.warn(`${MODULE_ID} | gmDismiss: memoryLog persist failed:`, err)
+        );
+        // Then run the journal summarize on GM client
+        import("./npc/memory.mjs").then(({ summarizeAndSaveSession }) => {
+          summarizeAndSaveSession(actor, data.history, data.playerName || "(Player)")
+            .catch(err => console.warn(`${MODULE_ID} | gmDismiss summarize failed:`, err));
+        }).catch(err => console.warn(`${MODULE_ID} | gmDismiss memory import failed:`, err));
+      } catch (err) {
+        console.warn(`${MODULE_ID} | gmDismiss handler threw:`, err);
+      }
+    }
+
+    // ── conversationMessage — peer broadcasts a chat-bubble update ──
+    // Pre-merger this receiver lived in ace-envoy/src/main.js. The four
+    // emit sites in conversation-app.mjs ship every player/NPC message
+    // to peers so the GM and other players can spectate the running
+    // conversation. Without this handler the broadcast vanished and
+    // spectator windows never opened.
+    //
+    // Behavior:
+    //   • Skip messages we sent (exclude === game.user.id).
+    //   • If a window is already open for this convoKey, append the bubble.
+    //   • Otherwise open a fresh ConversationApp in readOnly (spectator)
+    //     mode, register it, and append once the DOM is ready.
+    //
+    // Control tags (SUBTLE_CHECK, DISPOSITION) are stripped inline here
+    // rather than going through renderMessage() — that method posts a
+    // GM whisper card and updates canvas disposition, both of which
+    // already fire on the sender. Letting them fire again on every
+    // spectator would duplicate the whisper and double-apply disposition.
+    if (data?.action === "conversationMessage") {
+      if (data.exclude && data.exclude === game.user.id) return;
+      if (!data.role || !data.content) return;
+
+      try {
+        let actor = null, tokenDoc = null;
+        if (data.tokenId) {
+          for (const scene of game.scenes) {
+            const tdoc = scene.tokens.get(data.tokenId);
+            if (tdoc) { tokenDoc = tdoc; actor = tdoc.actor; break; }
+          }
+        }
+        if (!actor && data.actorId) actor = game.actors.get(data.actorId);
+        if (!actor) return;
+
+        const convoKey = (tokenDoc && !tokenDoc.actorLink)
+                       ? `tok:${tokenDoc.id}`
+                       : actor.id;
+
+        let display = String(data.content);
+        display = display.replace(/\[SUBTLE_CHECK:[^\]]+\]/g, "");
+        display = display.replace(/\[DISPOSITION:[^\]]+\]/gi, "");
+        if (data.role === "assistant") {
+          display = display.replace(/\*(.*?)\*/g, "").replace(/\s{2,}/g, " ");
+        }
+        display = display.trim();
+        if (!display) return;
+        const html = _escapeHtml(display);
+
+        const appendBubble = (app, role, h) => {
+          if (!app._messageLog) app._messageLog = [];
+          app._messageLog.push({ role, html: h });
+          if (app._logContainer) {
+            const div = document.createElement("div");
+            div.className = `ace-engine-message ace-engine-${role}`;
+            div.innerHTML = `<div class="ace-engine-bubble">${h}</div>`;
+            app._logContainer.appendChild(div);
+            requestAnimationFrame(() => {
+              app._logContainer.scrollTop = app._logContainer.scrollHeight;
+            });
+          }
+        };
+
+        const existing = npcChatState?.openConversations?.get?.(convoKey);
+        if (existing) {
+          // If render is still pending, queue; otherwise append now
+          if (existing._logContainer) appendBubble(existing, data.role, html);
+          else (existing._pendingSpectatorMsgs ??= []).push({ role: data.role, html });
+          return;
+        }
+
+        // No window — pop open a spectator
+        import("./npc/conversation-app.mjs").then(({ ConversationApp }) => {
+          const spec = new ConversationApp(actor, { readOnly: true, tokenDocument: tokenDoc });
+          spec._pendingSpectatorMsgs = [{ role: data.role, html }];
+          npcChatState?.openConversations?.set?.(convoKey, spec);
+          Promise.resolve(spec.render(true)).then(() => {
+            const pending = spec._pendingSpectatorMsgs ?? [];
+            spec._pendingSpectatorMsgs = [];
+            for (const m of pending) appendBubble(spec, m.role, m.html);
+          }).catch(err => console.warn(`${MODULE_ID} | spectator render failed:`, err));
+        }).catch(err => console.warn(`${MODULE_ID} | spectator window load failed:`, err));
+      } catch (err) {
+        console.warn(`${MODULE_ID} | conversationMessage handler threw:`, err);
+      }
+    }
+
+    // ── playAudio — base64 audio broadcast from another client (TTS) ──
+    // The TTS engine emits this from tts.mjs after each successful
+    // ElevenLabs fetch so every client hears the same audio. Without a
+    // receiver the broadcast vanishes and players hear nothing (or fall
+    // back to browser TTS locally — the robotic voice).
+    if (data?.action === "playAudio" && data.base64) {
+      if (data.exclude && data.exclude === game.user.id) return;
+      try {
+        const binary = atob(data.base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const buf = bytes.buffer;
+        // Hand off to the singleton TTS engine — it owns the AudioContext,
+        // pitch handling, and stop/pause state. Lazy-import to avoid loading
+        // the TTS engine on clients that never speak.
+        import("./npc/tts.mjs").then(({ ttsEngine }) => {
+          ttsEngine.playBuffer(buf, data.pitch ?? 1.0).catch(err =>
+            console.warn(`${MODULE_ID} | playAudio playback failed:`, err)
+          );
+        }).catch(err => console.warn(`${MODULE_ID} | playAudio TTS load failed:`, err));
+      } catch (err) {
+        console.warn(`${MODULE_ID} | playAudio handler threw:`, err);
+      }
+    }
+
+    // ── ttsRequest — GM-side proxy for ElevenLabs generation ───────
+    // Players don't have an ElevenLabs key (key is client-scoped). When
+    // a player chats with an NPC they ask GM to generate the audio,
+    // GM fetches ElevenLabs with their key, then broadcasts the result
+    // as a playAudio event so every client (player included) hears the
+    // same premium voice instead of browser TTS.
+    if (data?.action === "ttsRequest") {
+      if (!game.user.isGM) return;
+      if (!data.text || !data.voiceId || !data.requestId) return;
+      try {
+        const apiKey = game.settings.get(MODULE_ID, "elevenLabsApiKey") || "";
+        if (!apiKey) {
+          game.socket.emit(`module.${MODULE_ID}`, {
+            action: "ttsResponse", requestId: data.requestId, error: "GM has no ElevenLabs API key configured."
+          });
+          return;
+        }
+        const model = (() => {
+          try { return game.settings.get(MODULE_ID, "elevenLabsModel") || "eleven_multilingual_v2"; }
+          catch (_) { return "eleven_multilingual_v2"; }
+        })();
+        const settings = data.voiceSettings && typeof data.voiceSettings === "object" ? data.voiceSettings : {};
+        fetch(`https://api.elevenlabs.io/v1/text-to-speech/${data.voiceId}`, {
+          method: "POST",
+          headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: data.text,
+            model_id: model,
+            voice_settings: {
+              stability:        settings.stability        ?? 0.45,
+              similarity_boost: settings.similarity_boost ?? 0.80,
+              style:            settings.style            ?? 0.35,
+              use_speaker_boost: settings.use_speaker_boost ?? true,
+            },
+          }),
+        }).then(async resp => {
+          if (!resp.ok) {
+            const errText = `ElevenLabs ${resp.status}: ${resp.statusText}`;
+            game.socket.emit(`module.${MODULE_ID}`, {
+              action: "ttsResponse", requestId: data.requestId, error: errText
+            });
+            return;
+          }
+          const buf = await resp.arrayBuffer();
+          const uint8 = new Uint8Array(buf);
+          const CHUNK = 8192;
+          const parts = [];
+          for (let i = 0; i < uint8.length; i += CHUNK) {
+            parts.push(String.fromCharCode(...uint8.subarray(i, i + CHUNK)));
+          }
+          const base64 = btoa(parts.join(""));
+          const pitch  = data.pitch ?? 1.0;
+          // Broadcast to spectators (everyone except the requester). They
+          // play it through the playAudio receiver and hear the same voice.
+          game.socket.emit(`module.${MODULE_ID}`, {
+            action: "playAudio", base64, pitch, exclude: data.userId
+          });
+          // Send the audio DIRECTLY to the requester so their speak()
+          // promise can await playBuffer and advance segments in lockstep
+          // with actual playback (not the moment GM emits). Other clients
+          // ignore this — requestId won't match their handlers.
+          game.socket.emit(`module.${MODULE_ID}`, {
+            action: "ttsResponse", requestId: data.requestId, ok: true, base64, pitch
+          });
+        }).catch(err => {
+          console.warn(`${MODULE_ID} | ttsRequest ElevenLabs fetch failed:`, err);
+          game.socket.emit(`module.${MODULE_ID}`, {
+            action: "ttsResponse", requestId: data.requestId, error: String(err?.message ?? err)
+          });
+        });
+      } catch (err) {
+        console.warn(`${MODULE_ID} | ttsRequest handler threw:`, err);
+      }
+    }
+
+    // ── Conversation lock sync ─────────────────────────────────────
+    // The lock map (which player is currently in a conversation, and
+    // with which NPC) lives in module-level state on every client.
+    // Whenever a player acquires or releases their lock, they broadcast
+    // here so all OTHER clients can grey out / restore their NPC chat
+    // icons in real time.
+    //
+    // lockSet     — broadcast by the player who just opened a chat.
+    // lockClear   — broadcast by the player when they close.
+    // lockRequest — late-joining player asks GM for the current state.
+    // lockSync    — GM's reply with a snapshot of the lock map.
+    if (data?.action === "lockSet" && data.actorId && data.lockInfo) {
+      if (data.lockInfo.userId === game.user.id) return; // we already set it locally
+      try {
+        npcChatState?.npcLocks?.set?.(data.actorId, data.lockInfo);
+        if (canvas?.hud?.token?.rendered) canvas.hud.token.render(true);
+      } catch (err) { console.warn(`${MODULE_ID} | lockSet handler threw:`, err); }
+    }
+
+    if (data?.action === "lockClear" && data.actorId) {
+      try {
+        const cur = npcChatState?.npcLocks?.get?.(data.actorId);
+        // Only delete if it belongs to the user who sent the clear (defends
+        // against a stale clear arriving after someone else re-acquired)
+        if (cur && (!data.userId || cur.userId === data.userId)) {
+          npcChatState.npcLocks.delete(data.actorId);
+        }
+        if (canvas?.hud?.token?.rendered) canvas.hud.token.render(true);
+      } catch (err) { console.warn(`${MODULE_ID} | lockClear handler threw:`, err); }
+    }
+
+    if (data?.action === "lockRequest") {
+      if (!game.user.isGM) return;
+      try {
+        const snapshot = [];
+        for (const [actorId, info] of (npcChatState?.npcLocks ?? new Map()).entries()) {
+          snapshot.push({ actorId, lockInfo: info });
+        }
+        game.socket.emit(`module.${MODULE_ID}`, {
+          action: "lockSync", targetUserId: data.userId, locks: snapshot,
+        });
+      } catch (err) { console.warn(`${MODULE_ID} | lockRequest handler threw:`, err); }
+    }
+
+    if (data?.action === "lockSync") {
+      if (data.targetUserId && data.targetUserId !== game.user.id) return;
+      try {
+        const map = npcChatState?.npcLocks;
+        if (!map) return;
+        map.clear();
+        for (const entry of (data.locks ?? [])) {
+          if (entry?.actorId && entry?.lockInfo) map.set(entry.actorId, entry.lockInfo);
+        }
+        if (canvas?.hud?.token?.rendered) canvas.hud.token.render(true);
+      } catch (err) { console.warn(`${MODULE_ID} | lockSync handler threw:`, err); }
+    }
   });
 
   // ── Register password masking for API key fields in Settings ──
@@ -639,10 +1056,69 @@ Hooks.once("ready", async () => {
   try { activateNpcChat(); }
   catch (err) { console.warn(`${MODULE_ID} | NPC chat activation (pre-GM-gate) failed:`, err); }
 
+  // ── Late-joiner lock sync ──────────────────────────────────────
+  // Non-GM clients that connect mid-session ask the GM for the current
+  // conversation-lock snapshot, so any chat icons already greyed-out
+  // before they joined stay consistent on their screen.
+  if (!game.user.isGM) {
+    try {
+      game.socket.emit(`module.${MODULE_ID}`, {
+        action: "lockRequest", userId: game.user.id,
+      });
+    } catch (_) {}
+  }
+
+  // ── Disconnect safety net (GM-only) ─────────────────────────────
+  // If a player holding a conversation lock disappears (closes browser,
+  // crashes, refreshes), wipe their lock so the session isn't frozen
+  // for everyone else. Runs only on the GM client to avoid duplicate
+  // clears flooding the socket from every connected player.
+  if (game.user.isGM) {
+    Hooks.on("userConnected", (user, connected) => {
+      if (connected || !user?.id) return;
+      try {
+        const map = npcChatState?.npcLocks;
+        if (!map?.size) return;
+        const toDelete = [];
+        for (const [actorId, info] of map.entries()) {
+          if (info?.userId === user.id) toDelete.push(actorId);
+        }
+        if (!toDelete.length) return;
+        for (const actorId of toDelete) {
+          map.delete(actorId);
+          game.socket.emit(`module.${MODULE_ID}`, {
+            action: "lockClear", actorId, userId: user.id,
+          });
+        }
+        if (canvas?.hud?.token?.rendered) canvas.hud.token.render(true);
+        console.log(`${MODULE_ID} | Cleared ${toDelete.length} stale lock(s) on ${user.name} disconnect.`);
+      } catch (err) {
+        console.warn(`${MODULE_ID} | Disconnect lock cleanup failed:`, err);
+      }
+    });
+  }
+
   // ── GM-only initialization ────────────────────────────────────
   if (!game.user.isGM) return;
 
   console.log(`${MODULE_ID} | ACE ready — GM mode active`);
+
+  // ── Auto Token Art ─────────────────────────────────────────────
+  // Scans configured folders + listens for new tokens. GM-only — players
+  // don't have permission to update token textures anyway.
+  try { activateTokenArtEngine(); }
+  catch (err) { console.warn(`${MODULE_ID} | Token art activation failed:`, err); }
+
+  // ── NPC → PC Converter ─────────────────────────────────────────
+  // Adds a "Convert NPC to PC..." entry to the actor-directory right-click
+  // menu on NPC actors. Lets the GM promote a permanent-party-member NPC
+  // into a real PC actor with class/level so progression actually works.
+  try {
+    const mod = await import("./npc/npc-to-pc-converter.mjs");
+    mod.activateNpcToPcConverter();
+  } catch (err) {
+    console.warn(`${MODULE_ID} | NPC→PC converter activation failed:`, err);
+  }
 
   // ── Load baked-in credentials from config.local.json (optional) ─
   // GM-only: players don't need ElevenLabs keys or other credentials.
@@ -1217,6 +1693,16 @@ Hooks.once("ready", async () => {
       askAI:     (prompt) => aiProvider?.chat(prompt, "", "", []),
       narrate:   (text) => panel?.narrateText?.(text),
       stopAllAudio: _stopAllAudio,
+
+      // ── Auto Token Art API ──────────────────────────────────────
+      /** Rescan the token-art folders + rebuild the in-memory index. */
+      rescanTokenArt: async () => {
+        const result = await rebuildTokenArtIndex();
+        ui.notifications?.info(`ACE: Token art rescanned — ${result.fileCount} files, ${result.baseCount} base names.`);
+        return result;
+      },
+      /** Inspect the current token-art index (for debugging). */
+      getTokenArtIndex,
 
       // ── Party Reputation API (used by ACE: Envoy) ─────────────────
       /** Get the ReputationEngine instance. */
@@ -1838,6 +2324,7 @@ Hooks.once("ready", async () => {
   // Safe whether or not envoy is still installed.
   setTimeout(() => {
     migrateFromEnvoy()
+      .then(() => _consolidateLegacyJournalFolders())
       .then(() => {
         // After migration, activate the NPC chat subsystem if the gate is on.
         // activateNpcChat is idempotent and gated on game.settings.get(MODULE_ID,
