@@ -10218,7 +10218,10 @@ body.ace-engine-hide-tah #token-hud .bar2 {
   position: fixed;
   z-index: 9999;
   min-width: 360px;
-  max-width: 440px;
+  max-width: 480px;
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
   padding: 12px;
   background:
     linear-gradient(to bottom,
@@ -10282,6 +10285,28 @@ body.ace-engine-hide-tah #token-hud .bar2 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   gap: 8px;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Show about 2-3 rows by default before scrolling kicks in. Big enough
+     for ~10 thumbnails at a glance; long lists scroll within the chooser
+     instead of pushing the chooser off-screen. */
+  max-height: 56vh;
+  padding-right: 4px;
+}
+
+/* Slim gold scrollbar matching the rest of the panel aesthetic */
+.ace-tap-grid::-webkit-scrollbar { width: 8px; }
+.ace-tap-grid::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+}
+.ace-tap-grid::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.45);
+  border-radius: 4px;
+}
+.ace-tap-grid::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 175, 55, 0.75);
 }
 
 .ace-tap-thumb {

@@ -71,10 +71,23 @@ const GENERIC_FOLDERS = new Set([
 const SIZE_TOKENS = new Set(["tiny", "small", "medium", "large", "huge", "gargantuan"]);
 const NUMERIC_RE  = /^\d+$|^v\d+$|^\(\d+\)$/i;
 
-/** Normalize underscores → spaces, collapse whitespace. */
+/**
+ * Normalize a filename or folder name into a sane lookup string.
+ *   • underscores  → spaces
+ *   • CamelCase    → "Camel Case"  (so "AirMyrmidon" becomes findable)
+ *   • multiple spaces collapse
+ *
+ * Without CamelCase splitting, "AirMyrmidon.webp" stays a single token
+ * "airmyrmidon" and never matches the actor "Air Myrmidon".
+ */
 function _normalizeFilename(s) {
     return (s || "")
+        // Underscores → spaces
         .replace(/[_]+/g, " ")
+        // CamelCase splits: aB → a B, ABc → A Bc (handles acronyms like "AIWizard" → "AI Wizard")
+        .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+        .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+        // Collapse whitespace
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -106,67 +119,11 @@ function _makeEntry({ path, displayBase, displayVariant, fullName }) {
     };
 }
 
-/**
- * Parse a token-art file path → entry.
- *
- * Naming logic:
- *  1. If the file lives inside a non-generic subfolder, USE THE FOLDER
- *     NAME as the creature's base. The filename becomes a variant. This
- *     handles "MM/Air Elemental/Air_Large_Elemental_01.png" properly —
- *     base "Air Elemental", variant "Large 01".
- *  2. Otherwise, fall back to filename parsing with " - " separator.
- *
- * @param {string} path        e.g. "NPCs/Goblin/Goblin Boss.webp"
- * @param {Set<string>} scanRoots  Lower-cased set of scan-root paths so
- *                                 we know which folder names to ignore.
- */
-function _parsePath(path, scanRoots) {
-    const parts = path.split("/");
-    const filenameRaw = parts.pop().replace(/\.[^.]+$/, "");
-    const filename = _normalizeFilename(filenameRaw);
-
-    // Walk up from the file looking for the deepest non-generic folder.
-    // Stop at any directory whose path matches one of the scan roots.
-    let creatureFolder = null;
-    for (let i = parts.length - 1; i >= 0; i--) {
-        const folderName = _normalizeFilename(parts[i]);
-        const lower = folderName.toLowerCase();
-        // Stop if we hit a scan-root boundary
-        const pathSoFar = parts.slice(0, i + 1).join("/").toLowerCase();
-        if (scanRoots.has(pathSoFar)) break;
-        // Skip generic container names
-        if (GENERIC_FOLDERS.has(lower)) continue;
-        // Skip empty / unusable
-        if (!folderName) continue;
-        // Found the deepest meaningful folder
-        creatureFolder = folderName;
-        break;
-    }
-
-    let displayBase, displayVariant;
-    if (creatureFolder) {
-        // ── Use folder name as base ────────────────────────────────
-        displayBase = creatureFolder;
-        // Variant: strip the folder's words out of the filename (case-
-        // insensitive, ignoring word order). Whatever's left is the
-        // distinguishing variant info ("Large 01", "Boss", etc.).
-        const baseWordSet = new Set(
-            creatureFolder.toLowerCase().split(" ").filter(Boolean)
-        );
-        const filenameWords = filename.split(" ");
-        const variantWords = filenameWords.filter(w => !baseWordSet.has(w.toLowerCase()));
-        const variantText = variantWords.join(" ").trim();
-        displayVariant = variantText || null;
-    } else {
-        // ── Fall back to "BaseName - Variant.ext" filename parsing ──
-        const split = filename.split(VARIANT_SEP);
-        displayBase = split[0].trim();
-        displayVariant = split.length > 1 ? split.slice(1).join(" - ").trim() : null;
-    }
-
-    const fullName = displayVariant ? `${displayBase} ${displayVariant}` : displayBase;
-    return _makeEntry({ path, displayBase, displayVariant, fullName });
-}
+// (The old single-file _parsePath was replaced by the two-pass scan in
+// rebuildTokenArtIndex below — see "Pass 1 / Pass 2" there. Old logic
+// always treated the parent folder as the creature, which mis-grouped
+// SRD-pack-style "category bin" folders where each file is actually a
+// different creature.)
 
 // ─── Folder scanning ───────────────────────────────────────────────────────
 
@@ -235,25 +192,129 @@ export async function rebuildTokenArtIndex() {
     // knows where to stop when walking up looking for a creature folder.
     const scanRoots = new Set(folders.map(f => f.toLowerCase().replace(/\/+$/, "")));
 
-    // Build maps
+    // ── Pass 1: group files by parent folder + decide which folders are
+    //    "creature folders" (folder name = the creature, files are variants)
+    //    vs "category bins" (folder is just an organizational container,
+    //    each file is a different creature).
+    //
+    //    Heuristic: a folder is a creature folder if MOST of its files share
+    //    at least one significant word with the folder name. So:
+    //      Goblin/Goblin_01.png + Goblin_02.png  → creature folder
+    //      Goblin/Goblin Boss.webp                → creature folder
+    //      "Air Elemental"/AirMyrmidon, Azer, Dao → bin (no word overlap
+    //                                                with "Air Elemental"
+    //                                                for most filenames)
+    const SIG_WORDS_RE = /[a-z0-9]{3,}/g;
+    const significantWords = (s) => {
+        const lower = _normalizeFilename(s).toLowerCase();
+        return new Set((lower.match(SIG_WORDS_RE) ?? []).filter(w =>
+            !SIZE_TOKENS.has(w) && !STRIP_TOKENS.has(w) && !NUMERIC_RE.test(w) &&
+            !GENERIC_FOLDERS.has(w)
+        ));
+    };
+
+    /** key = parent folder path; value = { folderName, folderWords, files: [{path, sharedWithFolder}] } */
+    const folderGroups = new Map();
+    for (const path of uniquePaths) {
+        const parts = path.split("/");
+        const filenameRaw = parts.pop().replace(/\.[^.]+$/, "");
+
+        // Find the deepest non-generic, non-scan-root parent folder
+        let parentFolder = "";
+        let parentPath = "";
+        for (let i = parts.length - 1; i >= 0; i--) {
+            const folderName = _normalizeFilename(parts[i]);
+            const lower = folderName.toLowerCase();
+            const pathSoFar = parts.slice(0, i + 1).join("/").toLowerCase();
+            if (scanRoots.has(pathSoFar)) break;
+            if (GENERIC_FOLDERS.has(lower)) continue;
+            if (!folderName) continue;
+            parentFolder = folderName;
+            parentPath = parts.slice(0, i + 1).join("/");
+            break;
+        }
+
+        const folderWords = parentFolder ? significantWords(parentFolder) : new Set();
+        const fileWords = significantWords(filenameRaw);
+        const sharedWithFolder = parentFolder
+            ? [...fileWords].some(w => folderWords.has(w))
+            : false;
+
+        const key = parentPath || "__ROOT__";
+        if (!folderGroups.has(key)) {
+            folderGroups.set(key, { folderName: parentFolder, folderWords, files: [] });
+        }
+        folderGroups.get(key).files.push({
+            path,
+            filenameRaw,
+            sharedWithFolder,
+            fileWords,
+        });
+    }
+
+    // Decide per-folder: creature folder, or bin?
+    const folderModes = new Map();   // key → "creature" | "filename"
+    for (const [key, group] of folderGroups.entries()) {
+        if (!group.folderName) {
+            folderModes.set(key, "filename");
+            continue;
+        }
+        if (group.files.length === 1) {
+            // Single file: treat folder as creature only if filename shares
+            // a word with folder name (otherwise filename is independent).
+            folderModes.set(key, group.files[0].sharedWithFolder ? "creature" : "filename");
+            continue;
+        }
+        // Multi-file: creature folder if MOST files share a word with folder
+        const sharedCount = group.files.filter(f => f.sharedWithFolder).length;
+        const ratio = sharedCount / group.files.length;
+        folderModes.set(key, ratio >= 0.5 ? "creature" : "filename");
+    }
+
+    // ── Pass 2: build entries using the per-folder mode ──────────────
     const byBase = new Map();
     const byFullName = new Map();
     const byKey = new Map();
     const all = [];
-    for (const p of uniquePaths) {
-        const entry = _parsePath(p, scanRoots);
-        all.push(entry);
-        // Full-name lookup
-        if (!byFullName.has(entry.fullLower)) byFullName.set(entry.fullLower, entry);
-        // Base lookup → list of variants
-        const baseArr = byBase.get(entry.baseLower);
-        if (baseArr) baseArr.push(entry);
-        else byBase.set(entry.baseLower, [entry]);
-        // Key-token lookup → list of variants by normalized word set
-        if (entry.keyTokens) {
-            const keyArr = byKey.get(entry.keyTokens);
-            if (keyArr) keyArr.push(entry);
-            else byKey.set(entry.keyTokens, [entry]);
+    let creatureFolderCount = 0, binFolderCount = 0;
+    for (const [key, group] of folderGroups.entries()) {
+        const mode = folderModes.get(key);
+        if (mode === "creature") creatureFolderCount++;
+        else binFolderCount++;
+        for (const file of group.files) {
+            let displayBase, displayVariant;
+            const filenameNorm = _normalizeFilename(file.filenameRaw);
+            if (mode === "creature" && group.folderName) {
+                // Folder is the creature; strip folder words from filename
+                // to get the variant label.
+                displayBase = group.folderName;
+                const baseWordSet = new Set(
+                    group.folderName.toLowerCase().split(" ").filter(Boolean)
+                );
+                const variantWords = filenameNorm.split(" ").filter(w => !baseWordSet.has(w.toLowerCase()));
+                displayVariant = variantWords.join(" ").trim() || null;
+            } else {
+                // Filename is the creature. Use the " - " separator pattern
+                // if present, otherwise the whole filename is the base.
+                const split = filenameNorm.split(VARIANT_SEP);
+                displayBase = split[0].trim();
+                displayVariant = split.length > 1 ? split.slice(1).join(" - ").trim() : null;
+            }
+
+            const fullName = displayVariant ? `${displayBase} ${displayVariant}` : displayBase;
+            const entry = _makeEntry({ path: file.path, displayBase, displayVariant, fullName });
+            all.push(entry);
+
+            // Build indexes
+            if (!byFullName.has(entry.fullLower)) byFullName.set(entry.fullLower, entry);
+            const baseArr = byBase.get(entry.baseLower);
+            if (baseArr) baseArr.push(entry);
+            else byBase.set(entry.baseLower, [entry]);
+            if (entry.keyTokens) {
+                const keyArr = byKey.get(entry.keyTokens);
+                if (keyArr) keyArr.push(entry);
+                else byKey.set(entry.keyTokens, [entry]);
+            }
         }
     }
 
@@ -264,7 +325,7 @@ export async function rebuildTokenArtIndex() {
     _index.ready = true;
 
     const ms = (performance.now() - t0).toFixed(0);
-    console.log(`${TAG} | Index built in ${ms}ms — ${all.length} files, ${byBase.size} unique base names, ${byKey.size} key signatures.`);
+    console.log(`${TAG} | Index built in ${ms}ms — ${all.length} files, ${byBase.size} unique base names, ${byKey.size} key signatures, ${creatureFolderCount} creature folders, ${binFolderCount} category folders.`);
 
     return { fileCount: all.length, baseCount: byBase.size };
 }
