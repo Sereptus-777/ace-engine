@@ -1485,7 +1485,22 @@ async function _autoLinkToken(tokenDocument, generatedName) {
     const actor = tokenDocument.actor;
     if (!actor || tokenDocument.actorLink) return; // already linked
 
-    const npcName = generatedName || actor.name;
+    // ── UNIQUE-NAME GUARD ──────────────────────────────────────────────
+    // The "Boris moment" vision is built on each persistent NPC having a
+    // unique AI-generated name (Throx, Marek, etc.). If the bio step
+    // didn't produce one — because the AI returned generic output, or
+    // because the creature is a non-sentient type that intentionally
+    // skips renaming (beast/ooze/plant/swarm) — we should NOT persist
+    // the actor. Otherwise we end up with a graveyard of "Goblin",
+    // "Goblin (2)", "Black Pudding (3)" entries that pollute the
+    // sidebar without delivering the recurring-character benefit.
+    const baseName = actor.name?.trim() ?? "";
+    const cleanGenerated = (generatedName || "").trim();
+    if (!cleanGenerated || cleanGenerated.toLowerCase() === baseName.toLowerCase()) {
+        console.log(`${TAG} | Skipping auto-link for "${baseName}" — no unique AI name was generated (generic NPC, not worth persisting).`);
+        return;
+    }
+    const npcName = cleanGenerated;
 
     // ── Derive folder name from scene's folder hierarchy ──
     // Walks up the scene folder tree to build a meaningful location path.
@@ -1521,20 +1536,45 @@ async function _autoLinkToken(tokenDocument, generatedName) {
     console.log(`${TAG} | Auto-linking ${npcName} as persistent actor in "${folderPath}" folder...`);
 
     // ── Find or create the location folder ──
+    // V12+ uses `folder:` for the parent-folder field on the Folder data
+    // schema. Earlier versions used `parent:` which is now silently dropped
+    // by the validator — caused location subfolders to be created as
+    // root-level orphans instead of nested under "ACE NPCs". Use the
+    // correct field. (Same gotcha is documented in activate.mjs for the
+    // ☠ Fallen folder helper.)
     let folder = game.folders?.find(f => f.name === folderPath && f.type === "Actor");
     if (!folder) {
         // Find or create a parent "ACE NPCs" folder
         let parentFolder = game.folders?.find(f => f.name === "ACE NPCs" && f.type === "Actor");
         if (!parentFolder) {
-            parentFolder = await Folder.create({ name: "ACE NPCs", type: "Actor", parent: null });
+            parentFolder = await Folder.create({ name: "ACE NPCs", type: "Actor", folder: null });
             console.log(`${TAG} | Created parent folder: ACE NPCs`);
         }
-        folder = await Folder.create({ name: folderPath, type: "Actor", parent: parentFolder.id });
-        console.log(`${TAG} | Created location folder: ${folderPath}`);
+        // If folderPath happens to match the parent name (e.g. fallback to
+        // "ACE NPCs" when no scene info), reuse the parent — don't nest
+        // "ACE NPCs" inside "ACE NPCs".
+        if (folderPath === "ACE NPCs") {
+            folder = parentFolder;
+        } else {
+            folder = await Folder.create({ name: folderPath, type: "Actor", folder: parentFolder.id });
+            console.log(`${TAG} | Created location folder: "${folderPath}" inside "ACE NPCs"`);
+        }
     }
 
     // ── Gather all data from the synthetic actor (bio, flags, items) ──
     const syntheticActor = tokenDocument.actor;
+    const mergedFlags = foundry.utils.deepClone(syntheticActor.flags ?? {});
+    // Tag this actor as ACE auto-linked so the cleanup API can find these
+    // later. Also record the original base creature name and the path it
+    // was filed under for debugging / future migrations.
+    mergedFlags[MODULE_ID] = {
+        ...(mergedFlags[MODULE_ID] ?? {}),
+        autoLinked: true,
+        autoLinkedAt: new Date().toISOString(),
+        autoLinkedFrom: baseName,
+        autoLinkedFolder: folderPath,
+    };
+
     const actorData = {
         name: npcName,
         type: "npc",
@@ -1548,7 +1588,7 @@ async function _autoLinkToken(tokenDocument, generatedName) {
             texture: { src: tokenDocument.texture?.src || syntheticActor.prototypeToken?.texture?.src },
         },
         folder: folder.id,
-        flags: foundry.utils.deepClone(syntheticActor.flags ?? {}),
+        flags: mergedFlags,
     };
 
     // ── Create the new world actor ──
@@ -1571,8 +1611,8 @@ async function _autoLinkToken(tokenDocument, generatedName) {
         name: npcName,
     });
 
-    console.log(`${TAG} | ✅ Auto-linked: ${npcName} → Actor ID ${newActor.id} (folder: ${sceneName})`);
-    ui.notifications?.info(`ACE: ${npcName} saved as persistent NPC in "${sceneName}" folder.`);
+    console.log(`${TAG} | ✅ Auto-linked: ${npcName} → Actor ID ${newActor.id} (folder: "${folderPath}")`);
+    ui.notifications?.info(`ACE: ${npcName} saved as persistent NPC in "${folderPath}".`);
 }
 
 async function _generateItemBios(tokenDocument) {

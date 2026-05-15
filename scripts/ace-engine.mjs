@@ -1707,6 +1707,65 @@ Hooks.once("ready", async () => {
       //   game.modules.get("ace-token-art").api.searchTokenArt(query)
       //   game.modules.get("ace-token-art").api.getTokenArtIndex()
 
+      // ── Auto-Link Cleanup ───────────────────────────────────────
+      // Find / list / delete persistent NPC actors created by the
+      // auto-link flow. Default mode is dry-run that returns a list
+      // for inspection; pass {dryRun:false} to actually delete.
+      //
+      // Filters:
+      //   genericOnly: true (default) — only actors whose current name
+      //     STILL matches the original compendium creature name (i.e.
+      //     the AI never produced a unique name). Skips actors that
+      //     have been properly named (the "Boris moment" keepers).
+      //   genericOnly: false — every auto-linked actor regardless of
+      //     name (use carefully; deletes your saved NPCs).
+      //
+      // Usage from F12 console:
+      //   const api = game.modules.get("ace-engine").api;
+      //   await api.listAceAutoLinkedActors();      // dry-run list
+      //   await api.cleanupAceAutoLinkedActors();   // dry-run (no delete)
+      //   await api.cleanupAceAutoLinkedActors({ dryRun:false });
+      listAceAutoLinkedActors: () => {
+        const list = [];
+        for (const actor of game.actors ?? []) {
+          if (actor.type !== "npc") continue;
+          const flag = actor.getFlag(MODULE_ID, "autoLinked");
+          if (!flag) continue;
+          const origName = actor.getFlag(MODULE_ID, "autoLinkedFrom") ?? "";
+          const looksGeneric = origName && actor.name?.toLowerCase() === origName.toLowerCase();
+          list.push({
+            id: actor.id,
+            name: actor.name,
+            originalName: origName,
+            folder: actor.folder?.name ?? "(root)",
+            looksGeneric,
+            autoLinkedAt: actor.getFlag(MODULE_ID, "autoLinkedAt") ?? "?",
+          });
+        }
+        return list;
+      },
+      cleanupAceAutoLinkedActors: async ({ dryRun = true, genericOnly = true } = {}) => {
+        const all = mod.api.listAceAutoLinkedActors();
+        const targets = genericOnly ? all.filter(a => a.looksGeneric) : all;
+        console.log(`ACE | Cleanup ${dryRun ? "DRY-RUN" : "LIVE"} — ${targets.length} of ${all.length} auto-linked actors targeted${genericOnly ? " (generic-name only)" : " (ALL)"}:`);
+        for (const t of targets) console.log(`  • ${t.name} (was: ${t.originalName}) in "${t.folder}"`);
+        if (dryRun) {
+          console.log(`ACE | Pass { dryRun:false } to actually delete these.`);
+          return targets;
+        }
+        let deleted = 0;
+        for (const t of targets) {
+          try {
+            const a = game.actors.get(t.id);
+            if (a) { await a.delete(); deleted++; }
+          } catch (err) {
+            console.warn(`ACE | Delete failed for "${t.name}":`, err);
+          }
+        }
+        ui.notifications?.info(`ACE: Cleanup deleted ${deleted} auto-linked actor(s).`);
+        return { requested: targets.length, deleted };
+      },
+
       // ── Party Reputation API (used by ACE: Envoy) ─────────────────
       /** Get the ReputationEngine instance. */
       getReputationEngine: () => reputationEngine,
