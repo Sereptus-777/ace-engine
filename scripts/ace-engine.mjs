@@ -1133,22 +1133,30 @@ Hooks.once("ready", async () => {
   // Actors sidebar. Click → scans for junk NPCs (dnd5e summon imports,
   // ACE-NPCs-tree generic-name leftovers, root-level pattern matches),
   // shows a confirmation dialog with the list, deletes on confirm.
-  Hooks.on("renderActorDirectory", (app, html) => {
+  //
+  // V13 quirk: the `html` parameter passed to renderActorDirectory is
+  // often NOT the full sidebar element — depending on V12/V13 + sheet
+  // class, it might be a sub-element (e.g. the entry list). Fall back
+  // to app.element (the ApplicationV2 root) for reliable injection.
+  const _injectCleanupButton = (app) => {
     if (!game.user.isGM) return;
     try {
-      const root = (html instanceof HTMLElement) ? html
-                 : html?.[0] instanceof HTMLElement ? html[0]
-                 : app?.element instanceof HTMLElement ? app.element
-                 : app?.element?.[0] ?? null;
-      if (!root) return;
-      // Don't duplicate if a re-render already added it
-      if (root.querySelector(".ace-junk-cleanup-btn")) return;
+      const root = (app?.element instanceof HTMLElement) ? app.element
+                 : app?.element?.[0] instanceof HTMLElement ? app.element[0]
+                 : document.querySelector("#actors") // last-resort sidebar fallback
+                 ?? null;
+      if (!root) {
+        console.warn(`${MODULE_ID} | Junk-cleanup button: couldn't find sidebar root`);
+        return;
+      }
+      if (root.querySelector(".ace-junk-cleanup-btn")) return; // dedupe
 
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "ace-junk-cleanup-btn";
       btn.style.cssText = `
-        width: calc(100% - 12px); margin: 6px; padding: 7px 10px;
+        display: block; width: calc(100% - 12px); margin: 6px;
+        padding: 7px 10px;
         background: linear-gradient(135deg, rgba(212,175,55,0.22), rgba(212,175,55,0.08));
         border: 1px solid rgba(212,175,55,0.55);
         border-radius: 4px; color: #f0e4c0;
@@ -1156,6 +1164,7 @@ Hooks.once("ready", async () => {
         font-size: 12px; font-weight: 700;
         text-transform: uppercase; letter-spacing: 0.5px;
         cursor: pointer; transition: all 0.15s;
+        text-align: center; flex-shrink: 0;
       `;
       btn.innerHTML = '<i class="fas fa-broom"></i> ACE: Clean Junk NPCs';
       btn.addEventListener("mouseenter", () => {
@@ -1219,17 +1228,46 @@ Hooks.once("ready", async () => {
         ui.notifications?.info(`ACE: Deleted ${result?.deleted ?? 0} junk NPC${result?.deleted === 1 ? "" : "s"}.`);
       });
 
-      // Insert at the very top of the directory's header area
-      const header = root.querySelector(".directory-header") || root.querySelector("header") || root.querySelector(".header-actions");
-      if (header) {
-        header.insertBefore(btn, header.firstChild);
-      } else {
+      // Try several insertion points in priority order — V13 uses
+      // various class names for the sidebar header zones.
+      const insertionPoints = [
+        ".directory-header",        // V12-style + many systems
+        ".header-actions",
+        "header.directory-header",
+        "header",
+        ".window-content",          // V13 ApplicationV2 fallback
+      ];
+      let placed = false;
+      for (const selector of insertionPoints) {
+        const target = root.querySelector(selector);
+        if (target) {
+          target.insertBefore(btn, target.firstChild);
+          placed = true;
+          console.log(`${MODULE_ID} | Junk-cleanup button placed in "${selector}"`);
+          break;
+        }
+      }
+      if (!placed) {
         root.insertBefore(btn, root.firstChild);
+        console.log(`${MODULE_ID} | Junk-cleanup button placed at sidebar root (no matching header found)`);
       }
     } catch (err) {
       console.warn(`${MODULE_ID} | Junk-cleanup button inject failed:`, err);
     }
+  };
+
+  // Hook for V12 (and many V13 systems) — fires when actor directory renders.
+  Hooks.on("renderActorDirectory", (app, html) => _injectCleanupButton(app));
+  // Hook for V13 ApplicationV2 — broader and fires for every V2 sheet,
+  // so we filter by ID/class. Catches the case where V13's sidebar tab
+  // is V2 and the "renderActorDirectory" hook signature has changed.
+  Hooks.on("renderApplicationV2", (app, html) => {
+    if (app?.constructor?.name !== "ActorDirectory" && app?.id !== "actors") return;
+    _injectCleanupButton(app);
   });
+  // Immediate inject if the actor directory has already rendered before
+  // our hooks landed (common — the sidebar boots before module ready).
+  if (ui.actors?.rendered) _injectCleanupButton(ui.actors);
 
   // ── Load baked-in credentials from config.local.json (optional) ─
   // GM-only: players don't need ElevenLabs keys or other credentials.
