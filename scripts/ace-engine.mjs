@@ -1195,26 +1195,45 @@ Hooks.once("ready", async () => {
         };
         const groupHtml = Object.entries(bySource).map(([source, items]) => {
           const label = SOURCE_LABELS[source] ?? source;
-          const names = items.map(t => `<li style="color:#c0b288;">${t.name} <span style="color:#888;font-size:11px;">— ${t.folder}</span></li>`).join("");
-          return `<div style="margin-bottom:10px;">
-            <div style="color:#f0e4c0;font-weight:700;margin-bottom:4px;">${items.length}× ${label}</div>
-            <ul style="margin:0;padding-left:22px;font-size:12px;max-height:200px;overflow-y:auto;">${names}</ul>
+          const names = items.map(t =>
+            `<li style="color:#f0e4c0; padding:2px 0;">${t.name} <span style="color:#a89878; font-size:14px;">— ${t.folder}</span></li>`
+          ).join("");
+          return `<div style="margin-bottom:14px;">
+            <div style="color:#ffd86a; font-size:18px; font-weight:700; margin-bottom:6px; text-shadow:0 0 6px rgba(212,175,55,0.4);">
+              ${items.length}× ${label}
+            </div>
+            <ul style="margin:0; padding-left:26px; font-size:16px; line-height:1.5; max-height:240px; overflow-y:auto;">${names}</ul>
           </div>`;
         }).join("");
 
+        // Wrap the whole body in a dark ACE-themed container. Foundry's
+        // default Dialog uses a LIGHT parchment background — light-colored
+        // text disappears on it. The dark wrapper keeps the ACE
+        // light-on-dark palette readable. Big fonts (16-20px) for normal
+        // viewing distance.
         const confirmed = await Dialog.confirm({
           title: `ACE: Clean ${list.length} Junk NPC${list.length === 1 ? "" : "s"}?`,
           content: `
-            <div style="font-family:'Rajdhani',sans-serif;padding:8px;max-width:540px;">
-              <p style="color:#f0e4c0;margin:0 0 12px;">
-                Found <strong>${list.length}</strong> NPC actor${list.length === 1 ? "" : "s"} that look like junk.
+            <div style="
+              background: linear-gradient(135deg, #1a1a1f 0%, #0e0e12 100%);
+              border: 1px solid rgba(212,175,55,0.45);
+              border-radius: 6px;
+              padding: 16px 18px;
+              margin: 4px 0;
+              font-family: 'Rajdhani', 'Segoe UI', sans-serif;
+              color: #f0e4c0;
+              max-width: 600px;
+            ">
+              <p style="color:#fff8e0; font-size:18px; font-weight:600; margin:0 0 14px; line-height:1.4;">
+                Found <strong style="color:#ffd86a;">${list.length}</strong>
+                NPC actor${list.length === 1 ? "" : "s"} that look like junk.
                 Delete all of them?
               </p>
               ${groupHtml}
-              <p style="color:#b8a78a;font-size:11px;font-style:italic;margin:8px 0 0;">
-                Safe to delete — active scene tokens won't break. Cast a summon spell again
-                and dnd5e auto-imports a fresh copy. Permanent NPCs you've renamed
-                (Boris keepers) aren't on this list.
+              <p style="color:#c8b890; font-size:14px; font-style:italic; line-height:1.5; margin:12px 0 0; padding-top:10px; border-top:1px solid rgba(212,175,55,0.25);">
+                Safe to delete — active scene tokens won't break. Cast a summon spell
+                again and dnd5e auto-imports a fresh copy. Permanent NPCs you've
+                renamed (Boris keepers) aren't on this list.
               </p>
             </div>
           `,
