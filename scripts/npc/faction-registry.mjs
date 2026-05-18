@@ -1361,6 +1361,17 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
               </div>
             </div>
 
+            <!-- Rename NPC Checkbox -->
+            <div style="padding:8px 10px; background:#f5f5f5; border:1px solid #ccc; border-radius:6px; margin-bottom:8px;">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input type="checkbox" name="rename" ${(creatureType === "beast" || creatureType === "ooze" || creatureType === "plant" || creatureType === "swarm") ? "" : "checked"} ${(creatureType === "beast" || creatureType === "ooze" || creatureType === "plant" || creatureType === "swarm") ? "disabled" : ""} style="accent-color:#d4af37; width:16px; height:16px;">
+                <div>
+                  <strong style="font-size:1.05em; color:#222;">Rename NPC</strong>
+                  <span style="font-size:0.95em; color:#555;"> \u2014 AI gives the bio's protagonist a personal name (e.g. "Gronk" instead of "Goblin"). Uncheck to keep the species label.</span>
+                </div>
+              </label>
+            </div>
+
             <!-- Persistent NPC Checkbox -->
             <div style="padding:8px 10px; background:#f5f5f5; border:1px solid #ccc; border-radius:6px;">
               <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
@@ -1397,6 +1408,9 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                         // Read auto-link
                         const autoLink = html.find('input[name="autoLink"]').is(':checked');
 
+                        // Read rename preference (overrides the outer smart-setup dialog's choice)
+                        const rename = html.find('input[name="rename"]').is(':checked');
+
                         // Read gender override (auto / male / female / androgynous)
                         const genderOverride = html.find('input[name="genderOverride"]:checked').val() || "auto";
 
@@ -1413,7 +1427,7 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                             factionId = factionChoice;
                         }
 
-                        resolve({ factionId, isNew, role, origin, originCustom, autoLink, genderOverride });
+                        resolve({ factionId, isNew, role, origin, originCustom, autoLink, rename, genderOverride });
                     }
                 },
                 skip: {
@@ -2306,14 +2320,15 @@ async function showSmartSetupDialog(actorName, creatureBase, recommendations, cr
             </div>
         </label>`).join("");
 
-    // Both checkboxes default to UNCHECKED per GM preference — rename + auto-link
-    // are opt-in actions, not opt-out. (Save-as-persistent in particular: many
-    // dropped NPCs are disposable, so persisting by default litters the sidebar.)
-    const renameChecked = "";
+    // Both checkboxes default to CHECKED — most GMs want renaming + persistent
+    // saving by default, otherwise the bio system produces faction-cared NPCs
+    // that are still all named "Goblin" and don't persist between sessions.
+    // Uncheck for one-shot disposable tokens.
+    const renameChecked = isNonSentient ? "" : "checked";
     const renameDisabled = isNonSentient ? "disabled" : "";
     const renameNote = isNonSentient ? " (beasts keep species name)" : "";
     const factionHidden = (currentTier === "bio-only") ? "display:none;" : "";
-    const autoLinkChecked = "";
+    const autoLinkChecked = "checked";
 
     const content = `
         <div style="font-family:sans-serif;">
@@ -2699,6 +2714,10 @@ export async function processTokenFaction(tokenDoc) {
                 if (result.origin) await tokenDoc.actor.setFlag(MODULE_ID, "npcOrigin", result.origin);
                 if (result.originCustom) await tokenDoc.actor.setFlag(MODULE_ID, "npcOriginCustom", result.originCustom);
                 if (result.autoLink !== undefined) tokenDoc._aceAutoLink = result.autoLink;
+                // Rename: undo/set the outer smart-setup's _aceSkipRename flag.
+                // result.rename === true → user WANTS rename → clear skip flag
+                // result.rename === false → user does NOT want rename → set skip flag
+                if (result.rename !== undefined) tokenDoc._aceSkipRename = !result.rename;
                 if (result.genderOverride && result.genderOverride !== "auto") {
                     await tokenDoc.actor.setFlag(MODULE_ID, "genderOverride", result.genderOverride);
                 }
@@ -2708,12 +2727,14 @@ export async function processTokenFaction(tokenDoc) {
                 role = result.role;
             }
 
-            // Store origin + autoLink + gender override from dialog
+            // Store origin + autoLink + rename + gender override from dialog
             if (result) {
                 try {
                     if (result.origin) await tokenDoc.actor.setFlag(MODULE_ID, "npcOrigin", result.origin);
                     if (result.originCustom) await tokenDoc.actor.setFlag(MODULE_ID, "npcOriginCustom", result.originCustom);
                     if (result.autoLink !== undefined) tokenDoc._aceAutoLink = result.autoLink;
+                    // Rename override (see comment above)
+                    if (result.rename !== undefined) tokenDoc._aceSkipRename = !result.rename;
                     // Gender override: only save when user picked something other than auto.
                     // bio-generator reads this flag and hardcodes the gender in the AI prompt.
                     if (result.genderOverride && result.genderOverride !== "auto") {
