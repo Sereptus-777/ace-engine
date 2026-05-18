@@ -1234,8 +1234,13 @@ async function _generateBio(tokenDocument) {
     // Extract NAME: line if present — only use it for generic names that we asked to rename.
     // If the AI returns a NAME: line for a proper-named NPC (shouldn't happen), strip it but don't rename.
     // Non-sentient types (beast, ooze, plant, swarm) NEVER get renamed.
-    // Flexible regex: allow leading whitespace, markdown, or blank lines before NAME:
-    const nameMatch = bioText.match(/^\s*(?:```\w*\s*)?NAME:\s*(.+?)[\n\r]/i);
+    //
+    // Flexible regex:
+    //   • Accepts NAME: at the start OR at the start of any line within the
+    //     first ~300 chars (some AI responses lead with a one-sentence intro
+    //     then drop the NAME: line on its own line below).
+    //   • Allows leading whitespace, markdown code fences, or blank lines.
+    const nameMatch = bioText.slice(0, 400).match(/(?:^|\n)\s*(?:```\w*\s*)?NAME:\s*(.+?)(?:\r?\n|$)/i);
     if (nameMatch) {
         const name = tokenDocument.actor?.name || "";
         const creatureType = tokenDocument.actor?.system?.details?.type?.value || "";
@@ -1267,27 +1272,71 @@ async function _generateBio(tokenDocument) {
         bioText = bioText.slice(nameMatch[0].length).trim();
     } else {
         // ── Fallback: AI didn't produce a NAME: line for a generic NPC ──
-        // Try to extract a proper name from the first sentence of the bio.
-        // Pattern: look for capitalized multi-word sequences that aren't the generic label.
+        // The AI is supposed to start its response with "NAME: Firstname Lastname"
+        // but gpt-4o-mini routinely buries the personal name mid-bio:
+        //   "This goblin hails from the Amberfang Tribe… Griknik grew up…"
+        // The old fallback only looked at the FIRST SENTENCE — which here
+        // starts with "This goblin", so it extracted "This" and either
+        // produced a garbage rename or no rename at all.
+        //
+        // New approach: scan the WHOLE bio for proper-noun candidates,
+        // prefer ones in subject position (followed by an action verb),
+        // and fall back to most-frequent capitalized word. Reject common
+        // false positives (pronouns, articles, the generic creature name).
         const actorName = tokenDocument.actor?.name || "";
         const creatureType = tokenDocument.actor?.system?.details?.type?.value || "";
         if (_isGenericName(actorName, creatureType) && !tokenDocument._aceSkipRename) {
             const NO_RENAME = new Set(["beast", "ooze", "plant", "swarm"]);
             if (!NO_RENAME.has((creatureType || "").toLowerCase())) {
-                // The AI often writes "GenericName grew up..." — but sometimes writes
-                // "Aldric Voss grew up..." using a proper name but without the NAME: prefix.
-                // Extract a proper name from the first sentence if it doesn't match the generic label.
-                const firstSentence = (bioText.split(/[.!?\n]/)[0] || "").trim();
-                // Match 1-3 capitalized words at the start that aren't the generic label
-                const nameAtStart = firstSentence.match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/);
-                if (nameAtStart) {
-                    const found = nameAtStart[1].trim();
-                    const genericBase = actorName.replace(/\s*[#]?\s*\d+\s*$/, "").replace(/\s*\([^)]*\)\s*/g, "").trim().toLowerCase();
-                    // Only use if it's different from the generic label
-                    if (found.toLowerCase() !== genericBase && !found.toLowerCase().startsWith(genericBase)) {
-                        generatedName = found;
-                        console.log(`${TAG} | Extracted name "${found}" from bio text (AI skipped NAME: line)`);
+                const REJECT = new Set([
+                    "this", "that", "these", "those", "the", "a", "an", "in", "on", "at",
+                    "for", "with", "and", "but", "or", "if", "when", "where", "how", "why",
+                    "who", "what", "it", "he", "she", "they", "we", "you", "i", "his", "her",
+                    "their", "its", "him", "them", "us", "as", "by", "of", "to", "from",
+                    "before", "after", "during", "biography", "name", "personality", "tone",
+                    "while", "though", "although", "however", "despite", "since", "until",
+                    "currently", "presently", "today", "now", "later", "soon", "haunted",
+                    "nervous", "stoic", "casual", "formal", "cryptic", "cheerful", "grim",
+                ]);
+                const genericBase = actorName
+                    .replace(/\s*[#]?\s*\d+\s*$/, "")
+                    .replace(/\s*\([^)]*\)\s*/g, "")
+                    .trim().toLowerCase();
+                const isCandidate = (s) => {
+                    const lower = s.toLowerCase();
+                    if (REJECT.has(lower)) return false;
+                    if (lower === genericBase) return false;
+                    if (genericBase && (lower.startsWith(genericBase + " ") || genericBase.includes(lower))) return false;
+                    return true;
+                };
+
+                // Strip any HTML in case it slipped in, collapse whitespace
+                const plainText = bioText.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+
+                // Pass 1: high-confidence — proper noun followed by a biographical verb
+                const subjectRe = /\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+){0,2})\s+(?:is|was|grew|hails|came|comes|lived|fled|joined|left|escaped|served|rose|rises|fell|fights|fought|leads|led|seeks|sought|wields|wielded|carries|carried|guards|guarded|hunts|hunted|stalks|stalked|wanders|wandered|believes|believed|knows|knew|remembers|remembered|earned|earns|spent|spends|holds|held|trained|trains|once|now|still)\b/g;
+                // Pass 2: any 1-3 word proper noun anywhere
+                const properNounRe = /\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+){0,2})\b/g;
+
+                const collect = (re) => {
+                    const counts = new Map();
+                    for (const m of plainText.matchAll(re)) {
+                        const w = m[1].trim();
+                        if (!isCandidate(w)) continue;
+                        counts.set(w, (counts.get(w) ?? 0) + 1);
                     }
+                    return counts;
+                };
+
+                const subjectHits = collect(subjectRe);
+                const allHits = subjectHits.size ? subjectHits : collect(properNounRe);
+
+                if (allHits.size) {
+                    // Most-frequent candidate wins; ties broken by length (longer = more specific)
+                    const best = [...allHits.entries()]
+                        .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0][0];
+                    generatedName = best;
+                    console.log(`${TAG} | Extracted name "${best}" from bio text via proper-noun scan (AI skipped NAME: line; subject-pass=${subjectHits.size > 0})`);
                 }
             }
         }
