@@ -356,10 +356,16 @@ export class DigestEngine {
         // stuffed into the user message — so Claude reads its role as
         // "JSON extractor", not "Game Master refusing to do something
         // off-brand." User message is just the chunk text.
+        //
+        // maxTokens: 8000 — without this the default (1792) silently
+        // truncates Claude's rich JSON output mid-object on 10-chunk
+        // batches. Truncated JSON fails JSON.parse → null result → 5
+        // consecutive failures → digest aborts. 8K is the upper bound
+        // for Claude Haiku output and covers any plausible extraction.
         const response = await aiProvider.chat(
           batchText,
           "", "", [], [],
-          { ...aiOpts, systemPromptOverride: DIGEST_EXTRACTION_PROMPT }
+          { ...aiOpts, systemPromptOverride: DIGEST_EXTRACTION_PROMPT, maxTokens: 8000 }
         );
         const parsed = this._parseDigestResponse(response);
         if (parsed) {

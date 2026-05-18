@@ -2810,11 +2810,18 @@ async function _autoDiscoverAndSync() {
       aceMemory.saveCategory("npcs");
     }
 
-    // 4. Sync all known records to organized journal folders (📖 ACE / NPC, PC, etc.)
-    const count = await aceMemory.syncAllJournals();
-    if (count > 0) {
-      console.log(`${MODULE_ID} | Auto-discovery: synced ${count} journal entries into 📖 ACE folders`);
-    }
+    // 4. Bulk journal sync intentionally NOT run here on world load.
+    //
+    // syncAllJournals() rewrites every NPC, PC, World Note, and Session
+    // journal — easily 500+ document writes on a mature campaign. On a
+    // normal load that's a 5-10 second hitch + a flood of console noise
+    // for zero benefit, since each record's journal is already updated
+    // incrementally when it changes (writeNpcJournal fires on addNote /
+    // addMilestone / etc).
+    //
+    // Manual full re-sync is still available via the Memory Management
+    // dialog "Sync all to journals" button for migrations or
+    // forced reconciliation.
   } catch (err) {
     console.error(`${MODULE_ID} | Auto-discovery failed:`, err);
   }

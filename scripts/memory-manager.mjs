@@ -1324,8 +1324,11 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
   async writeNpcJournal(npcName, content) {
     // Only write to sidebar journal if this NPC qualifies
     // (All NPC data is always kept in ace-npcs.json regardless)
+    // Per-NPC logs intentionally removed — full sync emits ONE summary
+    // "Journal sync complete — N entries" line at the end. The 500+ debug
+    // lines per world load were drowning out real warnings/errors. Errors
+    // (try/catch below) still log so genuine failures aren't lost.
     if (!content && !this._isNpcJournalWorthy(npcName)) {
-      console.debug(`${MODULE_ID} | Skipping NPC journal for "${npcName}" — not journal-worthy (data preserved in JSON).`);
       return;
     }
 
@@ -1341,9 +1344,8 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       }
 
       await this._upsertJournalPage(journal, "Memory", htmlContent);
-      console.debug(`${MODULE_ID} | Journal: wrote NPC "${npcName}"`);
     } catch (err) {
-      console.error(`${MODULE_ID} | writeNpcJournal failed:`, err);
+      console.error(`${MODULE_ID} | writeNpcJournal failed for "${npcName}":`, err);
     }
   }
 
@@ -1452,7 +1454,7 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       }
 
       await this._upsertJournalPage(journal, "Memory", htmlContent);
-      console.debug(`${MODULE_ID} | Journal: wrote PC "${displayName}"`);
+      // Per-PC log removed — full sync emits one summary at the end.
     } catch (err) {
       console.error(`${MODULE_ID} | writePcJournal failed:`, err);
     }
@@ -1521,7 +1523,7 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       const journal = await this._getOrCreateJournal(folder, noteName);
       const htmlContent = `<div>${content.replace(/\n/g, "<br>")}</div>`;
       await this._upsertJournalPage(journal, "Content", htmlContent);
-      console.debug(`${MODULE_ID} | Journal: wrote World Note "${noteName}"`);
+      // Per-note log removed — full sync emits one summary at the end.
     } catch (err) {
       console.error(`${MODULE_ID} | writeWorldNoteJournal failed:`, err);
     }
