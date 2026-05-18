@@ -2011,6 +2011,13 @@ TYPE: [coins|gem|trinket|jewelry|document|potion|scroll|magic|trade_good]
 VALUE: [price in gp, or coin amount like "15 gp" or "30 sp"]
 FLAVOR: [one-line description]
 
+For items where TYPE is magic, potion, or scroll, ALSO include these two extra lines so the party can't read the true magic just by picking it up (RAW: magic items must be identified via the Identify spell or 1-hour interaction):
+
+OBSCURED_NAME: [What a non-magical observer would call it — describe the appearance, materials, craftsmanship. Do NOT name the spell, the bonus, the legendary effect, or anything that gives the magic away. Examples: "Rune-Etched Scimitar" for a Frost Brand. "A Small Glass Vial of Murky Green Liquid" for a Potion of Animal Friendship. "A Brass-Bound Tube of Sealed Parchment" for a Scroll of Fireball.]
+OBSCURED_DESC: [1-2 sentences of evocative flavor that hints at QUALITY or STRANGENESS without spoiling the function. Examples: "A finely-balanced scimitar with delicate frost-flecked runes traced along the fuller; the grip is colder than the air around it." "The vial's stopper is sealed with a fragment of mossy bark; bubbles drift inside even when the bottle is still." "Heavier than it looks; the wax seal bears a sigil no scribe in the city would recognize."]
+
+Mundane items (gem, trinket, jewelry, document, trade_good) do NOT include OBSCURED_NAME or OBSCURED_DESC — they're known on sight.
+
 Separate each item with a blank line.
 
 ${tierInstructions[tier]}`;
@@ -2086,16 +2093,21 @@ ${tierInstructions[tier]}`;
 
         const knownLootTypes = new Set(["coins","gem","trinket","jewelry","document","potion","scroll","magic","trade_good"]);
         let lootType = "trinket", value = "", flavor = "";
+        let obscuredName = "", obscuredDesc = "";
         for (const line of lines.slice(1)) {
-            const typeMatch = line.match(/^TYPE:\s*(.+)/i);
-            const valMatch  = line.match(/^VALUE:\s*(.+)/i);
-            const flavMatch = line.match(/^FLAVOR:\s*(.+)/i);
+            const typeMatch     = line.match(/^TYPE:\s*(.+)/i);
+            const valMatch      = line.match(/^VALUE:\s*(.+)/i);
+            const flavMatch     = line.match(/^FLAVOR:\s*(.+)/i);
+            const obscNameMatch = line.match(/^OBSCURED_NAME:\s*(.+)/i);
+            const obscDescMatch = line.match(/^OBSCURED_DESC:\s*(.+)/i);
             // Only accept TYPE if it's a known loot category (prevents item names bleeding in)
             if (typeMatch && knownLootTypes.has(typeMatch[1].trim().toLowerCase())) {
                 lootType = typeMatch[1].trim().toLowerCase();
             }
-            if (valMatch)  value    = valMatch[1].trim();
-            if (flavMatch) flavor   = _cleanName(flavMatch[1]);
+            if (valMatch)      value        = valMatch[1].trim();
+            if (flavMatch)     flavor       = _cleanName(flavMatch[1]);
+            if (obscNameMatch) obscuredName = _cleanName(obscNameMatch[1]);
+            if (obscDescMatch) obscuredDesc = _cleanName(obscDescMatch[1]);
         }
 
         // ── Handle coins → add to currency directly ─────────────────────
@@ -2689,18 +2701,41 @@ ${tierInstructions[tier]}`;
         const spMatch = value.match(/(\d+)\s*sp/i);
         const priceGp = gpMatch ? parseInt(gpMatch[1], 10) : (spMatch ? Math.round(parseInt(spMatch[1], 10) / 10) : 0);
 
+        const _esc = (s) => String(s ?? "")
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+        const realDescHtml = `<section class="ace-engine-item-bio"><em>${_esc(flavor)}</em></section>`;
+
         const itemData = {
             name: itemName,
             type: "loot",
             img:  _pickLootIcon(itemName, lootType),
             system: {
-                description: { value: `<section class="ace-engine-item-bio"><em>${flavor.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")}</em></section>` },
+                description: { value: realDescHtml },
                 quantity: 1,
                 weight: { value: 0.1 },
                 price:  { value: priceGp || 1, denomination: "gp" },
                 rarity: (lootType === "magic") ? "common" : (lootType === "potion" || lootType === "scroll") ? "common" : "",
             }
         };
+
+        // ── Unidentified layer (magical items only) ──
+        // For magical loot (magic, potion, scroll), if the AI returned an
+        // obscured name + description, populate the dnd5e identification
+        // schema so the loot dialog (and item sheets) show the obscured
+        // version to players until the GM clicks Reveal. Mundane items
+        // skip this entirely — they're known on sight.
+        const isMagical = (lootType === "magic" || lootType === "potion" || lootType === "scroll");
+        if (isMagical && obscuredName && obscuredDesc) {
+            const obscuredDescHtml = `<section class="ace-engine-item-bio"><em>${_esc(obscuredDesc)}</em></section>`;
+            itemData.system.identified = false;
+            itemData.system.unidentified = {
+                name: obscuredName,
+                description: obscuredDescHtml,
+            };
+            console.log(`${TAG} | Loot item (unidentified): "${itemName}" hides behind "${obscuredName}".`);
+        }
 
         itemsToCreate.push(itemData);
         console.log(`${TAG} | Loot item: "${itemName}" (${lootType}, ${value})`);
