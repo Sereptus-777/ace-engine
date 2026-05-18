@@ -161,13 +161,32 @@ async function _processQueue() {
 
         while (_queue.length > 0) {
             const tokenDoc = _queue.shift();
+            let error = null;
             try {
                 await _generateBio(tokenDoc);
             } catch (err) {
+                error = err;
                 console.error(`${TAG} | Generation failed for ${tokenDoc.actor?.name}:`, err);
             } finally {
                 // Clear dedup tracking for linked actors
                 if (tokenDoc.actorLink && tokenDoc.actor) _pendingActorIds.delete(tokenDoc.actor.id);
+                // Fire completion hook so listeners (ace-token-art chooser,
+                // future plugins, etc.) know the pipeline is done with this
+                // token — success OR failure. This always fires exactly once
+                // per queued token. Token Art uses this to delay its chooser
+                // until bio + faction picker have produced a final name and
+                // role flag.
+                try {
+                    Hooks.callAll("ace-engine.bioComplete", {
+                        tokenDoc,
+                        actor: tokenDoc.actor ?? null,
+                        renamed: !!tokenDoc.actor?.getFlag?.(MODULE_ID, "nameRevealed"),
+                        role: tokenDoc.actor?.getFlag?.(MODULE_ID, "factionRole") ?? null,
+                        error: error ? String(error.message ?? error) : null,
+                    });
+                } catch (hookErr) {
+                    console.warn(`${TAG} | bioComplete hook callAll failed (non-fatal):`, hookErr);
+                }
             }
         }
     } finally {
