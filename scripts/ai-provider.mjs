@@ -44,6 +44,11 @@ export class AiProvider {
     if (options.model) this._modelOverride = options.model;
     if (options.provider) this._providerOverride = options.provider;
     if (options.apiKey) this._apiKeyOverride = options.apiKey;
+    // systemPromptOverride: when set, _buildMessages uses ONLY this text as
+    // the system prompt instead of the GM-assistant prompt + capabilities +
+    // scene context. Used by the digest engine so Claude doesn't read its
+    // "you are a Game Master" persona and refuse a JSON extraction task.
+    if (options.systemPromptOverride) this._systemPromptOverride = options.systemPromptOverride;
     let messages = this._buildMessages(userMessage, sceneContext, npcMemory, history);
     messages = this._applyVisionImages(messages, images);
 
@@ -73,6 +78,7 @@ export class AiProvider {
       this._modelOverride = null;
       this._providerOverride = null;
       this._apiKeyOverride = null;
+      this._systemPromptOverride = null;
     }
   }
 
@@ -185,6 +191,21 @@ When suggesting these features, be natural — weave them into your advice. For 
   // ── Message Builder ──────────────────────────────────────
 
   _buildMessages(userMessage, sceneContext, npcMemory, history) {
+    // systemPromptOverride: complete replacement (no GM-assistant prompt,
+    // no game-system blurb, no capabilities, no scene context). Used by
+    // the digest engine for structured-extraction tasks.
+    if (this._systemPromptOverride) {
+      const trimmedHistory = this._trimHistory(history);
+      const messages = [
+        { role: "system", content: this._systemPromptOverride },
+        ...trimmedHistory,
+        { role: "user", content: userMessage },
+      ];
+      const totalChars = messages.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : 0), 0);
+      console.log(`${MODULE_ID} | Prompt (override): ~${totalChars.toLocaleString()} chars | system: ${this._systemPromptOverride.length.toLocaleString()} | history: ${trimmedHistory.length} msgs`);
+      return messages;
+    }
+
     const systemPrompt = game.settings.get(MODULE_ID, "systemPrompt");
     const gameSystem = AceSettings.getGameSystemName();
 

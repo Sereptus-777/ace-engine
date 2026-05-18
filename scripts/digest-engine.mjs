@@ -352,14 +352,29 @@ export class DigestEngine {
       onProgress(i + 1, totalBatches, "extracting");
 
       try {
+        // Pass the extraction instructions as the SYSTEM prompt — NOT
+        // stuffed into the user message — so Claude reads its role as
+        // "JSON extractor", not "Game Master refusing to do something
+        // off-brand." User message is just the chunk text.
         const response = await aiProvider.chat(
-          DIGEST_EXTRACTION_PROMPT + batchText,
-          "", "", [], [], aiOpts
+          batchText,
+          "", "", [], [],
+          { ...aiOpts, systemPromptOverride: DIGEST_EXTRACTION_PROMPT }
         );
         const parsed = this._parseDigestResponse(response);
         if (parsed) {
           partials.push(parsed);
           consecutiveFailures = 0;
+        } else {
+          // Parser returned null — response wasn't valid JSON. Count this
+          // as a failure too so we don't loop silently on a model that
+          // keeps refusing or returning prose instead of JSON.
+          console.warn(`${MODULE_ID} | Digest batch ${i + 1}/${totalBatches}: response unparseable (no JSON found). First 200 chars: ${String(response ?? "").slice(0, 200)}`);
+          consecutiveFailures++;
+          if (consecutiveFailures >= 5) {
+            await this._saveWip(doc.id, { totalBatches, completedUpTo: i, partials, docDisplayName: doc.displayName });
+            throw new Error(`Digest paused at batch ${i + 1}/${totalBatches} — 5 consecutive unparseable responses (model is refusing or returning prose). Progress saved.`);
+          }
         }
       } catch (err) {
         console.warn(`${MODULE_ID} | Digest batch ${i + 1}/${totalBatches} failed:`, err);
