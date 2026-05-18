@@ -7997,14 +7997,29 @@ MAGNITUDE: [local/regional/major/legendary]`;
     const hasDigest = !!digestMeta;
     const wb = this._worldBible;
     const regionKey = `digest_${(doc.fileName || "").replace(/[^a-z0-9]/gi, "_").toLowerCase()}`;
-    let hasMerged = wb?.data?.regions?.[regionKey]?.cities?.length > 0
-                 || wb?.data?.regions?.[regionKey]?.factions?.length > 0;
-    // Fallback: if the filename changed (re-upload), search all digest regions by keyword overlap
+
+    // "Has this source been merged?" — the canonical marker is the region
+    // bucket existing with `_source` set by world-bible-engine.mjs when the
+    // first merge pass runs. We previously checked
+    //   region.cities.length > 0 || region.factions.length > 0
+    // which silently failed when a merge populated only NPCs/landmarks/
+    // cultures/etc. — the merge ran, the data went in, but the UI showed
+    // the source as un-merged. The user had no way to tell whether a
+    // long-running merge had actually completed.
+    //
+    // _source is set at region-creation time during mergeFromDigest. If
+    // it's there, the merge happened. Safer + cheaper than scanning 13
+    // category arrays.
+    const region = wb?.data?.regions?.[regionKey];
+    let hasMerged = !!region?._source;
+
+    // Fallback: if the filename changed (re-upload), search all digest
+    // regions by keyword overlap and check their _source the same way.
     if (!hasMerged && wb?.data?.regions) {
       const srcWords = (doc.fileName ?? doc.displayName ?? "").toLowerCase().replace(/[^a-z0-9]/g, " ").split(/\s+/).filter(w => w.length > 3);
       for (const [rk, rv] of Object.entries(wb.data.regions)) {
         if (!rk.startsWith("digest_")) continue;
-        if (!(rv.cities?.length > 0 || rv.factions?.length > 0)) continue;
+        if (!rv?._source) continue;
         const matches = srcWords.filter(w => rk.includes(w));
         if (matches.length >= 3) { hasMerged = true; break; }
       }
