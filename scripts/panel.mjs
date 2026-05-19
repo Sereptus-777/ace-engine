@@ -5901,7 +5901,7 @@ Appropriate loot, XP, and story rewards.
       // ── Search vault snapshots ────────────────────────────────
       const ctx = await this._vaultSearch.buildCrossWorldContext(userMessage, 800);
       if (ctx) {
-        console.log(`${MODULE_ID} | Vault Search: cross-campaign context injected (${ctx.length} chars)`);
+        console.debug(`${MODULE_ID} | Vault Search: cross-campaign context injected (${ctx.length} chars)`);
       }
       return ctx;
     } catch (err) {

@@ -129,7 +129,7 @@ export class CategoryStore {
       const data = JSON.parse(raw);
       this._deserialize(data);
       this._data.worldId = worldId;
-      console.log(`${MODULE_ID} | ${this.category}: loaded (${this.recordCount} records, ${(this._size / 1024).toFixed(1)} KB).`);
+      console.debug(`${MODULE_ID} | ${this.category}: loaded (${this.recordCount} records, ${(this._size / 1024).toFixed(1)} KB).`);
     } catch (err) {
       console.warn(`${MODULE_ID} | ${this.category}: load failed (${err.message}). Starting fresh.`);
       this._data.worldId = worldId;

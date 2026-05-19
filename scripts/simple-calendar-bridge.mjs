@@ -94,11 +94,11 @@ export class SimpleCalendarBridge {
   activate() {
     if (this._active) return;
     if (!SimpleCalendarBridge.isAvailable()) {
-      console.log(`${MODULE_ID} | Simple Calendar bridge: module not installed — bridge inactive.`);
+      console.debug(`${MODULE_ID} | Simple Calendar bridge: module not installed — bridge inactive.`);
       return;
     }
     if (!SimpleCalendarBridge.isEnabled()) {
-      console.log(`${MODULE_ID} | Simple Calendar bridge: sync disabled in settings — bridge inactive.`);
+      console.debug(`${MODULE_ID} | Simple Calendar bridge: sync disabled in settings — bridge inactive.`);
       return;
     }
 

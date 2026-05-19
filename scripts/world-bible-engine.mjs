@@ -470,7 +470,7 @@ export class WorldBibleEngine {
       }
 
       this._bible = await resp.json();
-      console.log(`${MODULE_ID} | World Bible: loaded ("${this._bible?.meta?.setting ?? "unknown"}", ${Object.keys(this._bible?.regions ?? {}).length} regions).`);
+      console.debug(`${MODULE_ID} | World Bible: loaded ("${this._bible?.meta?.setting ?? "unknown"}", ${Object.keys(this._bible?.regions ?? {}).length} regions).`);
     } catch (err) {
       console.warn(`${MODULE_ID} | World Bible: load failed (${err.message}). Starting fresh.`);
     }
@@ -878,7 +878,7 @@ export class WorldBibleEngine {
       this._nameToId.set(deity.deity.toLowerCase(), { type: "religion", id: deity.id });
     }
 
-    console.log(`${MODULE_ID} | World Bible: indexes built — ${this._nationIndex.size} nations, ${this._cityIndex.size} cities, ${this._factionIndex.size} factions, ${this._religionIndex.size} deities, ${this._geoIndex.size} geography, ${this._cultureIndex.size} cultures, ${this._tradeRouteIndex.size} trade routes, ${this._powerStructureIndex.size} power structures, ${this._currentEventIndex.size} events, ${this._threatZoneIndex.size} threat zones, ${this._landmarkIndex.size} landmarks, ${this._npcIndex.size} NPCs.`);
+    console.debug(`${MODULE_ID} | World Bible: indexes built — ${this._nationIndex.size} nations, ${this._cityIndex.size} cities, ${this._factionIndex.size} factions, ${this._religionIndex.size} deities, ${this._geoIndex.size} geography, ${this._cultureIndex.size} cultures, ${this._tradeRouteIndex.size} trade routes, ${this._powerStructureIndex.size} power structures, ${this._currentEventIndex.size} events, ${this._threatZoneIndex.size} threat zones, ${this._landmarkIndex.size} landmarks, ${this._npcIndex.size} NPCs.`);
   }
 
   // ── Context Retrieval (for bio-generator, conversation, etc.) ──
@@ -2568,7 +2568,7 @@ Rules:
             }
           }, 30000); // Save at most every 30s
         }
-        console.log(`${MODULE_ID} | World Bible learn: +${learned} new, ${skipped} already known.`);
+        console.debug(`${MODULE_ID} | World Bible learn: +${learned} new, ${skipped} already known.`);
       }
 
       return { learned, skipped };

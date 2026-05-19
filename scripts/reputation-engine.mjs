@@ -108,7 +108,7 @@ export class ReputationEngine {
 
       this._loaded = true;
       this._dirty  = false;
-      console.log(`${MODULE_ID} | Reputation: loaded from ${path} (${this._data.deeds.length} deeds, notoriety: ${this._data.notoriety})`);
+      console.debug(`${MODULE_ID} | Reputation: loaded from ${path} (${this._data.deeds.length} deeds, notoriety: ${this._data.notoriety})`);
     } catch (err) {
       const msg = String(err.message ?? err);
       if (!msg.includes("404") && !msg.includes("HTTP 404")) {
@@ -240,7 +240,7 @@ export class ReputationEngine {
     const trimmed = title.trim();
     if (!trimmed) return;
     if (this._data.titles.includes(trimmed)) {
-      console.log(`${MODULE_ID} | Reputation: title "${trimmed}" already exists, skipping`);
+      console.debug(`${MODULE_ID} | Reputation: title "${trimmed}" already exists, skipping`);
       return;
     }
     this._data.titles.push(trimmed);

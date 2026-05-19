@@ -119,7 +119,7 @@ export class MemoryManager {
     }
 
     const totalRecords = Array.from(this._stores.values()).reduce((n, s) => n + s.recordCount, 0);
-    console.log(`${MODULE_ID} | MemoryManager: loaded ${totalRecords} total records across ${this._stores.size} stores.`);
+    console.debug(`${MODULE_ID} | MemoryManager: loaded ${totalRecords} total records across ${this._stores.size} stores.`);
   }
 
   /** Save all dirty stores immediately. */

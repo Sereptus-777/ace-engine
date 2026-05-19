@@ -76,7 +76,7 @@ async function _ensurePdfJs() {
   try {
     _pdfjsLib = await import(`${PDFJS_CDN}/pdf.min.mjs`);
     _pdfjsLib.GlobalWorkerOptions.workerSrc = `${PDFJS_CDN}/pdf.worker.min.mjs`;
-    console.log(`${MODULE_ID} | PDF.js ${PDFJS_CDN_VERSION} loaded from CDN`);
+    console.debug(`${MODULE_ID} | PDF.js ${PDFJS_CDN_VERSION} loaded from CDN`);
     return _pdfjsLib;
   } catch (err) {
     console.error(`${MODULE_ID} | Failed to load PDF.js:`, err);

@@ -484,7 +484,7 @@ function _injectAceControl() {
     return;
   }
 
-  console.log(`${MODULE_ID} | Toolbar: injecting into <${mainControls.tagName}> #${mainControls.id}`);
+  console.debug(`${MODULE_ID} | Toolbar: injecting into <${mainControls.tagName}> #${mainControls.id}`);
 
   // v13 uses <li><button ...></button></li> — match that pattern exactly
   const li  = document.createElement("li");
@@ -515,7 +515,7 @@ function _injectAceControl() {
   });
 
   mainControls.appendChild(li);
-  console.log(`${MODULE_ID} | Toolbar button injected`);
+  console.debug(`${MODULE_ID} | Toolbar button injected`);
 }
 
 // ── Standalone browser TTS for players (no panel, no ElevenLabs) ──────
@@ -634,7 +634,7 @@ async function _generateElevenLabsAudio(text, apiKey) {
 // ── Ready: initialize for ALL users (socket listener first) ────
 Hooks.once("ready", async () => {
   if (!_aceEngineEnabled()) {
-    console.log(`${MODULE_ID} | Module disabled — skipping ready subsystems.`);
+    console.debug(`${MODULE_ID} | Module disabled — skipping ready subsystems.`);
     return;
   }
   // ── Clean up stray CONFIG.debug.hooks left on by other modules (e.g. chat-images)
@@ -1099,7 +1099,7 @@ Hooks.once("ready", async () => {
   // ── GM-only initialization ────────────────────────────────────
   if (!game.user.isGM) return;
 
-  console.log(`${MODULE_ID} | ACE ready — GM mode active`);
+  console.debug(`${MODULE_ID} | ACE ready — GM mode active`);
 
   // Auto Token Art lives in its own module now (ace-token-art). The engine
   // file, settings, CSS, and API all moved over there. Install ace-token-art
@@ -1424,7 +1424,7 @@ Hooks.once("ready", async () => {
     let settingsKey = "";
     try { settingsKey = (game.settings.get(MODULE_ID, "elevenLabsApiKey") || "").trim(); } catch (_) {}
     if (localKey) {
-      console.log(`${MODULE_ID} | TTS: ElevenLabs key loaded from config.local.json`);
+      console.debug(`${MODULE_ID} | TTS: ElevenLabs key loaded from config.local.json`);
     } else if (settingsKey) {
       console.log(`${MODULE_ID} | TTS: ElevenLabs key found in Module Settings`);
     } else {
@@ -1458,7 +1458,7 @@ Hooks.once("ready", async () => {
       reputationEngine = new ReputationEngine();
       await reputationEngine.load(game.world.id);
       const repStats = reputationEngine.getStats();
-      console.log(`${MODULE_ID} | Reputation engine loaded: notoriety=${repStats.notoriety}, ${repStats.deedCount} deeds, ${repStats.titleCount} titles, ${repStats.factionCount} faction standings`);
+      console.debug(`${MODULE_ID} | Reputation engine loaded: notoriety=${repStats.notoriety}, ${repStats.deedCount} deeds, ${repStats.titleCount} titles, ${repStats.factionCount} faction standings`);
     } catch (err) {
       console.error(`${MODULE_ID} | Reputation engine failed:`, err);
       reputationEngine = null;
@@ -1472,7 +1472,7 @@ Hooks.once("ready", async () => {
   if (aceMemory && fameEnabled) {
     try {
       fameEngine = new FameEngine(aceMemory);
-      console.log(`${MODULE_ID} | Fame engine initialized (${aceMemory.deeds?.recordCount ?? 0} deeds, day ${aceMemory.getDayCounter()})`);
+      console.debug(`${MODULE_ID} | Fame engine initialized (${aceMemory.deeds?.recordCount ?? 0} deeds, day ${aceMemory.getDayCounter()})`);
     } catch (err) {
       console.error(`${MODULE_ID} | Fame engine failed:`, err);
       fameEngine = null;
@@ -1486,7 +1486,7 @@ Hooks.once("ready", async () => {
     digestEngine = new DigestEngine();
     await digestEngine.loadIndex();
     const allDigests = digestEngine.getAllDigests();
-    console.log(`${MODULE_ID} | Digest engine initialized (${allDigests.length} global digests)`);
+    console.debug(`${MODULE_ID} | Digest engine initialized (${allDigests.length} global digests)`);
   } catch (err) {
     console.error(`${MODULE_ID} | Digest engine failed:`, err);
     digestEngine = null;
@@ -1499,7 +1499,7 @@ Hooks.once("ready", async () => {
     if (worldBible.hasData) {
       worldBible._buildIndexes();
       const stats = worldBible.getStats();
-      console.log(`${MODULE_ID} | World Bible loaded: "${stats.setting}" — ${stats.nationCount} nations, ${stats.cityCount} cities, ${stats.factionCount} factions, ${stats.deityCount} deities`);
+      console.debug(`${MODULE_ID} | World Bible loaded: "${stats.setting}" — ${stats.nationCount} nations, ${stats.cityCount} cities, ${stats.factionCount} factions, ${stats.deityCount} deities`);
       // Give SceneContext access to Bible for auto-location lookup
       if (sceneCtx) sceneCtx.setWorldBible(worldBible);
     } else {
@@ -1594,22 +1594,22 @@ Hooks.once("ready", async () => {
       }
 
       const stats = documentEngine.getLibrarySummary();
-      console.log(`${MODULE_ID} | Document engine initialized (${stats.totalDocuments} docs, ${stats.totalChunks} chunks, ${stats.totalImages} images)`);
+      console.debug(`${MODULE_ID} | Document engine initialized (${stats.totalDocuments} docs, ${stats.totalChunks} chunks, ${stats.totalImages} images)`);
 
       // Pre-load active digests for this world
       if (digestEngine) {
         const activeIds = aceMemory.documents.getActiveDigests();
         if (activeIds.length) {
           await digestEngine.loadActiveDigests(activeIds);
-          console.log(`${MODULE_ID} | Loaded ${activeIds.length} active digest(s) for this world`);
+          console.debug(`${MODULE_ID} | Loaded ${activeIds.length} active digest(s) for this world`);
 
           // Load world graph and build direct lookup index
           const graph = await digestEngine.loadWorldGraph();
           if (graph) {
-            console.log(`${MODULE_ID} | World graph loaded — lookup index ready`);
+            console.debug(`${MODULE_ID} | World graph loaded — lookup index ready`);
           } else {
             // No world graph on disk — rebuild from active digests
-            console.log(`${MODULE_ID} | No world graph found — rebuilding from active digests...`);
+            console.debug(`${MODULE_ID} | No world graph found — rebuilding from active digests...`);
             await digestEngine.rebuildWorldGraph(activeIds);
           }
 
@@ -1622,7 +1622,7 @@ Hooks.once("ready", async () => {
       if (stats.totalChunks > 0) {
         try {
           aceMemory.documents.buildBM25Corpus();
-          console.log(`${MODULE_ID} | BM25 corpus ready`);
+          console.debug(`${MODULE_ID} | BM25 corpus ready`);
         } catch (err) {
           console.warn(`${MODULE_ID} | BM25 corpus build failed (will retry on first search):`, err);
         }
@@ -1658,7 +1658,7 @@ Hooks.once("ready", async () => {
       if (game.settings.get(MODULE_ID, "subtleRollAutoDetect")) {
         subtleRolls.startAutoDetect();
       }
-      console.log(`${MODULE_ID} | Subtle Rolls initialized (auto-detect: ${game.settings.get(MODULE_ID, "subtleRollAutoDetect")})`);
+      console.debug(`${MODULE_ID} | Subtle Rolls initialized (auto-detect: ${game.settings.get(MODULE_ID, "subtleRollAutoDetect")})`);
     } catch (err) {
       console.error(`${MODULE_ID} | Subtle Rolls failed to initialize:`, err);
       subtleRolls = null;
@@ -1674,7 +1674,7 @@ Hooks.once("ready", async () => {
       vaultSearch = new VaultSearch();
       const worlds = await vaultSearch.discoverWorlds();
       const ledger = await vaultEngine.loadLedger();
-      console.log(`${MODULE_ID} | Vault initialized (${worlds.length} archived world(s), ${ledger.campaigns?.length ?? 0} ledger entries)`);
+      console.debug(`${MODULE_ID} | Vault initialized (${worlds.length} archived world(s), ${ledger.campaigns?.length ?? 0} ledger entries)`);
     } catch (err) {
       console.warn(`${MODULE_ID} | Vault init failed (non-critical):`, err);
       vaultEngine = null;
@@ -1690,7 +1690,7 @@ Hooks.once("ready", async () => {
         worldBible,
         digestEngine,
       });
-      console.log(`${MODULE_ID} | Scene Intelligence initialized`);
+      console.debug(`${MODULE_ID} | Scene Intelligence initialized`);
     } catch (err) {
       console.warn(`${MODULE_ID} | Scene Intelligence init failed (non-critical):`, err);
       sceneIntelligence = null;
@@ -1786,7 +1786,7 @@ Hooks.once("ready", async () => {
           partyNames: partyNames ? partyNames.split(", ") : [],
         });
         ui.notifications?.info(`ACE: Session ${sessionNum} summary for ${dateStr} saved to journal!`);
-        console.log(`${MODULE_ID} | Retroactive session ${sessionNum} (${dateStr}):\n${summary}`);
+        console.debug(`${MODULE_ID} | Retroactive session ${sessionNum} (${dateStr}):\n${summary}`);
       } catch (err) {
         console.error(`${MODULE_ID} | retroSummary error:`, err);
         ui.notifications?.error(`ACE: ${err.message}`);

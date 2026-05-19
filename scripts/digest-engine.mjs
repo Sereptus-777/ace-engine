@@ -675,7 +675,7 @@ export class DigestEngine {
     this._reverseLocationIndex = revLocation;
     this._reverseFactionIndex = revFaction;
 
-    console.log(`${MODULE_ID} | Lookup index built: ${index.size} keys indexing ${entityCount} entities, ${revLocation.size} locations, ${revFaction.size} factions (reverse)`);
+    console.debug(`${MODULE_ID} | Lookup index built: ${index.size} keys indexing ${entityCount} entities, ${revLocation.size} locations, ${revFaction.size} factions (reverse)`);
   }
 
   /** Whether the lookup index is ready for queries. */

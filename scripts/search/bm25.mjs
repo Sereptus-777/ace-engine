@@ -152,7 +152,7 @@ export class BM25 {
     }
 
     this._ready = true;
-    console.log(`ACE BM25 | Corpus built: ${this._totalDocs} documents, ${Object.keys(this._docFreqs).length} unique terms, avg length ${Math.round(this._avgDocLength)}`);
+    console.debug(`ACE BM25 | Corpus built: ${this._totalDocs} documents, ${Object.keys(this._docFreqs).length} unique terms, avg length ${Math.round(this._avgDocLength)}`);
   }
 
   /**

@@ -234,7 +234,7 @@ async function _fetchSharedVoiceLibrary() {
             && (stored.version || 0) >= CACHE_VERSION) {
             _voiceLibraryCache = _deserializeCache(stored.voices);
             _voiceLibraryCacheTime = stored.timestamp;
-            console.log(`${MODULE_ID} | Voice library loaded from cache v${stored.version || 0} (${_countVoices(_voiceLibraryCache)} voices)`);
+            console.debug(`${MODULE_ID} | Voice library loaded from cache v${stored.version || 0} (${_countVoices(_voiceLibraryCache)} voices)`);
             return _voiceLibraryCache;
         }
     } catch (_) {}
@@ -950,7 +950,7 @@ export async function onTokenCreated(tokenDocument) {
     const existingVoice = actor.getFlag(MODULE_ID, "voiceId");
 
     if (existingVoice) {
-        console.log(`${MODULE_ID} | Voice Engine: ${actor.name} already has voice ${existingVoice} — keeping`);
+        console.debug(`${MODULE_ID} | Voice Engine: ${actor.name} already has voice ${existingVoice} — keeping`);
         return;
     }
 
