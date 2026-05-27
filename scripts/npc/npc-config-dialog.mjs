@@ -8,6 +8,7 @@
 
 import { assignVoice } from "./voice-engine.mjs";
 import { ttsEngine }   from "./tts.mjs";
+import { writeBiography } from "../bio-writer.mjs";
 
 const MODULE_ID = "ace-engine";
 const TAG       = "ACE: Engine | Setup";
@@ -303,7 +304,9 @@ async function _swapBioGender(actor, newGender) {
     const newBio = parts.join("");
 
     if (newBio !== bioHtml) {
-        await actor.update({ "system.details.biography.value": newBio });
+        // Serialized via bio-writer (v1.6.3) so a concurrent regen or
+        // story-note append doesn't lose the pronoun swap.
+        await writeBiography(actor, newBio, `pronoun-swap:${newGender}`);
         console.log(`${TAG} | Swapped bio pronouns to ${newGender} for ${actor.name}`);
     }
 }

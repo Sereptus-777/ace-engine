@@ -7,6 +7,7 @@
 // Envoy → Engine merger.
 
 import { AIHandler }                                             from "./conversation-engine.mjs";
+import { writeBiography }                                        from "../bio-writer.mjs";
 import { processTokenFaction, buildFactionBioContext,
          resolveCreatureBase }                                   from "./faction-registry.mjs";
 import { SocialProfileEngine }                                   from "./social-profile.mjs";
@@ -1405,10 +1406,10 @@ async function _generateBio(tokenDocument) {
         : htmlBio;
 
     if (isUnlinked) {
-        // Unlinked: write to token's ActorDelta (visible on token's sheet)
-        await tokenDocument.actor.update({
-            "system.details.biography.value": finalBio
-        });
+        // Unlinked: write to token's ActorDelta (visible on token's sheet).
+        // Serialized via bio-writer so concurrent generates / manual edits
+        // don't last-writer-wins each other (v1.6.3).
+        await writeBiography(tokenDocument.actor, finalBio, "bio-generator:unlinked");
         await tokenDocument.setFlag(MODULE_ID, "bioGenerated", true);
         await tokenDocument.setFlag(MODULE_ID, "bioSceneId", canvas.scene?.id || "");
         await tokenDocument.setFlag(MODULE_ID, "bioSceneName", canvas.scene?.name || "");
@@ -1456,10 +1457,10 @@ async function _generateBio(tokenDocument) {
             }
         } catch (e) { console.warn(`${TAG} | Failed to archive bio history:`, e); }
 
-        // Write to the base actor's biography
-        await actor.update({
-            "system.details.biography.value": finalBio
-        });
+        // Write to the base actor's biography — serialized via bio-writer
+        // so concurrent regenerates / story-note appends / manual edits
+        // don't last-writer-wins each other (v1.6.3).
+        await writeBiography(actor, finalBio, "bio-generator:linked");
         await actor.setFlag(MODULE_ID, "bioGenerated", true);
         await actor.setFlag(MODULE_ID, "bioSceneId", canvas.scene?.id || "");
         await actor.setFlag(MODULE_ID, "bioSceneName", canvas.scene?.name || "");

@@ -25,6 +25,7 @@
 //                            buttons. Bad AI calls are 1-click recoverable.
 
 import { MODULE_ID } from "../ace-engine.mjs";
+import { appendToBiography } from "../bio-writer.mjs";
 
 const TAG = "ACE: Engine | Auto-Pipeline";
 
@@ -352,12 +353,14 @@ function _onRenderChatMessage(message, html) {
             });
             if (!confirmed) return;
             try {
-                const bio = actor.system?.details?.biography?.value || "";
-                // Strip the ace-engine-bio section (between its opening and closing tags)
-                const stripped = bio.replace(
-                    /<section\s+class="ace-engine-bio"[\s\S]*?<\/section>/gi, ""
-                ).trim();
-                await actor.update({ "system.details.biography.value": stripped });
+                // Read-modify-write via bio-writer so concurrent regen /
+                // story-note appends don't stomp on this strip (v1.6.3).
+                await appendToBiography(actor, (bio) => {
+                    const stripped = bio.replace(
+                        /<section\s+class="ace-engine-bio"[\s\S]*?<\/section>/gi, ""
+                    ).trim();
+                    return stripped === bio ? null : stripped;
+                }, "auto-pipeline:revert");
                 await actor.unsetFlag(MODULE_ID, "bioSceneId");
                 ui.notifications?.info(`ACE: Reverted bio for ${actor.name}.`);
                 revertBtn.disabled = true;

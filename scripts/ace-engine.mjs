@@ -27,6 +27,10 @@ import { SceneIntelligence }   from "./scene-intelligence.mjs";
 import { injectReorderButtons } from "./combat/initiative-reorder.mjs";
 // NPC Chat — gated activation entry point (moved from ACE: Envoy, merger Phase 3)
 import { activateNpcChat, npcChatState } from "./npc/activate.mjs";
+// Serialized biography writer — prevents lost updates when multiple
+// paths (AI bio-generator, auto-pipeline, story notes, manual edits)
+// mutate the same actor's biography concurrently. v1.6.3 hardening.
+import { appendToBiography }      from "./bio-writer.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -38,8 +42,12 @@ function _escapeHtml(str) {
 }
 
 // ── Story Notes — auto-append notable events to PC biographies ──
-
-const _bioWriteQueue = new Map();  // actorId → Promise chain (serializes writes)
+//
+// As of v1.6.3, write serialization is provided by bio-writer.mjs
+// (appendToBiography). The previous inline _bioWriteQueue Map only
+// protected the story-notes path; routing all 7 biography write sites
+// through the shared helper closes the race window across the full
+// module (Grok cross-module audit, MED 7).
 
 /**
  * Silently append a story-note bullet to a PC actor's biography HTML.
@@ -57,57 +65,55 @@ function _appendStoryNote(actor, bulletText) {
   if (!actor?.hasPlayerOwner || actor.type !== "character") return Promise.resolve();
   if (!bulletText) return Promise.resolve();
 
-  // Serialize writes per-actor to prevent race conditions
-  const prev = _bioWriteQueue.get(actor.id) ?? Promise.resolve();
-  const next = prev.then(() => _doAppendStoryNote(actor, bulletText)).catch(err => {
-    console.warn(`${MODULE_ID} | Story note failed for ${actor.name}:`, err);
-  });
-  _bioWriteQueue.set(actor.id, next);
-  return next;
-}
+  // Track whether the transform actually wrote (vs aborted on duplicate).
+  // appendToBiography returns void; we use a closure flag to know if
+  // the PC-store write below should fire.
+  let wroteBio = false;
 
-async function _doAppendStoryNote(actor, bulletText) {
-  const bio = actor.system?.details?.biography?.value ?? "";
+  // Route through the shared per-actor write queue. The transform function
+  // is called with the current biography (read fresh inside the lock),
+  // so we never miss a concurrent write that landed since we were queued.
+  return appendToBiography(actor, (bio) => {
+    // Build the timestamp and bullet HTML
+    const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    const escaped = _escapeHtml(bulletText);
+    const newLi   = `<li><strong>${dateStr}</strong> — ${escaped}</li>`;
 
-  // Build the timestamp and bullet HTML
-  const dateStr    = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  const escaped    = _escapeHtml(bulletText);
-  const newLi      = `<li><strong>${dateStr}</strong> — ${escaped}</li>`;
+    // Duplicate check — skip if this exact bullet text is already in the bio
+    if (bio.includes(escaped)) return null; // abort write
 
-  // Duplicate check — skip if this exact bullet text is already in the bio
-  if (bio.includes(escaped)) return;
-
-  let newBio;
-  if (bio.includes("<!-- ACE-STORY-NOTES -->")) {
-    // Insert new <li> before the closing </ul> inside our notes section
-    newBio = bio.replace(
-      /(<\/ul>\s*<!-- \/ACE-STORY-NOTES -->)/,
-      `${newLi}\n$1`
-    );
-  } else {
+    wroteBio = true;
+    if (bio.includes("<!-- ACE-STORY-NOTES -->")) {
+      // Insert new <li> before the closing </ul> inside our notes section
+      return bio.replace(
+        /(<\/ul>\s*<!-- \/ACE-STORY-NOTES -->)/,
+        `${newLi}\n$1`
+      );
+    }
     // Create the notes section from scratch
     const section = `\n<hr>\n<!-- ACE-STORY-NOTES -->\n<h4>Notable Events</h4>\n<ul>\n${newLi}\n</ul>\n<!-- /ACE-STORY-NOTES -->`;
-    newBio = bio + section;
-  }
+    return bio + section;
+  }, `story-note: ${bulletText.slice(0, 40)}`).then(() => {
+    if (!wroteBio) return; // duplicate — skip the PC-store write too
+    console.log(`${MODULE_ID} | Story note added to ${actor.name}: ${bulletText}`);
 
-  await actor.update({ "system.details.biography.value": newBio });
-  console.log(`${MODULE_ID} | Story note added to ${actor.name}: ${bulletText}`);
-
-  // Also write to the PC store notes array (for PC journal profiles)
-  if (aceMemory) {
-    const pc = aceMemory.pcs.touchPc(actor.id, actor.name);
-    if (pc) {
-      if (!Array.isArray(pc.notes)) pc.notes = [];
-      // Dedup: skip if this exact text already exists
-      if (!pc.notes.some(n => n.txt === bulletText)) {
-        pc.notes.push({ t: Math.floor(Date.now() / 1000), txt: bulletText });
-        if (pc.notes.length > 100) pc.notes.shift(); // cap at 100 notes
-        aceMemory.pcs.markDirty();
-        aceMemory._scheduleSaves(["pcs"]);
-        aceMemory.writePcJournal(actor.id).catch(() => {});
+    // Also write to the PC store notes array (for PC journal profiles).
+    // Runs AFTER the bio write commits, mirroring the pre-refactor order.
+    if (aceMemory) {
+      const pc = aceMemory.pcs.touchPc(actor.id, actor.name);
+      if (pc) {
+        if (!Array.isArray(pc.notes)) pc.notes = [];
+        // Dedup: skip if this exact text already exists
+        if (!pc.notes.some(n => n.txt === bulletText)) {
+          pc.notes.push({ t: Math.floor(Date.now() / 1000), txt: bulletText });
+          if (pc.notes.length > 100) pc.notes.shift(); // cap at 100 notes
+          aceMemory.pcs.markDirty();
+          aceMemory._scheduleSaves(["pcs"]);
+          aceMemory.writePcJournal(actor.id).catch(() => {});
+        }
       }
     }
-  }
+  });
 }
 
 // ── Significance filters for story notes ────────────────────

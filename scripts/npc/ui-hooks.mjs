@@ -12,6 +12,7 @@ import { onRenderSceneConfig } from "./voice-engine.mjs";
 import { ConversationApp }     from "./conversation-app.mjs";
 import { AIConfigDialog }      from "./npc-config-dialog.mjs";
 import { npcChatState }        from "./activate.mjs";
+import { appendToBiography }   from "../bio-writer.mjs";
 
 const MODULE_ID = "ace-engine";
 const TAG       = "ACE: Engine | UI";
@@ -780,12 +781,16 @@ export function registerUiHooks() {
                             defaultYes: false,
                         });
                         if (!confirmed) return;
-                        const currentBio = actor.system?.details?.biography?.value || "";
-                        const cleanedBio = currentBio
-                            .replace(/<section class="ace-engine-bio">[\s\S]*?<\/section>\s*/gi, "")
-                            .replace(/^<hr\s*\/?>\s*/i, "")
-                            .trim();
-                        await actor.update({ "system.details.biography.value": cleanedBio });
+                        // Read-modify-write via bio-writer (v1.6.3) so a
+                        // concurrent regen / story-note append doesn't
+                        // race against this reset.
+                        await appendToBiography(actor, (currentBio) => {
+                            const cleanedBio = currentBio
+                                .replace(/<section class="ace-engine-bio">[\s\S]*?<\/section>\s*/gi, "")
+                                .replace(/^<hr\s*\/?>\s*/i, "")
+                                .trim();
+                            return cleanedBio === currentBio ? null : cleanedBio;
+                        }, "ui-hooks:bio-reset");
                         await actor.unsetFlag(MODULE_ID, "bioGenerated");
                         ui.notifications.info(`ACE biography reset for ${actor.name}.`);
                         sheet.render(false);

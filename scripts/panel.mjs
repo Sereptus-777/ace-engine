@@ -6,6 +6,7 @@
 import { MODULE_ID, localCredentials } from "./ace-engine.mjs";
 import { CanvasHighlight } from "./canvas-highlight.mjs";
 import { filterProfanity, buildProfanityPrompt } from "./profanity-filter.mjs";
+import { writeBiography, appendToBiography } from "./bio-writer.mjs";
 // Social Profile Engine moved to ace-envoy (standalone module)
 
 // v13-safe FilePicker access (for document library uploads)
@@ -1653,12 +1654,14 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
         return;
       }
 
-      // Preserve existing ACE story notes if present
-      const currentBio = actor.system?.details?.biography?.value ?? "";
-      const storyNotesMatch = currentBio.match(/(<!-- ACE-STORY-NOTES -->[\s\S]*<!-- \/ACE-STORY-NOTES -->)/);
-      const storyNotes = storyNotesMatch ? `\n${storyNotesMatch[1]}` : "";
-
-      await actor.update({ "system.details.biography.value": bio + storyNotes });
+      // Serialized via bio-writer (v1.6.3). The transform reads the
+      // current bio under lock so we preserve story notes even if a
+      // story-note append landed while we were generating the new bio.
+      await appendToBiography(actor, (currentBio) => {
+        const storyNotesMatch = currentBio.match(/(<!-- ACE-STORY-NOTES -->[\s\S]*<!-- \/ACE-STORY-NOTES -->)/);
+        const storyNotes = storyNotesMatch ? `\n${storyNotesMatch[1]}` : "";
+        return bio + storyNotes;
+      }, "panel:bio-generate");
       ui.notifications?.info(`ACE: Biography generated for ${actor.name}.`);
     } catch (err) {
       console.error("ACE | Bio generation failed:", err);
