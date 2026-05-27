@@ -123,6 +123,24 @@ async function _distributeXP(tokenDoc) {
         if (!game.settings.get(MODULE_ID, "autoDistributeXP")) return;
     } catch (_) { return; }
 
+    // ── Coordinate with ace-qol's xp-engine ──────────────────────────────
+    // ACE: QOL's xp-engine.mjs ALSO listens to ace-qol.npcDeath and records
+    // kills for a GM-driven distribution dialog at combat-end. If both
+    // modules' XP systems fire, PCs get DOUBLE XP per kill (Engine awards
+    // immediately, QOL awards again at combat end via dialog).
+    //
+    // Behavior contract: when ace-qol is active AND its enableXpDistribution
+    // is on, Engine defers — QOL becomes the source of truth. Engine still
+    // handles combat removal and voice cleanup (those don't conflict).
+    // When QOL is off or its XP feature is off, Engine awards XP as before.
+    try {
+        if (game.modules.get("ace-qol")?.active
+            && game.settings.get("ace-qol", "enableXpDistribution") === true) {
+            console.log(`${TAG} | XP deferred to ace-qol (its enableXpDistribution=true) — kill recorded, awards shown at combat end.`);
+            return;
+        }
+    } catch (_) { /* QOL not active or setting unregistered — fall through to local award */ }
+
     const actor = tokenDoc.actor;
     if (!actor) return;
 
