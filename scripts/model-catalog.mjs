@@ -240,6 +240,20 @@ function _formatBytes(bytes) {
 }
 
 // ── Cache I/O ────────────────────────────────────────────────────────────
+//
+// v1.6.9: cache entries now carry the ace-engine version that wrote them.
+// On read, if the cached version doesn't match the currently-running
+// ace-engine version, the entry is treated as stale and returns null
+// (cache miss) — forcing a fresh fetch with the current code's label /
+// hint logic. This way module updates that change label formatting don't
+// require users to find the manual "🔄 Refresh Model List" button — the
+// version bump auto-invalidates yesterday's cache.
+
+/** Read the current ace-engine version. Defensive — returns "" on failure. */
+function _currentEngineVersion() {
+    try { return game.modules?.get?.(MODULE_ID)?.version ?? ""; }
+    catch (_) { return ""; }
+}
 
 function _readCache(provider) {
     try {
@@ -247,6 +261,14 @@ function _readCache(provider) {
         const entry = cache[provider];
         if (!entry?.fetchedAt) return null;
         if (Date.now() - entry.fetchedAt > CACHE_TTL_MS) return null;
+        // Version-aware invalidation: if this cache entry was written by a
+        // different ace-engine version, the label format may have changed.
+        // Force a re-fetch with the current code so labels match the
+        // running version.
+        const currentVersion = _currentEngineVersion();
+        if (entry.engineVersion && currentVersion && entry.engineVersion !== currentVersion) {
+            return null;
+        }
         return entry.models;
     } catch (_) { return null; }
 }
@@ -254,7 +276,11 @@ function _readCache(provider) {
 function _writeCache(provider, models) {
     try {
         const cache = game.settings.get(MODULE_ID, CACHE_SETTING) || {};
-        cache[provider] = { models, fetchedAt: Date.now() };
+        cache[provider] = {
+            models,
+            fetchedAt:     Date.now(),
+            engineVersion: _currentEngineVersion(),
+        };
         game.settings.set(MODULE_ID, CACHE_SETTING, cache);
     } catch (err) { console.debug(`${MODULE_ID} | model catalog cache write failed:`, err); }
 }
