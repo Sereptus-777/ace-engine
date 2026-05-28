@@ -263,9 +263,9 @@ export class AceSettings {
         "gpt-4.1-mini":   "$ GPT-4.1 Mini — latest mini (cloud, paid)",
         "gpt-4.1-nano":   "$ GPT-4.1 Nano — cheapest (cloud, paid)",
         // ── Local: Ollama (FREE — runs on your machine) ──
-        "llama3.3:70b":       "FREE ⭐ Llama 3.3 (70B) — needs 24+ GB VRAM — Claude-tier narrative",
-        "qwen2.5:32b":        "FREE Qwen 2.5 (32B) — needs 16+ GB VRAM — strong reasoning",
-        "deepseek-r1:32b":    "FREE DeepSeek R1 (32B) — needs 16+ GB VRAM — best reasoning",
+        "llama3.3:70b":       "FREE Llama 3.3 (70B) — needs 40+ GB VRAM (dual GPU or Apple M-series unified)",
+        "qwen2.5:32b":        "FREE ⭐ Qwen 2.5 (32B) — needs 20+ GB VRAM — best 24 GB sweet spot",
+        "deepseek-r1:32b":    "FREE DeepSeek R1 (32B) — needs 20+ GB VRAM — best reasoning",
         "mistral-nemo:12b":   "FREE ⭐ Mistral Nemo (12B) — needs 10+ GB VRAM — long context, good prose",
         "qwen2.5:14b":        "FREE Qwen 2.5 (14B) — needs 10+ GB VRAM — good balance",
         "deepseek-r1:14b":    "FREE DeepSeek R1 (14B) — needs 10+ GB VRAM — reasoning",
