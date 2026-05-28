@@ -1,0 +1,141 @@
+{
+  "$schema": "https://github.com/Sereptus-777/ace-engine/blob/main/model-catalog.schema.json",
+  "schemaVersion": 1,
+  "updated": "2026-05-28",
+  "notes": "Curated model catalog for ACE Engine. Fetched daily by the module; falls back to bundled copy if offline. Edit + push to GitHub to deploy a new catalog to every user within 24h — no module release required.",
+
+  "providers": {
+    "openai": {
+      "displayName": "OpenAI",
+      "apiBase": "https://api.openai.com",
+      "models": [
+        { "id": "gpt-4.1",       "label": "GPT-4.1",         "hint": "Latest top quality · $$",                      "star": false, "vision": true,  "tier": "quality" },
+        { "id": "gpt-4.1-mini",  "label": "GPT-4.1 Mini",    "hint": "Latest sweet spot · fast + cheap · $",         "star": true,  "vision": true,  "tier": "all"     },
+        { "id": "gpt-4.1-nano",  "label": "GPT-4.1 Nano",    "hint": "Cheapest paid · $",                            "star": false, "vision": true,  "tier": "chat"    },
+        { "id": "gpt-4o",        "label": "GPT-4o",          "hint": "Legacy flagship · $$",                         "star": false, "vision": true,  "tier": "quality" },
+        { "id": "gpt-4o-mini",   "label": "GPT-4o Mini",     "hint": "Proven cheap + fast · $",                      "star": true,  "vision": true,  "tier": "all"     },
+        { "id": "o3-mini",       "label": "o3 Mini",         "hint": "Reasoning · structured thinking · $",          "star": false, "vision": false, "tier": "quality" },
+        { "id": "o1",            "label": "o1",              "hint": "Reasoning · deep step-by-step · $$$",          "star": false, "vision": false, "tier": "quality" }
+      ]
+    },
+
+    "anthropic": {
+      "displayName": "Anthropic (Claude)",
+      "apiBase": "https://api.anthropic.com",
+      "models": [
+        { "id": "claude-sonnet-4-20250514",     "label": "Claude Sonnet 4",   "hint": "Latest top quality · sweet spot · $$",   "star": true,  "vision": true, "tier": "quality" },
+        { "id": "claude-haiku-4-5-20251001",    "label": "Claude Haiku 4.5",  "hint": "Latest cheap + fast · $",                "star": true,  "vision": true, "tier": "all"     },
+        { "id": "claude-opus-4-1-20250805",     "label": "Claude Opus 4.1",   "hint": "Deepest reasoning · $$$$",               "star": false, "vision": true, "tier": "quality" },
+        { "id": "claude-opus-4-20250514",       "label": "Claude Opus 4",     "hint": "Deepest reasoning · $$$$",               "star": false, "vision": true, "tier": "quality" },
+        { "id": "claude-3-5-sonnet-20241022",   "label": "Claude 3.5 Sonnet", "hint": "Legacy flagship · $$",                   "star": false, "vision": true, "tier": "quality" },
+        { "id": "claude-3-5-haiku-20241022",    "label": "Claude 3.5 Haiku",  "hint": "Legacy cheap + fast · $",                "star": false, "vision": true, "tier": "chat"    }
+      ]
+    },
+
+    "google": {
+      "displayName": "Google Gemini",
+      "apiBase": "https://generativelanguage.googleapis.com",
+      "models": [
+        { "id": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash-Lite", "hint": "Free tier hero · 1500/day on AI Studio · $", "star": true,  "vision": true, "tier": "all"     },
+        { "id": "gemini-2.5-flash",      "label": "Gemini 2.5 Flash",      "hint": "Better quality, still cheap · $",            "star": false, "vision": true, "tier": "quality" }
+      ]
+    },
+
+    "groq": {
+      "displayName": "Groq (Llama on LPU)",
+      "apiBase": "https://api.groq.com/openai",
+      "models": [
+        { "id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B", "hint": "Sub-second · 1000/day free · strong open-source", "star": true, "vision": false, "tier": "all" }
+      ]
+    },
+
+    "ollama": {
+      "displayName": "Ollama (Local)",
+      "apiBase": "http://localhost:11434",
+      "models": [
+        { "id": "llama3.2:3b",       "label": "Llama 3.2 3B",      "hint": "Tiny, runs on any GPU · ~2GB VRAM",            "star": true,  "vision": false, "tier": "chat"    },
+        { "id": "qwen2.5:32b",       "label": "Qwen 2.5 32B",      "hint": "Best 24GB sweet spot · ~20GB VRAM",            "star": true,  "vision": false, "tier": "quality" },
+        { "id": "mistral-nemo:12b",  "label": "Mistral Nemo 12B",  "hint": "Long context, great prose · ~10GB VRAM",       "star": false, "vision": false, "tier": "quality" },
+        { "id": "dolphin3:8b",       "label": "Dolphin 3 8B",      "hint": "Uncensored for dark campaigns · ~5GB VRAM",    "star": false, "vision": false, "tier": "chat"    },
+        { "id": "llama3.1:8b",       "label": "Llama 3.1 8B",      "hint": "Mid-range GPU sweet spot · ~6GB VRAM",         "star": false, "vision": false, "tier": "all"     }
+      ]
+    }
+  },
+
+  "deprecations": [
+    {
+      "id": "gemini-2.0-flash",
+      "providers": ["google", "openrouter"],
+      "sunsets": "2026-06-01",
+      "replacement": "gemini-2.5-flash-lite",
+      "replacementProvider": "google",
+      "reason": "Google sunsetting the Gemini 2.0 family. 2.5 Flash-Lite is the direct successor at identical pricing ($0.10/$0.40 per 1M)."
+    },
+    {
+      "id": "gemini-2.0-flash-exp",
+      "providers": ["google", "openrouter"],
+      "sunsets": "2026-06-01",
+      "replacement": "gemini-2.5-flash-lite",
+      "replacementProvider": "google",
+      "reason": "Experimental 2.0 Flash sunsetting with the rest of the 2.0 family."
+    }
+  ],
+
+  "presets": {
+    "free": {
+      "label": "🆓 Free Tier — $0/month forever",
+      "description": "Google AI Studio Gemini Flash-Lite for all three tiers. Sign up at aistudio.google.com — no credit card. 1500 requests/day on the free tier (~30 ACE sessions/day).",
+      "settings": {
+        "aiProvider":  "custom",
+        "apiUrl":      "https://generativelanguage.googleapis.com/v1beta/openai",
+        "modelName":   "gemini-2.5-flash-lite",
+        "chatModel":   "custom:gemini-2.5-flash-lite",
+        "digestModel": "custom:gemini-2.5-flash-lite"
+      }
+    },
+    "budget": {
+      "label": "💰 Budget Tier — Premium feel for pennies",
+      "description": "Claude Haiku 4.5 for chat + quality (best narrative voice in the budget bracket), Gemini Flash-Lite for digest. ~$0.10/session, ~$2/month at 4 sessions/week.",
+      "settings": {
+        "aiProvider":  "anthropic",
+        "apiUrl":      "https://api.anthropic.com",
+        "modelName":   "claude-haiku-4-5-20251001",
+        "chatModel":   "anthropic:claude-haiku-4-5-20251001",
+        "digestModel": "custom:gemini-2.5-flash-lite"
+      }
+    },
+    "premium": {
+      "label": "💎 Premium Tier — Best in class",
+      "description": "Claude Sonnet 4 for session summaries / bios / lore (top-tier prose), Claude Haiku 4.5 for chat (sub-second), GPT-4o-mini for digest (cheap structured extraction). ~$0.30/session, ~$5/month.",
+      "settings": {
+        "aiProvider":  "anthropic",
+        "apiUrl":      "https://api.anthropic.com",
+        "modelName":   "claude-sonnet-4-20250514",
+        "chatModel":   "anthropic:claude-haiku-4-5-20251001",
+        "digestModel": "openai:gpt-4o-mini"
+      }
+    },
+    "speed": {
+      "label": "🚀 Speed Tier — Sub-second everything",
+      "description": "Groq Llama 3.3 70B for all three tiers. Custom LPU hardware delivers 300+ tokens/sec — every NPC reply feels instant. 1000 requests/day free, ~$0.04/session paid.",
+      "settings": {
+        "aiProvider":  "custom",
+        "apiUrl":      "https://api.groq.com/openai/v1",
+        "modelName":   "llama-3.3-70b-versatile",
+        "chatModel":   "custom:llama-3.3-70b-versatile",
+        "digestModel": "custom:llama-3.3-70b-versatile"
+      }
+    },
+    "local": {
+      "label": "🏠 Local Tier — Free, private, your hardware",
+      "description": "Ollama on localhost. No data leaves your machine. Defaults are tuned for a typical 8-12GB GPU; users on a 24GB+ rig should upgrade Quality to qwen2.5:32b after picking this preset.",
+      "settings": {
+        "aiProvider":  "ollama",
+        "apiUrl":      "http://localhost:11434",
+        "modelName":   "llama3.1:8b",
+        "chatModel":   "ollama:llama3.2:3b",
+        "digestModel": "ollama:llama3.1:8b"
+      }
+    }
+  }
+}

@@ -951,7 +951,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             this.renderMessage("system", "Conversation timed out due to inactivity.");
             await this._summarizeSession();
             this._setUILocked(true, "");
-        }, 5 * 60 * 1000);
+        }, 30 * 60 * 1000);  // 30 minutes — covers normal tabletop pauses (rule lookups, snack breaks, party deliberation)
     }
 
     async _saveMemorySafe(history) { return this._setFlagSafe("memoryLog", history); }
@@ -1137,18 +1137,19 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     async close(options = {}) {
-        // Raw history is already saved per-exchange via _saveMemorySafe().
-        // Journal summary fires automatically when the PLAYER ends the
-        // conversation (handled by the gmDismiss socket handler in
-        // ace-engine.mjs).
+        // Raw history is already saved per-exchange via _saveMemorySafe(),
+        // so the underlying conversation data is durable BEFORE close even
+        // runs. The slow work below (journal summary AI call, gmDismiss
+        // broadcast, lock releases) is derivative — if it fails, the
+        // raw conversation is still on the actor flag.
+        //
+        // This method is structured to tear down the DOM in milliseconds
+        // (call super.close synchronously) and fire-and-forget the
+        // persistence work afterward, so the GM never sees a window
+        // lingering on screen while the AI summarizer runs for ~30 sec.
         const openConversations = npcChatState?.openConversations;
 
-        // ── Spectator (readOnly) windows close instantly. The conversation
-        // owner — the player who's actually chatting — is the only client
-        // that summarizes and writes the journal entry. If a spectator
-        // (GM or another player watching) ran _summarizeSession too, we'd
-        // get duplicate journal entries AND a multi-second freeze while
-        // the AI summarizer runs. ─────────────────────────────────────
+        // ── Spectator (readOnly) fast-path — unchanged, already instant ──
         if (this.readOnly) {
             try {
                 const log = this.element?.querySelector?.("#ace-engine-log");
@@ -1165,83 +1166,120 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             return super.close(options);
         }
 
-        // ── DOM wipe — clear stale content before closing ────────────────────
-        try {
-            const log   = this.element?.querySelector?.("#ace-engine-log");
-            const input = this.element?.querySelector?.("#ace-engine-input");
-            if (log)   log.innerHTML = "";
-            if (input) input.value   = "";
-        } catch (_) { /* non-critical */ }
-
-        // ── Cleanup ──────────────────────────────────────────────────────────
+        // ── 1. SYNCHRONOUS TEARDOWN — everything that must happen before
+        //      the DOM goes away. All of this is fast (milliseconds total). ──
         if (this._inactivityTimer) clearTimeout(this._inactivityTimer);
         if (this._micSendTimer) { clearTimeout(this._micSendTimer); this._micSendTimer = null; }
         if (this._recognition) { try { this._recognition.stop(); } catch(_) {} this._recognition = null; }
         if (this._sceneChangeHookId != null) { Hooks.off("canvasReady", this._sceneChangeHookId); this._sceneChangeHookId = null; }
         if (this._dialogueStartHookId != null) { Hooks.off("ace-engine.npcDialogueStart", this._dialogueStartHookId); this._dialogueStartHookId = null; }
         if (this._dialogueEndHookId != null)   { Hooks.off("ace-engine.npcDialogueEnd",   this._dialogueEndHookId);   this._dialogueEndHookId   = null; }
-        this._lockPlayerToken(false);
         ttsEngine.stop();
 
-        // ── Release conversation lock (player-owner path) ───────────────────
-        // If we acquired a lock on open, release it now and broadcast so
-        // every other client's chat icons go back to gold.
-        if (this._lockedActorId) {
-            const npcLocks = npcChatState?.npcLocks;
-            if (npcLocks) npcLocks.delete(this._lockedActorId);
-            game.socket.emit(`module.${MODULE_ID}`, {
-                action: "lockClear", actorId: this._lockedActorId, userId: game.user.id,
-            });
-            this._lockedActorId = null;
-        }
-
-        if (!this._gmForced) {
-            const isConversationOwner = this._isOwner && !game.user.isGM;
-
-            if (isConversationOwner) {
-                const closingPlayerName = this.speakingAs?.name ?? game.user.name;
-
-                // Ship the FULL history to the GM in the gmDismiss payload.
-                // The GM-side handler (in ace-engine.mjs ready hook) persists
-                // it to actor flags AND runs summarizeAndSaveSession so a
-                // journal entry is written. Without history in the payload,
-                // the GM has nothing to summarize and the conversation
-                // silently disappears on close.
-                game.socket.emit(`module.${MODULE_ID}`, {
-                    action:     "gmDismiss",
-                    actorId:    this.actor.id,
-                    tokenId:    this.tokenDocument?.id || null,
-                    source:     "player",
-                    playerName: closingPlayerName,
-                    history:    this.history,
-                });
-                openConversations?.delete?.(this._convoKey);
-            } else if (game.user.isGM) {
-                // GM closes the conversation directly (GM-owned chat, e.g.
-                // puppeting an NPC). Summarize so the journal entry gets
-                // written. Spectator GM closes are handled by the early
-                // readOnly branch above and never reach this code.
-                if (this.history?.length > 0) {
-                    try { await this._summarizeSession(); }
-                    catch (err) { console.warn(`ACE: Engine | GM close: summarize failed:`, err); }
-                }
-                openConversations?.delete(this._convoKey);
-            } else {
-                game.socket.emit(`module.${MODULE_ID}`, {
-                    action: "stopAudio", targetUserId: game.user.id
-                });
-            }
-        }
-
-        // Safety net: always clean up stale openConversations reference, even if
-        // _gmForced or some other path bailed early. Without this, reopening the
-        // chat with the same NPC silently fails because the Map still references
-        // a closed app.
+        // Pull the openConversations entry NOW so reopening the same NPC
+        // immediately works while the background cleanup is still running.
         if (openConversations?.get?.(this._convoKey) === this) {
             openConversations.delete(this._convoKey);
         }
 
-        return super.close(options);
+        // ── 2. CAPTURE STATE — everything the background work needs, into
+        //      local variables. The `this` reference becomes unreliable
+        //      after super.close (the app instance is detached from
+        //      Foundry's registry and the DOM is gone). ──
+        const bgState = {
+            actor:               this.actor,
+            tokenDocument:       this.tokenDocument,
+            history:             this.history,
+            lockedActorId:       this._lockedActorId,
+            gmForced:            this._gmForced,
+            isConversationOwner: this._isOwner && !game.user.isGM,
+            isGMUser:            game.user.isGM,
+            closingPlayerName:   this.speakingAs?.name ?? game.user.name,
+            currentUserId:       game.user.id,
+            npcLocks:            npcChatState?.npcLocks,
+        };
+        this._lockedActorId = null;  // pre-clear to prevent re-entry double-work
+
+        // ── 3. DOM TEARDOWN — fire super.close immediately. The window
+        //      disappears from the GM's screen in milliseconds. ──
+        const closePromise = super.close(options);
+
+        // ── 4. BACKGROUND PERSISTENCE — fire-and-forget. The window is
+        //      already gone; everything below runs on its own promise
+        //      while the GM moves on with the game. Failures surface
+        //      via a toast so partial saves don't go silent. ──
+        this._runBackgroundClose(bgState).catch(err => {
+            console.error("ACE: Engine | Background close cleanup failed:", err);
+            try { ui.notifications?.warn(`ACE: Engine — session save partial: ${err?.message || err}`); }
+            catch (_) {}
+        });
+
+        return closePromise;
+    }
+
+    /**
+     * Runs the slow persistence work after the window has visually closed.
+     * All state references come from the bgState object — `this` may have
+     * been detached by Foundry's app teardown by the time this executes.
+     *
+     * Order matters:
+     *   1. Token movement-lock release (player path only — no-op for GM)
+     *   2. NPC conversation-lock release + broadcast (gold icons return)
+     *   3. gmDismiss broadcast (player path) — ships history to GM for summary
+     *      OR direct _summarizeSession (GM-owned chat path)
+     *      OR stopAudio (spectator path — handled in fast branch above, but
+     *      defensive fallback here for non-GM, non-owner edge case)
+     */
+    async _runBackgroundClose(s) {
+        // Token movement-lock release. _lockPlayerToken is a no-op for GMs,
+        // so this matters only for player closes. Already wrapped in
+        // try/catch internally, so it can't throw.
+        try { await this._lockPlayerToken(false); } catch (_) {}
+
+        // Conversation lock release (player-owner path) — broadcast so other
+        // clients' chat icons go back to gold.
+        if (s.lockedActorId) {
+            if (s.npcLocks) s.npcLocks.delete(s.lockedActorId);
+            try {
+                game.socket.emit(`module.${MODULE_ID}`, {
+                    action: "lockClear", actorId: s.lockedActorId, userId: s.currentUserId,
+                });
+            } catch (_) {}
+        }
+
+        if (s.gmForced) return;
+
+        if (s.isConversationOwner) {
+            // Player closed their own chat. Ship the full history to the
+            // GM via socket — GM-side handler in ace-engine.mjs persists
+            // it to actor flags AND runs summarizeAndSaveSession to write
+            // the journal entry.
+            try {
+                game.socket.emit(`module.${MODULE_ID}`, {
+                    action:     "gmDismiss",
+                    actorId:    s.actor.id,
+                    tokenId:    s.tokenDocument?.id || null,
+                    source:     "player",
+                    playerName: s.closingPlayerName,
+                    history:    s.history,
+                });
+            } catch (_) {}
+        } else if (s.isGMUser) {
+            // GM closed a GM-owned chat (puppet mode). Run the summary
+            // directly — this is the slow one (AI summarizer call, ~5-30s).
+            // The window is already visually gone; the GM doesn't wait.
+            if (s.history?.length > 0) {
+                await this._summarizeSession();
+            }
+        } else {
+            // Edge case: non-GM, non-owner. Stop any audio that might
+            // still be playing on this client.
+            try {
+                game.socket.emit(`module.${MODULE_ID}`, {
+                    action: "stopAudio", targetUserId: s.currentUserId
+                });
+            } catch (_) {}
+        }
     }
 
     async _setFlagSafe(key, value) {
@@ -1463,7 +1501,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         });
     }
 
-    _lockPlayerToken(locked) {
+    async _lockPlayerToken(locked) {
         if (game.user.isGM) return;
         // Find the player's owned token on the scene (may differ from game.user.character)
         const token = canvas.tokens?.placeables?.find(t =>
@@ -1472,17 +1510,126 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         ) ?? canvas.tokens?.placeables?.find(t => t.document?.actorId === game.user.character?.id);
         if (!token) return;
 
-        if (locked) {
-            this._lockedTokenId = token.id;
-            token.document.setFlag(MODULE_ID, "conversationLocked", true);
-            console.log(`ACE: Engine | Player token movement locked`);
-        } else {
-            this._lockedTokenId = null;
-            // Clear both new and legacy flags
-            token.document.unsetFlag(MODULE_ID, "conversationLocked");
-            try { token.document.unsetFlag("npclink", "conversationLocked").catch(() => {}); } catch(_) {}
-            console.log(`ACE: Engine | Player token movement unlocked`);
+        try {
+            if (locked) {
+                this._lockedTokenId = token.id;
+                await token.document.setFlag(MODULE_ID, "conversationLocked", true);
+                console.log(`ACE: Engine | Player token movement locked`);
+            } else {
+                this._lockedTokenId = null;
+                // Clear both new and legacy flags. AWAIT both — the close()
+                // path used to fire-and-forget these, and if the app context
+                // tore down before the flag write completed (browser reload,
+                // crash, hard ESC) the flag would persist to the next session
+                // and block all player movement until manually cleared.
+                await token.document.unsetFlag(MODULE_ID, "conversationLocked");
+                try { await token.document.unsetFlag("npclink", "conversationLocked"); } catch(_) {}
+                console.log(`ACE: Engine | Player token movement unlocked`);
+            }
+        } catch (err) {
+            console.warn("ACE: Engine | _lockPlayerToken update failed:", err);
         }
+    }
+
+    /**
+     * Called on the GM client when the conversing player closes their
+     * conversation window (or otherwise terminates — scene change, etc.).
+     * Surfaces four layered notifications so the GM never sits on a stale
+     * conversation thinking it's still active:
+     *   1. Yellow banner across the top of the chat window
+     *   2. Foundry toast notification (top-right corner)
+     *   3. System message inserted into the chat log
+     *   4. Two-tone chime via Web Audio (no asset dependency)
+     *   5. Input field disabled with explanatory placeholder
+     * Idempotent — re-calls are no-ops once the banner is shown.
+     */
+    async notifyPlayerEnded(playerName = "Player") {
+        if (this._playerHasEnded) return;  // idempotent
+        this._playerHasEnded = true;
+
+        const npcName = this.npcName || this.actor?.name || "the NPC";
+        // GM puppet windows keep their input ENABLED — the GM should be
+        // able to keep speaking as the NPC after the player closes (taunt
+        // them in chat, drop a parting threat, etc.). Spectator windows
+        // (any non-GM client watching) get the input disabled because
+        // they can't do anything useful with it anyway.
+        const isGmPuppet = game.user.isGM && !this.readOnly;
+
+        // ── 1. Banner inside the conversation window ─────────────
+        try {
+            const root = this.element;
+            if (root && !root.querySelector(".ace-engine-player-ended-banner")) {
+                const banner = document.createElement("div");
+                banner.className = "ace-engine-player-ended-banner";
+                const bannerText = isGmPuppet
+                    ? `<strong>${this._escAttr(playerName)}</strong> has closed their chat — you can still puppet <strong>${this._escAttr(npcName)}</strong>. Type a line to drop it into Foundry chat as the NPC.`
+                    : `<strong>${this._escAttr(playerName)}</strong> has ended this conversation with <strong>${this._escAttr(npcName)}</strong>. Close this window when you're done reviewing.`;
+                banner.innerHTML = `
+                    <i class="fa-solid fa-circle-exclamation"></i>
+                    <span>${bannerText}</span>
+                `;
+                // Insert at the very top of the conversation pane, above
+                // the chat log. Element children vary by template — try
+                // a few likely anchors so this works regardless of layout.
+                const anchor = root.querySelector(".window-content")
+                            ?? root.querySelector("#ace-engine-log")?.parentElement
+                            ?? root;
+                anchor.prepend(banner);
+            }
+        } catch (_) { /* banner is non-critical, don't block */ }
+
+        // ── 2. Foundry toast ────────────────────────────────────
+        try { ui.notifications?.warn(`${playerName} ended the conversation with ${npcName}.`); }
+        catch (_) {}
+
+        // ── 3. System message in the chat log ───────────────────
+        try { this.renderMessage("system", `── ${playerName} ended the conversation ──`); }
+        catch (_) {}
+
+        // ── 4. Two-tone chime via Web Audio (no asset needed) ──
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (Ctx) {
+                const ctx  = new Ctx();
+                const osc  = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.setValueAtTime(660, ctx.currentTime);                 // E5
+                osc.frequency.setValueAtTime(880, ctx.currentTime + 0.12);          // A5
+                gain.gain.setValueAtTime(0.15, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+                osc.start(ctx.currentTime);
+                osc.stop(ctx.currentTime + 0.35);
+                setTimeout(() => ctx.close().catch(() => {}), 600);
+            }
+        } catch (_) { /* audio may be blocked */ }
+
+        // ── 5. Disable input + update placeholder ───────────────
+        // Skip for GM puppet windows — GM keeps typing capability so they
+        // can taunt the player after the player closes. Only spectator
+        // (readOnly) windows get the input disabled.
+        if (!isGmPuppet) {
+            try {
+                const input = this.element?.querySelector?.("#ace-engine-input");
+                if (input) {
+                    input.disabled = true;
+                    input.placeholder = `${playerName} has left — close this window when done`;
+                }
+                // Also disable the Send button if there is one
+                const sendBtn = this.element?.querySelector?.("#ace-engine-send, [data-action=\"send\"]");
+                if (sendBtn) sendBtn.disabled = true;
+            } catch (_) { /* non-critical */ }
+        }
+    }
+
+    /** Defensive attribute-escape for innerHTML strings. */
+    _escAttr(s) {
+        return String(s ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
     }
 
     _watchForSceneChange() {

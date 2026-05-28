@@ -11,10 +11,39 @@
 // timestamp. UI calls use the cached list if it's < 24h old. The
 // "Refresh Model List" button forces a re-fetch.
 
+import { getModelsForProvider as _remoteModelsForProvider } from "./remote-catalog.mjs";
+
 const MODULE_ID = "ace-engine";
 
 const CACHE_SETTING = "modelCatalogCache";  // registered lazily on first use
 const CACHE_TTL_MS  = 24 * 60 * 60 * 1000;  // 24 hours
+
+/**
+ * Build a hint lookup table for the given provider, preferring remote
+ * catalog entries over bundled hardcoded hints. Returns a plain object
+ * keyed by model id. Used by every _fetchXxxModels function below to
+ * enrich raw API responses with stars + descriptions.
+ *
+ * Cascade:
+ *   1. Remote catalog (GitHub-hosted, refreshed daily)
+ *   2. Bundled hint map (this file's _OPENAI_HINTS etc.)
+ *   3. None — model surfaces as raw id only
+ */
+function _hintTable(provider, bundledFallback) {
+    const remote = _remoteModelsForProvider(provider);
+    if (!remote.length) return bundledFallback;
+    // Convert remote array to id-keyed object matching the bundled shape.
+    const merged = { ...bundledFallback };
+    for (const m of remote) {
+        merged[m.id] = {
+            star:   !!m.star,
+            hint:   m.hint ?? "",
+            vision: !!m.vision,
+            label:  m.label ?? m.id,
+        };
+    }
+    return merged;
+}
 
 // ── Public API ────────────────────────────────────────────────────────────
 
@@ -130,6 +159,24 @@ async function _fetchLmStudioModels(apiUrl) {
     }));
 }
 
+// Curated OpenAI catalog. The /v1/models endpoint returns 50+ entries
+// including every dated snapshot, instruct variant, search-preview,
+// embedding model etc. — useless for a UI dropdown. This map is the
+// allow-list: only models whose IDs match a key here are surfaced to
+// the user, with the labels below. v1.6.14.
+const _OPENAI_HINTS = Object.freeze({
+    // ── Latest / sweet spots ──
+    "gpt-4.1":         { star: false, hint: "Latest top quality · $$",         vision: true },
+    "gpt-4.1-mini":    { star: true,  hint: "Latest sweet spot · fast + cheap · $", vision: true },
+    "gpt-4.1-nano":    { star: false, hint: "Cheapest · $",                    vision: true },
+    // ── Legacy flagship line (still strong, well-supported) ──
+    "gpt-4o":          { star: false, hint: "Legacy flagship · top quality · $$", vision: true },
+    "gpt-4o-mini":     { star: true,  hint: "Legacy sweet spot · fast + cheap · $", vision: true },
+    // ── Reasoning models ──
+    "o3-mini":         { star: false, hint: "Reasoning · fast structured thinking · $", vision: false },
+    "o1":              { star: false, hint: "Reasoning · deep step-by-step · $$$",   vision: false },
+});
+
 async function _fetchOpenAIModels(apiKey) {
     if (!apiKey) return _fallbackOpenAIModels();
     const resp = await fetch("https://api.openai.com/v1/models", {
@@ -141,18 +188,39 @@ async function _fetchOpenAIModels(apiKey) {
         return _fallbackOpenAIModels();
     }
     const data = await resp.json();
-    // Filter out non-chat models (embeddings, image gen, audio, deprecated etc.)
-    const CHAT_RX = /^(gpt-4|gpt-3\.5|o1|o3|chatgpt)/i;
+    // Curated filter: surface only models present in the hint table
+    // (remote catalog if available, falling back to bundled _OPENAI_HINTS).
+    // Everything else (dated snapshots, instruct variants, tts, dall-e,
+    // embeddings) is dropped from the dropdown.
+    const hints  = _hintTable("openai", _OPENAI_HINTS);
     const models = (data.data ?? [])
-        .filter(m => CHAT_RX.test(m.id))
-        .map(m => ({
-            value:  m.id,
-            label:  m.id,
-            free:   false,
-            vision: /gpt-4o|gpt-4-turbo|gpt-4\.1|o1|o3/i.test(m.id),
-        }));
+        .filter(m => hints[m.id])
+        .map(m => {
+            const h    = hints[m.id];
+            const name = h.label ?? m.id;
+            return {
+                value:  m.id,
+                label:  `${h.star ? "⭐ " : ""}${name} — ${h.hint}`,
+                free:   false,
+                vision: !!h.vision,
+            };
+        });
     return models.length ? models : _fallbackOpenAIModels();
 }
+
+// Curated Anthropic catalog. The /v1/models endpoint returns every dated
+// snapshot ever, going back to claude-2.x. This allow-list surfaces only
+// the modern picks with a readable label + hint. v1.6.14.
+const _ANTHROPIC_HINTS = Object.freeze({
+    // ── Latest generation (Claude 4 family) ──
+    "claude-sonnet-4-20250514":     { star: true,  hint: "Latest top quality · sweet spot · $$" },
+    "claude-haiku-4-5-20251001":    { star: true,  hint: "Latest cheap + fast · $" },
+    "claude-opus-4-1-20250805":     { star: false, hint: "Deepest reasoning v4.1 · $$$$" },
+    "claude-opus-4-20250514":       { star: false, hint: "Deepest reasoning · $$$$" },
+    // ── Legacy (still excellent) ──
+    "claude-3-5-sonnet-20241022":   { star: false, hint: "Legacy flagship · $$" },
+    "claude-3-5-haiku-20241022":    { star: false, hint: "Legacy cheap + fast · $" },
+});
 
 async function _fetchAnthropicModels(apiKey) {
     if (!apiKey) return _fallbackAnthropicModels();
@@ -167,14 +235,48 @@ async function _fetchAnthropicModels(apiKey) {
         });
         if (!resp.ok) return _fallbackAnthropicModels();
         const data = await resp.json();
-        return (data.data ?? []).map(m => ({
-            value:  m.id,
-            label:  m.display_name || m.id,
-            free:   false,
-            vision: /claude-3|claude-sonnet-4|claude-haiku-4|claude-opus-4/i.test(m.id),
-        }));
+        // Curated filter: surface only models in the hint table (remote
+        // catalog if available, falling back to bundled _ANTHROPIC_HINTS).
+        // Drops Claude 2.x and older snapshots.
+        const hints  = _hintTable("anthropic", _ANTHROPIC_HINTS);
+        const models = (data.data ?? [])
+            .filter(m => hints[m.id])
+            .map(m => {
+                const h    = hints[m.id];
+                const star = h.star ? "⭐ " : "";
+                const name = h.label ?? m.display_name ?? m.id;
+                return {
+                    value:  m.id,
+                    label:  `${star}${name} — ${h.hint}`,
+                    free:   false,
+                    vision: !!h.vision,
+                };
+            });
+        return models.length ? models : _fallbackAnthropicModels();
     } catch (_) { return _fallbackAnthropicModels(); }
 }
+
+// Curated OpenRouter catalog. The /models endpoint returns 300+ entries
+// (every aggregator on every quantization, including obscure community
+// finetunes). This allow-list surfaces only the picks worth showing to a
+// new user: a few free workhorses + premium picks across providers. v1.6.14.
+const _OPENROUTER_HINTS = Object.freeze({
+    // ── FREE tier (no card, rate-limited but plenty for a single GM) ──
+    "meta-llama/llama-3.3-70b-instruct:free":           { star: true,  hint: "⭐ FREE — best free narrative",        vision: false },
+    "deepseek/deepseek-chat-v3:free":                   { star: true,  hint: "⭐ FREE — strong reasoning",            vision: false },
+    "deepseek/deepseek-r1:free":                        { star: false, hint: "FREE — reasoning (uses many tokens)",  vision: false },
+    "qwen/qwen-2.5-72b-instruct:free":                  { star: false, hint: "FREE — balanced quality",              vision: false },
+    "mistralai/mistral-small-3.1-24b-instruct:free":    { star: false, hint: "FREE — fast classic",                  vision: false },
+    "google/gemma-3-27b-it:free":                       { star: false, hint: "FREE — Google's open-source",          vision: false },
+    // ── PAID premium picks ──
+    "anthropic/claude-sonnet-4":                        { star: false, hint: "Top narrative · $$",                   vision: true  },
+    "anthropic/claude-haiku-4-5":                       { star: true,  hint: "⭐ Premium quality for cheap · $",      vision: true  },
+    "openai/gpt-4o-mini":                               { star: true,  hint: "⭐ OpenAI cheap workhorse · $",         vision: true  },
+    "openai/gpt-4.1-mini":                              { star: false, hint: "OpenAI sweet spot · $",                vision: true  },
+    "meta-llama/llama-3.3-70b-instruct":                { star: false, hint: "Paid Llama 3.3 70B · $",               vision: false },
+    "deepseek/deepseek-chat-v3":                        { star: false, hint: "DeepSeek V3 paid · cheap & strong",    vision: false },
+    "google/gemini-2.5-flash-lite":                     { star: false, hint: "Gemini Flash-Lite · $",                vision: true  },
+});
 
 async function _fetchOpenRouterModels() {
     // OpenRouter's /models endpoint is public — no key needed
@@ -183,17 +285,37 @@ async function _fetchOpenRouterModels() {
     });
     if (!resp.ok) throw new Error(`OpenRouter /models returned ${resp.status}`);
     const data = await resp.json();
-    return (data.data ?? []).map(m => {
-        const promptPrice = parseFloat(m?.pricing?.prompt ?? "0");
-        const free = promptPrice === 0 || /:free$/i.test(m.id);
-        const visionRx = /vision|gpt-4o|gpt-4\.1|claude-sonnet-4|claude-haiku-4|claude-opus-4|claude-3|gemini|llava|qwen.*-vl|llama-3\.2-.*vision/i;
-        return {
-            value:  m.id,
-            label:  free ? `${m.name || m.id}  ·  FREE` : `${m.name || m.id}  ·  $${(promptPrice * 1_000_000).toFixed(2)}/M`,
-            free,
-            vision: visionRx.test(m.id),
-        };
-    }).sort(_sortFreeFirst);
+    // Curated filter: surface only models in the hint table. Everything
+    // else (IBM Granite, MythoMax, niche community finetunes, etc.) is
+    // dropped so users see a small, decidable list.
+    const hints = _hintTable("openrouter", _OPENROUTER_HINTS);
+    const models = (data.data ?? [])
+        .filter(m => hints[m.id])
+        .map(m => {
+            const h           = hints[m.id];
+            const promptPrice = parseFloat(m?.pricing?.prompt ?? "0");
+            const free        = promptPrice === 0 || /:free$/i.test(m.id);
+            const star        = h.star ? "⭐ " : "";
+            const priceLabel  = free ? "FREE" : `$${(promptPrice * 1_000_000).toFixed(2)}/M`;
+            const name        = h.label ?? m.name ?? m.id;
+            return {
+                value:  m.id,
+                label:  `${star}${name} — ${h.hint} · ${priceLabel}`,
+                free,
+                vision: !!h.vision,
+            };
+        });
+    return models.length ? models.sort(_sortFreeFirst) : _fallbackOpenRouterModels();
+}
+
+function _fallbackOpenRouterModels() {
+    // Used when OpenRouter's catalog endpoint is down or filtered to zero.
+    return [
+        { value: "meta-llama/llama-3.3-70b-instruct:free", label: "⭐ Llama 3.3 70B — Best free narrative · FREE",  free: true,  vision: false },
+        { value: "deepseek/deepseek-chat-v3:free",         label: "⭐ DeepSeek V3 — Strong reasoning · FREE",       free: true,  vision: false },
+        { value: "anthropic/claude-haiku-4-5",             label: "⭐ Claude Haiku 4.5 — Premium cheap · paid",     free: false, vision: true  },
+        { value: "openai/gpt-4o-mini",                     label: "⭐ GPT-4o Mini — OpenAI cheap workhorse · paid", free: false, vision: true  },
+    ];
 }
 
 // ── Static fallbacks (when no API key or fetch fails) ─────────────────────

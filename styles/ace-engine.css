@@ -7185,6 +7185,136 @@ li.ace-toolbar-btn:hover {
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
 }
 
+/* ── "Player ended conversation" banner — shows on GM-side NPC chat
+   windows when the conversing player closes their side. Yellow strip
+   across the top so the GM never sits on a stale conversation.
+   Rendered by conversation-app.mjs notifyPlayerEnded(). */
+.ace-engine-player-ended-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin: 0 0 8px 0;
+  background:
+    linear-gradient(180deg, rgba(255, 200, 60, 0.22), rgba(180, 120, 20, 0.15)),
+    rgba(0, 0, 0, 0.6);
+  border-top: 2px solid #ffb84d;
+  border-bottom: 2px solid rgba(255, 184, 77, 0.4);
+  color: #f8e8c0;
+  font-family: "Rajdhani", "Signika", sans-serif;
+  font-size: 14px;
+  line-height: 1.35;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.9);
+  animation: ace-engine-banner-pulse 1.5s ease-in-out 2;
+}
+.ace-engine-player-ended-banner i {
+  color: #ffb84d;
+  font-size: 22px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  flex-shrink: 0;
+}
+.ace-engine-player-ended-banner strong { color: #ffd47a; }
+
+@keyframes ace-engine-banner-pulse {
+  0%, 100% { box-shadow: 0 0 0 rgba(255, 184, 77, 0); }
+  50%      { box-shadow: 0 0 16px rgba(255, 184, 77, 0.6); }
+}
+
+/* ── Deprecation banners — yellow warning strip that appears above the AI
+   tab settings when a user-selected model is on the catalog's sunset list.
+   Rendered by _buildDeprecationBanners(), wired by clicks on
+   acceptDeprecationSwap / dismissDeprecation actions. */
+.ace-cfg-deprecation {
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  margin: 8px 0 12px 0;
+  background:
+    linear-gradient(180deg, rgba(255, 200, 60, 0.18), rgba(180, 120, 20, 0.12)),
+    rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 200, 60, 0.55);
+  border-left: 4px solid #ffb84d;
+  border-radius: 4px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.ace-cfg-deprecation-icon {
+  color: #ffb84d;
+  font-size: 26px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  text-align: center;
+  padding-top: 2px;
+}
+.ace-cfg-deprecation-body {
+  font-family: "Rajdhani", "Signika", sans-serif;
+  font-size: 15px;
+  color: #f8e8c0;
+  line-height: 1.45;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+}
+.ace-cfg-deprecation-body strong { color: #ffd47a; }
+.ace-cfg-deprecation-body em     { color: #ffc88a; font-style: italic; }
+.ace-cfg-deprecation-reason {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #d4c090;
+  font-style: italic;
+}
+.ace-cfg-deprecation-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+  min-width: 200px;
+}
+.ace-cfg-plainbtn-subtle {
+  opacity: 0.7;
+  font-size: 12px;
+}
+.ace-cfg-plainbtn-subtle:hover { opacity: 1; }
+
+/* ── Featured rows (AI Provider + the 3 Model dropdowns) — the noun phrase
+   ("AI Model", "Chat Model", etc.) renders big and brass-gold; the
+   descriptive tail ("— Quality / Default…") renders inline in the regular
+   panel font so the row stays scannable. Two-part split is built in
+   _buildSettingsHTML via the FEATURED_LABELS map. Dropdown text gets a
+   couple-pixel bump for older eyes. */
+.ace-cfg-row--featured {
+  padding: 22px 4px 28px 4px;
+  grid-template-columns: auto 1fr;
+}
+.ace-cfg-row--featured label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 16px;        /* base for the subtitle; the headline span overrides */
+  line-height: 1.25;
+  margin: 0;
+}
+.ace-cfg-row--featured label .ace-cfg-headline {
+  font-family: "Rajdhani", "Signika", sans-serif;
+  font-weight: 700;
+  font-size: 30px;
+  line-height: 1.05;
+  color: #ffd47a;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.95);
+  letter-spacing: 0.5px;
+}
+.ace-cfg-row--featured label .ace-cfg-headline-sub {
+  font-family: "Rajdhani", "Signika", sans-serif;
+  font-weight: 400;
+  font-size: 16px;
+  color: #c9b890;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85);
+  letter-spacing: 0.2px;
+}
+.ace-cfg-row--featured .ace-cfg-input select,
+.ace-cfg-row--featured .ace-cfg-input input[type="text"] {
+  font-size: 17px;
+}
+
 /* Inputs — dark inset on dark steel, brass border on focus */
 .ace-cfg-input input[type="text"],
 .ace-cfg-input input[type="password"],
@@ -7200,7 +7330,7 @@ li.ace-toolbar-btn:hover {
   border-radius: 3px;
   font-family: "Rajdhani", "Signika", sans-serif;
   font-size: 15px;
-  min-width: 240px;
+  min-width: 300px;
   box-shadow:
     inset 0 1px 2px rgba(0, 0, 0, 0.65),
     0 1px 0 rgba(184, 148, 58, 0.18);

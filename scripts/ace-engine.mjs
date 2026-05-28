@@ -5,6 +5,7 @@
 
 import { AcePanel }          from "./panel.mjs";
 import { AceSettings }       from "./settings.mjs";
+import { initRemoteCatalog } from "./remote-catalog.mjs";
 import { SceneContext }       from "./scene-context.mjs";
 import { AiProvider }         from "./ai-provider.mjs";
 import { SuggestionEngine }   from "./suggestion-engine.mjs";
@@ -646,6 +647,12 @@ Hooks.once("ready", async () => {
   // ── Clean up stray CONFIG.debug.hooks left on by other modules (e.g. chat-images)
   if (CONFIG.debug?.hooks) CONFIG.debug.hooks = false;
 
+  // ── Remote model catalog: load bundled JSON + kick off background fetch ──
+  // Pulls a fresh model-catalog.json from the ACE GitHub repo once a day
+  // so users get new models / deprecation warnings without a module
+  // release. Falls back gracefully to the bundled copy if offline.
+  initRemoteCatalog().catch(err => console.warn(`${MODULE_ID} | remote catalog init failed:`, err));
+
   // ── Socket listener — runs for ALL users (GM + players) ──────
   // This lets players receive SFX broadcast by the GM.
   game.socket.on(`module.${MODULE_ID}`, (data) => {
@@ -771,6 +778,44 @@ Hooks.once("ready", async () => {
         console.warn(`${MODULE_ID} | gmDismiss spectator close failed:`, err);
       }
 
+      // ── GM awareness: a player just closed THEIR side. The GM's
+      // open conversation window — which is the spectator view of the
+      // player's chat (readOnly:true by design — see the spectator-close
+      // block above which explicitly skips GM clients) — stays open so
+      // the GM can review what was said. We layer four notifications
+      // onto it so the GM isn't sitting on a stale conversation:
+      //   1. Yellow banner across the top of the window
+      //   2. Foundry toast in the top-right
+      //   3. System message in the chat log
+      //   4. Two-tone audio chime
+      //   5. Input field disabled (no-op for spectator windows but
+      //      harmless if there's no input element)
+      // Only fires for source=player (not when the GM themselves
+      // dismisses via the puppet tool, which would be source=gm).
+      // NOTE: we explicitly do NOT skip readOnly windows here — the
+      // GM's spectator view IS readOnly, and that's exactly the window
+      // we want to update.
+      try {
+        const map = npcChatState?.openConversations;
+        if (map && game.user.isGM && data.source === "player") {
+          let matched = 0;
+          for (const [, app] of map.entries()) {
+            if (!app) continue;
+            if (app.actor?.id !== data.actorId) continue;
+            if (data.tokenId && app.tokenDocument?.id !== data.tokenId) continue;
+            if (typeof app.notifyPlayerEnded === "function") {
+              matched++;
+              app.notifyPlayerEnded(data.playerName || "Player").catch(err =>
+                console.warn(`${MODULE_ID} | notifyPlayerEnded threw:`, err)
+              );
+            }
+          }
+          console.log(`${MODULE_ID} | gmDismiss GM-notify: ${matched} matching window(s) updated for actor ${data.actorId}`);
+        }
+      } catch (err) {
+        console.warn(`${MODULE_ID} | gmDismiss GM-notify failed:`, err);
+      }
+
       // ── Second: GM-only persistence + journal summary ─────────────
       if (!game.user.isGM) return;
       if (!Array.isArray(data.history) || !data.history.length) return;
@@ -870,9 +915,25 @@ Hooks.once("ready", async () => {
           return;
         }
 
-        // No window — pop open a spectator
+        // No window — auto-open ONLY for GM clients. The GM wants to
+        // see what a player is chatting about (spectator), and to be
+        // able to interject as the NPC (puppet mode), so we always pop
+        // the full interactive window for them.
+        //
+        // Non-GM (player) clients do NOT auto-open. If a player closed
+        // their chat with this NPC, they meant it — a later GM puppet
+        // line should NOT yank the window back onto their screen. The
+        // puppet line still appears in the regular Foundry chat log
+        // (posted by handlePuppet's ChatMessage.create) so the player
+        // sees what the NPC said; they just have to click the NPC's
+        // chat icon to re-engage.
+        if (!game.user.isGM) return;
         import("./npc/conversation-app.mjs").then(({ ConversationApp }) => {
-          const spec = new ConversationApp(actor, { readOnly: true, tokenDocument: tokenDoc });
+          const spec = new ConversationApp(actor, {
+            readOnly:      false,
+            isOwner:       true,
+            tokenDocument: tokenDoc,
+          });
           spec._pendingSpectatorMsgs = [{ role: data.role, html }];
           npcChatState?.openConversations?.set?.(convoKey, spec);
           Promise.resolve(spec.render(true)).then(() => {

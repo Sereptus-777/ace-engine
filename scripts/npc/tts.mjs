@@ -261,12 +261,18 @@ class TTSEngine {
                 const fadeStart = Math.max(0, maxDuration - 0.3);
                 gain.gain.setValueAtTime(1.0, ctx.currentTime + fadeStart);
                 gain.gain.linearRampToValueAtTime(0.0, ctx.currentTime + maxDuration);
-                source.stop(ctx.currentTime + maxDuration + 0.05);
             } else {
                 source.connect(ctx.destination);
             }
 
+            // Web Audio API requires start() BEFORE stop() — calling stop on
+            // a source that hasn't started throws InvalidStateError. The
+            // capped-duration stop schedule moves here, after start, so the
+            // node is valid by the time stop is scheduled.
             source.start(0);
+            if (needsCap) {
+                source.stop(ctx.currentTime + maxDuration + 0.05);
+            }
             this._currentSource = source;
             this.isPlaying = true;
 

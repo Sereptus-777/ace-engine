@@ -11,6 +11,8 @@
 // hence the "Open Configuration" button doing nothing — the ApplicationV2-
 // direct flavor is the proven path.
 
+import { getDeprecationFor } from "./remote-catalog.mjs";
+
 const MODULE_ID = "ace-engine";
 const { ApplicationV2 } = foundry.applications.api;
 
@@ -36,7 +38,7 @@ const TABS = [
     {
         id: "ai", label: "AI Provider", icon: "fa-solid fa-microchip",
         intro: "Connect to OpenAI, Anthropic, Ollama, or any compatible model. All AI fields are edited here — the main settings page just shows what's currently active and a Test Connection button.",
-        keys: ["aiProvider", "apiKey", "apiUrl", "modelName", "digestApiKey", "digestModel", "gameSystem", "systemPrompt", "maxContextTokens", "maxResponseTokens"],
+        keys: ["aiProvider", "modelName", "chatModel", "digestModel", "apiKey", "apiUrl", "chatApiKey", "digestApiKey", "gameSystem", "systemPrompt", "maxContextTokens", "maxResponseTokens"],
     },
     {
         id: "voice", label: "Voice & TTS", icon: "fa-solid fa-microphone",
@@ -175,6 +177,7 @@ export class AceConfigPanel extends ApplicationV2 {
                         <h2>${this._esc(activeTab.label)}</h2>
                     </header>
                     ${activeTab.intro ? `<p class="ace-cfg-intro">${this._esc(activeTab.intro)}</p>` : ""}
+                    ${activeTab.id === "ai" ? this._buildDeprecationBanners() : ""}
                     ${activeTab.id === "ai" ? this._buildAiTabActions() : ""}
                     <div class="ace-cfg-settings">${settingsHtml}</div>
                 </div>
@@ -196,6 +199,20 @@ export class AceConfigPanel extends ApplicationV2 {
 
     _buildSettingsHTML(tab) {
         const rows = [];
+        // Four "headline" AI keys get the large-label treatment — provider
+        // pick + the three model-tier dropdowns. Each renders as a big
+        // brass-gold phrase + a regular-font subtitle on the same line.
+        // The big part is the bolded noun phrase; the subtitle is the
+        // descriptive tail. For "Digest Model" the source setting name is
+        // "Digest Extraction Model" with no natural split point, so this
+        // map hand-overrides the split. All other rows ignore this map and
+        // render meta.name as a single regular-font label.
+        const FEATURED_LABELS = {
+            aiProvider:  { big: "AI Provider",  sub: "" },
+            modelName:   { big: "AI Model",     sub: "— Quality / Default (session summaries, bios, lore)" },
+            chatModel:   { big: "Chat Model",   sub: "— NPC Conversations (speed-tier)" },
+            digestModel: { big: "Digest Model", sub: "— Extraction Model" },
+        };
         for (const key of tab.keys) {
             const fullKey = `${MODULE_ID}.${key}`;
             const meta = game.settings.settings.get(fullKey);
@@ -214,9 +231,18 @@ export class AceConfigPanel extends ApplicationV2 {
             const extras = key === "digestModel"
                 ? `<div class="ace-cfg-extras" data-digest-warning style="grid-column:1 / -1; display:none;"></div>`
                 : "";
+            const featured = FEATURED_LABELS[key];
+            const featuredClass = featured ? " ace-cfg-row--featured" : "";
+            // Featured rows: big phrase + regular-font subtitle on same line.
+            // Non-featured rows: standard meta.name rendering.
+            const labelHtml = featured
+                ? `<label for="ace-cfg-${this._esc(key)}">
+                       <span class="ace-cfg-headline">${this._esc(featured.big)}</span>${featured.sub ? `<span class="ace-cfg-headline-sub"> ${this._esc(featured.sub)}</span>` : ""}
+                   </label>`
+                : `<label for="ace-cfg-${this._esc(key)}">${this._esc(meta.name || key)}</label>`;
             rows.push(`
-                <div class="ace-cfg-row" data-setting="${this._esc(key)}">
-                    <label for="ace-cfg-${this._esc(key)}">${this._esc(meta.name || key)}</label>
+                <div class="ace-cfg-row${featuredClass}" data-setting="${this._esc(key)}">
+                    ${labelHtml}
                     <div class="ace-cfg-input">${inputHtml}</div>
                     ${meta.hint ? `<p class="ace-cfg-hint">${this._esc(meta.hint)}</p>` : ""}
                     ${extras}
@@ -310,6 +336,73 @@ export class AceConfigPanel extends ApplicationV2 {
             .replace(/>/g,  "&gt;")
             .replace(/"/g,  "&quot;")
             .replace(/'/g,  "&#39;");
+    }
+
+    // ─── Deprecation banners (sunset model warnings from remote catalog) ──
+    // Cross-references the user's three model settings (modelName / chatModel
+    // / digestModel) against the catalog's `deprecations` list. If any of
+    // them is on the sunset list AND the user hasn't dismissed it before,
+    // render a yellow strip offering a one-click swap to the recommended
+    // replacement.
+    //
+    // The banner reuses _buildHTML's render cycle for state changes:
+    // clicking "Switch" writes the replacement into the form field
+    // immediately + persists on Save Changes; clicking "Dismiss" writes to
+    // dismissedDeprecations and the banner disappears on next render.
+    _buildDeprecationBanners() {
+        // Collect current model values for all three tiers.
+        const tiers = [
+            { key: "modelName",   label: "Quality" },
+            { key: "chatModel",   label: "Chat" },
+            { key: "digestModel", label: "Digest" },
+        ];
+
+        // Read dismissed-list once so a single dismissed entry hides all
+        // banners for the same model id (the dismissal is "I know about
+        // this," not "I want one Tier to keep using it").
+        let dismissed = {};
+        try { dismissed = game.settings.get(MODULE_ID, "dismissedDeprecations") || {}; }
+        catch (_) { dismissed = {}; }
+
+        const banners = [];
+        const seenIds = new Set();
+        for (const t of tiers) {
+            let value = "";
+            try { value = String(game.settings.get(MODULE_ID, t.key) || ""); }
+            catch (_) { value = ""; }
+            if (!value) continue;
+            const dep = getDeprecationFor(value);
+            if (!dep) continue;
+            if (dismissed[dep.id]) continue;
+            if (seenIds.has(dep.id)) continue;  // one banner per deprecation
+            seenIds.add(dep.id);
+
+            const sunsetDate = dep.sunsets || "soon";
+            const replacement = dep.replacement || "the current recommendation";
+            const reason = dep.reason || "";
+            banners.push(`
+                <div class="ace-cfg-deprecation" data-deprecation-id="${this._esc(dep.id)}" data-tier-key="${this._esc(t.key)}" data-replacement="${this._esc(replacement)}">
+                    <div class="ace-cfg-deprecation-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                    <div class="ace-cfg-deprecation-body">
+                        <strong>${this._esc(dep.id)} is being retired ${this._esc(sunsetDate)}.</strong>
+                        Your <em>${this._esc(t.label)}</em> tier currently uses it. Recommended replacement: <strong>${this._esc(replacement)}</strong>.
+                        ${reason ? `<div class="ace-cfg-deprecation-reason">${this._esc(reason)}</div>` : ""}
+                    </div>
+                    <div class="ace-cfg-deprecation-actions">
+                        <button type="button" class="ace-cfg-plainbtn" data-action="acceptDeprecationSwap"
+                                data-tier-key="${this._esc(t.key)}" data-replacement="${this._esc(replacement)}"
+                                data-deprecation-id="${this._esc(dep.id)}">
+                            <i class="fa-solid fa-arrow-right-arrow-left"></i> Switch to ${this._esc(replacement)}
+                        </button>
+                        <button type="button" class="ace-cfg-plainbtn ace-cfg-plainbtn-subtle"
+                                data-action="dismissDeprecation" data-deprecation-id="${this._esc(dep.id)}">
+                            Dismiss
+                        </button>
+                    </div>
+                </div>
+            `);
+        }
+        return banners.join("");
     }
 
     // ─── AI Tab: Test Connection / Refresh Models actions ────────────────
@@ -419,6 +512,55 @@ export class AceConfigPanel extends ApplicationV2 {
         content.querySelector('[data-action="saveAll"]')?.addEventListener("click", () => this._saveAll());
         content.querySelector('[data-action="cancel"]')?.addEventListener("click",  () => this.close());
         content.querySelector('[data-action="resetTab"]')?.addEventListener("click", () => this._resetTab());
+
+        // Deprecation banner — "Switch to X" writes the replacement into the
+        // matching tier's form field. The user still has to click Save
+        // Changes to persist, so this is reversible until commit.
+        content.querySelectorAll('[data-action="acceptDeprecationSwap"]').forEach(btn => {
+            btn.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                const tierKey     = btn.dataset.tierKey;
+                const replacement = btn.dataset.replacement;
+                if (!tierKey || !replacement) return;
+                const field = content.querySelector(`[data-setting-key="${CSS.escape(tierKey)}"]`);
+                if (!field) return;
+                // For provider:model fields (chatModel / digestModel) we need
+                // to prepend the provider prefix. modelName takes the bare id.
+                let newValue = replacement;
+                if (tierKey !== "modelName" && !replacement.includes(":")) {
+                    // Default to "custom:" for provider-agnostic replacements;
+                    // catalog entries can override by including a colon already.
+                    newValue = `custom:${replacement}`;
+                }
+                // If the dropdown's <option> for newValue doesn't exist yet,
+                // add it on the fly so the select reflects the choice.
+                if (field.tagName === "SELECT" && !field.querySelector(`option[value="${CSS.escape(newValue)}"]`)) {
+                    const opt = document.createElement("option");
+                    opt.value = newValue;
+                    opt.textContent = `${newValue} (catalog recommendation)`;
+                    opt.selected = true;
+                    field.prepend(opt);
+                } else {
+                    field.value = newValue;
+                }
+                // Hide this specific banner immediately.
+                btn.closest(".ace-cfg-deprecation")?.remove();
+                ui.notifications?.info(`Tier "${tierKey}" set to ${newValue}. Click Save Changes to persist.`);
+            });
+        });
+        content.querySelectorAll('[data-action="dismissDeprecation"]').forEach(btn => {
+            btn.addEventListener("click", async (ev) => {
+                ev.preventDefault();
+                const depId = btn.dataset.deprecationId;
+                if (!depId) return;
+                try {
+                    const current = game.settings.get(MODULE_ID, "dismissedDeprecations") || {};
+                    current[depId] = { dismissedAt: Date.now() };
+                    await game.settings.set(MODULE_ID, "dismissedDeprecations", current);
+                } catch (_) { /* non-blocking */ }
+                btn.closest(".ace-cfg-deprecation")?.remove();
+            });
+        });
 
         // Eye-toggle: reveal / mask API key fields. Click flips the visual
         // text-security style on the target input + swaps the eye icon.

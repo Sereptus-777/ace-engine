@@ -305,17 +305,24 @@ export class AceSettings {
       hint: "Optional FAST model dedicated to real-time NPC chat. Empty = use your main Quality model for chat too. The Chat tier should prioritize SPEED over depth — sub-2-second responses feel natural in dialogue; 30-second waits don't. Set a smaller / faster model here while keeping your Quality model untouched for session summaries.",
       type: String,
       choices: {
-        "":                                       "— Same as main Quality model —",
-        // ── Local Ollama (FREE, fast, runs on your GPU) ──
-        "ollama:dolphin3:8b":                     "⭐ Ollama: Dolphin 3 8B (free, uncensored, ~2s on RTX 4090)",
-        "ollama:llama3.1:8b":                     "Ollama: Llama 3.1 8B (free, fast, family-friendly)",
-        "ollama:mistral-nemo:12b":                "Ollama: Mistral Nemo 12B (free, slightly slower, richer prose)",
-        "ollama:llama3.2:3b":                     "Ollama: Llama 3.2 3B (free, blazing fast on any GPU)",
+        "":                                                            "— Same as main Quality model —",
+        // ── OpenRouter free tier (no credit card, rate-limited) ──
+        "openrouter:meta-llama/llama-3.3-70b-instruct:free":           "⭐ OpenRouter: Llama 3.3 70B (FREE, strong narrative)",
+        "openrouter:deepseek/deepseek-chat-v3:free":                   "OpenRouter: DeepSeek V3 (FREE, strong reasoning)",
+        "openrouter:google/gemma-3-27b-it:free":                       "OpenRouter: Gemma 3 27B (FREE, Google open-source)",
+        // ── OpenRouter paid premium ──
+        "openrouter:anthropic/claude-haiku-4-5":                       "OpenRouter: Claude Haiku 4.5 (paid, premium)",
+        "openrouter:openai/gpt-4o-mini":                               "OpenRouter: GPT-4o Mini (paid, cheap)",
+        // ── Local Ollama (FREE, runs on your GPU) ──
+        "ollama:dolphin3:8b":                                          "Ollama: Dolphin 3 8B (free, uncensored, slow on most hardware)",
+        "ollama:llama3.1:8b":                                          "Ollama: Llama 3.1 8B (free, family-friendly)",
+        "ollama:mistral-nemo:12b":                                     "Ollama: Mistral Nemo 12B (free, richer prose)",
+        "ollama:llama3.2:3b":                                          "Ollama: Llama 3.2 3B (free, smallest)",
         // ── Cloud Anthropic ──
-        "anthropic:claude-haiku-4-5-20251001":    "⭐ Anthropic: Claude Haiku 4.5 (paid, sub-second, ~$0.80/M tokens)",
+        "anthropic:claude-haiku-4-5-20251001":                         "⭐ Anthropic: Claude Haiku 4.5 (paid, sub-second, premium)",
         // ── Cloud OpenAI ──
-        "openai:gpt-4o-mini":                     "OpenAI: GPT-4o Mini (paid, fast + cheap)",
-        "openai:gpt-4.1-nano":                    "OpenAI: GPT-4.1 Nano (paid, cheapest)",
+        "openai:gpt-4o-mini":                                          "OpenAI: GPT-4o Mini (paid, fast + cheap)",
+        "openai:gpt-4.1-nano":                                         "OpenAI: GPT-4.1 Nano (paid, cheapest)",
       },
       default: "",
     });
@@ -336,19 +343,22 @@ export class AceSettings {
       hint: "Model used for AI digest extraction (bulk structured data). Use a cheap/fast model here — GPT-4o Mini is ideal (~$0.50 per book). Requires a valid API key for the chosen provider.",
       type: String,
       choices: {
-        "":                                       "— Same as main model —",
-        // ── OpenAI (cheapest for extraction) ──
-        "openai:gpt-4o-mini":                     "⭐ OpenAI: GPT-4o Mini (~$0.50/book) — Best Value",
-        "openai:gpt-4.1-nano":                    "OpenAI: GPT-4.1 Nano (cheapest)",
-        "openai:gpt-4.1-mini":                    "OpenAI: GPT-4.1 Mini",
-        "openai:gpt-4o":                          "OpenAI: GPT-4o ($$)",
+        "":                                                            "— Same as main model —",
+        // ── OpenRouter free tier (no card, ~$0/book) ──
+        "openrouter:meta-llama/llama-3.3-70b-instruct:free":           "⭐ OpenRouter: Llama 3.3 70B (FREE)",
+        "openrouter:deepseek/deepseek-chat-v3:free":                   "OpenRouter: DeepSeek V3 (FREE)",
+        // ── OpenAI (cheapest paid for extraction) ──
+        "openai:gpt-4o-mini":                                          "⭐ OpenAI: GPT-4o Mini (~$0.50/book) — Best Value",
+        "openai:gpt-4.1-nano":                                         "OpenAI: GPT-4.1 Nano (cheapest paid)",
+        "openai:gpt-4.1-mini":                                         "OpenAI: GPT-4.1 Mini",
+        "openai:gpt-4o":                                               "OpenAI: GPT-4o ($$)",
         // ── Anthropic ──
-        "anthropic:claude-haiku-4-5-20251001":    "Anthropic: Claude Haiku 4.5 (~$4/book)",
-        "anthropic:claude-sonnet-4-20250514":     "Anthropic: Claude Sonnet 4 ($$$)",
+        "anthropic:claude-haiku-4-5-20251001":                         "Anthropic: Claude Haiku 4.5 (~$4/book)",
+        "anthropic:claude-sonnet-4-20250514":                          "Anthropic: Claude Sonnet 4 ($$$)",
         // ── Local (free) ──
-        "ollama:qwen2.5-coder:32b":              "Ollama: Qwen 2.5 Coder 32B (free)",
-        "ollama:qwen2.5:14b":                    "Ollama: Qwen 2.5 14B (free)",
-        "ollama:llama3.1":                       "Ollama: Llama 3.1 8B (free)",
+        "ollama:qwen2.5-coder:32b":                                    "Ollama: Qwen 2.5 Coder 32B (free)",
+        "ollama:qwen2.5:14b":                                          "Ollama: Qwen 2.5 14B (free)",
+        "ollama:llama3.1":                                             "Ollama: Llama 3.1 8B (free)",
       },
       default: "",
     });
@@ -969,6 +979,29 @@ export class AceSettings {
     // Populated by model-catalog.mjs; structure: { [provider]: { models: [...], fetchedAt: number } }
     // 24h TTL. Refreshed on demand via the "Refresh Model List" button.
     game.settings.register(MODULE_ID, "modelCatalogCache", {
+      scope: "world", config: false, type: Object, default: {},
+    });
+
+    // ── Remote catalog (GitHub-hosted, daily background fetch) ────────
+    // The bundled model-catalog.json ships with the module as a floor;
+    // remote-catalog.mjs refreshes it from a JSON file on the ACE repo
+    // once a day so new models / deprecation warnings reach users without
+    // requiring a module release. Cache stores the fetched object +
+    // timestamp; the toggle lets paranoid users opt out of the background
+    // network call.
+    s("autoUpdateCatalog", {
+      name: "Auto-update Model Catalog",
+      hint: "When ON, ACE checks the central catalog file on GitHub once a day in the background and pulls down any new models, label updates, or deprecation warnings. When OFF, you only get model-catalog updates when ACE itself updates. Recommended ON — there's no data sent, only a small JSON download.",
+      type: Boolean,
+      default: true,
+    });
+    game.settings.register(MODULE_ID, "remoteCatalogCache", {
+      scope: "world", config: false, type: Object, default: {},
+    });
+    // Per-world dismissed-deprecations log: once the user dismisses a
+    // sunset banner for a specific model, we don't nag them again.
+    // Structure: { [modelId]: { dismissedAt: number } }
+    game.settings.register(MODULE_ID, "dismissedDeprecations", {
       scope: "world", config: false, type: Object, default: {},
     });
   }

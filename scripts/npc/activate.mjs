@@ -309,6 +309,38 @@ function _registerHooks() {
         }
     });
 
+    // ── Stale conversation-lock sweep on world ready ────────────────────
+    // The `conversationLocked` flag is persisted to world data. If a chat
+    // closed in an unclean way (browser reload mid-conversation, crash,
+    // network drop before the close handler awaited its unsetFlag) the
+    // flag survives to the next session and blocks all player movement
+    // forever. On every world load, scan every token the current user
+    // owns and clear any lingering flag. By definition no conversation is
+    // active at world load — so any flag is stale and safe to drop.
+    Hooks.once("ready", async () => {
+        try {
+            let cleared = 0;
+            for (const scene of game.scenes) {
+                for (const tokenDoc of scene.tokens) {
+                    if (!tokenDoc.isOwner) continue;
+                    const a = tokenDoc.getFlag(MODULE_ID, "conversationLocked");
+                    const b = tokenDoc.flags?.npclink?.conversationLocked;
+                    if (!a && !b) continue;
+                    try {
+                        if (a) await tokenDoc.unsetFlag(MODULE_ID, "conversationLocked");
+                        if (b) await tokenDoc.unsetFlag("npclink", "conversationLocked");
+                        cleared++;
+                    } catch (_) { /* permission denied on tokens we don't own — skip */ }
+                }
+            }
+            if (cleared > 0) {
+                console.log(`ACE: Engine | Cleared ${cleared} stale conversation-lock flag(s) on world load.`);
+            }
+        } catch (err) {
+            console.warn("ACE: Engine | stale conversation-lock sweep failed:", err);
+        }
+    });
+
     // ── Scene change → end conversation ─────────────────────────────────
     Hooks.on("preUpdateToken", (tokenDoc, changes) => {
         if (!("sceneId" in changes)) return;
