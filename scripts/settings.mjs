@@ -226,39 +226,61 @@ export class AceSettings {
       default: "https://api.openai.com",
     });
 
-    s("modelName", {
-      name: "AI Model",
-      hint: "Which model your provider should use. Higher-tier models (GPT-4o, Claude Sonnet) write better prose but cost more. Smaller models (GPT-4o Mini, Haiku) are fast and cheap. For local Ollama, this is the model tag you've pulled.",
+    // ── User Hardware Profile ─────────────────────────────────────────────
+    // GM picks their GPU's VRAM tier; the model list below uses this hint
+    // (in the label text) to mark which models will run well on what hardware.
+    // Local Ollama models are ALWAYS FREE — no API cost — but require enough
+    // VRAM to fit. Paid cloud providers (Claude, OpenAI, OpenRouter) work on
+    // any hardware but charge per-token. Pick the tier that matches your GPU.
+    s("userGpuVram", {
+      name: "Your GPU VRAM (for local-model recommendations)",
+      hint: "How much VRAM your GPU has. The AI Model dropdown below uses this hint to mark which local (FREE) models will run well on your hardware. Skip if you're using a cloud provider (Claude / OpenAI / OpenRouter) — those work regardless. Check Task Manager → Performance → GPU → 'Dedicated GPU memory' if unsure.",
       type: String,
       choices: {
+        "unknown": "(I don't know / cloud provider only)",
+        "<4gb":    "Less than 4 GB (integrated GPU, old laptop)",
+        "4-6gb":   "4–6 GB (older or mid-range GPU)",
+        "6-10gb":  "6–10 GB (RTX 3060, RTX 4060, etc.)",
+        "10-16gb": "10–16 GB (RTX 4070, RTX 3080, etc.)",
+        "16-24gb": "16–24 GB (RTX 4080, RTX 3090, etc.)",
+        "24gb+":   "24 GB+ (RTX 4090, A6000, etc.)",
+      },
+      default: "unknown",
+    });
+
+    s("modelName", {
+      name: "AI Model",
+      hint: "Pick a model. ⭐ = best fit for your VRAM tier (set above). FREE = local Ollama, no API cost, runs on your GPU. $/$$ = paid cloud provider, works on any hardware but charges per request. Match the VRAM hint to your GPU — going over what fits will be very slow.",
+      type: String,
+      choices: {
+        // ── Cloud: Anthropic (top narrative quality) ──
+        "claude-sonnet-4-20250514":  "$$ ⭐ Claude Sonnet 4 — best narrative (cloud, paid)",
+        "claude-haiku-4-5-20251001": "$ Claude Haiku 4.5 — fast + cheap (cloud, paid)",
         // ── Cloud: OpenAI ──
-        "gpt-4o":                "GPT-4o (best quality, $$)",
-        "gpt-4o-mini":           "⭐ GPT-4o Mini (fast + great quality, $) — Recommended",
-        "gpt-4.1":              "GPT-4.1 (latest, $$)",
-        "gpt-4.1-mini":         "GPT-4.1 Mini (latest mini, $)",
-        "gpt-4.1-nano":         "GPT-4.1 Nano (blazing fast, cheapest)",
-        // ── Cloud: Anthropic ──
-        "claude-sonnet-4-20250514":  "Claude Sonnet 4 (excellent RP, $$)",
-        "claude-haiku-4-5-20251001": "Claude Haiku 4.5 (blazing fast, $)",
-        // ── Local: Ollama / LM Studio ──
-        "llama3.2":              "Llama 3.2 (8B — blazing fast)",
-        "llama3.1":              "Llama 3.1 (8B — balanced)",
-        "llama3.1:70b":          "Llama 3.1 (70B — best local, slow)",
-        "mistral":               "Mistral (7B — blazing fast)",
-        "mixtral":               "Mixtral (8x7B — great quality)",
-        "qwen2.5-coder:32b":    "⭐ Qwen 2.5 Coder (32B — best local RP) — Recommended",
-        "qwen2.5:14b":           "Qwen 2.5 (14B — good balance)",
-        "qwen2.5:32b":           "Qwen 2.5 (32B — excellent)",
-        "deepseek-r1:14b":       "DeepSeek R1 (14B — reasoning)",
-        "deepseek-r1:32b":       "DeepSeek R1 (32B — strong reasoning)",
-        "gemma2":                "Gemma 2 (9B — blazing fast)",
-        "nous-hermes2":          "Nous Hermes 2 (great RP)",
-        // ── OpenRouter ──
-        "openai/gpt-4o":         "OpenRouter → GPT-4o",
-        "openai/gpt-4o-mini":    "OpenRouter → GPT-4o Mini",
-        "anthropic/claude-sonnet-4-20250514": "OpenRouter → Claude Sonnet 4",
-        "google/gemini-2.0-flash-001": "OpenRouter → Gemini 2.0 Flash (blazing fast)",
-        "meta-llama/llama-3.1-70b-instruct": "OpenRouter → Llama 3.1 70B",
+        "gpt-4o":         "$$ GPT-4o — top quality (cloud, paid)",
+        "gpt-4o-mini":    "$ ⭐ GPT-4o Mini — fast sweet-spot (cloud, paid)",
+        "gpt-4.1":        "$$ GPT-4.1 — latest (cloud, paid)",
+        "gpt-4.1-mini":   "$ GPT-4.1 Mini — latest mini (cloud, paid)",
+        "gpt-4.1-nano":   "$ GPT-4.1 Nano — cheapest (cloud, paid)",
+        // ── Local: Ollama (FREE — runs on your machine) ──
+        "llama3.3:70b":       "FREE ⭐ Llama 3.3 (70B) — needs 24+ GB VRAM — Claude-tier narrative",
+        "qwen2.5:32b":        "FREE Qwen 2.5 (32B) — needs 16+ GB VRAM — strong reasoning",
+        "deepseek-r1:32b":    "FREE DeepSeek R1 (32B) — needs 16+ GB VRAM — best reasoning",
+        "mistral-nemo:12b":   "FREE ⭐ Mistral Nemo (12B) — needs 10+ GB VRAM — long context, good prose",
+        "qwen2.5:14b":        "FREE Qwen 2.5 (14B) — needs 10+ GB VRAM — good balance",
+        "deepseek-r1:14b":    "FREE DeepSeek R1 (14B) — needs 10+ GB VRAM — reasoning",
+        "llama3.1:8b":        "FREE ⭐ Llama 3.1 (8B) — needs 6+ GB VRAM — sweet spot for mid-range GPUs",
+        "gemma2:9b":          "FREE Gemma 2 (9B) — needs 6+ GB VRAM — fast, poetic prose",
+        "mistral":            "FREE Mistral (7B) — needs 5+ GB VRAM — classic fast option",
+        "llama3.2:3b":        "FREE ⭐ Llama 3.2 (3B) — needs <4 GB VRAM — works on any hardware",
+        // ── Local: code-tuned (NOT recommended for narrative) ──
+        "qwen2.5-coder:32b":  "FREE Qwen 2.5 Coder (32B) — code-tuned, stiff for narrative — use qwen2.5:32b instead",
+        // ── OpenRouter (pay per token, no API key juggling) ──
+        "openai/gpt-4o":                       "OpenRouter → GPT-4o",
+        "openai/gpt-4o-mini":                  "OpenRouter → GPT-4o Mini",
+        "anthropic/claude-sonnet-4-20250514":  "OpenRouter → Claude Sonnet 4",
+        "google/gemini-2.0-flash-001":         "OpenRouter → Gemini 2.0 Flash (fast)",
+        "meta-llama/llama-3.1-70b-instruct":   "OpenRouter → Llama 3.1 70B",
       },
       default: "gpt-4o-mini",
     });
