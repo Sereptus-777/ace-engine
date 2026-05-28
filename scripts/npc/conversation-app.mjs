@@ -286,6 +286,14 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             // when no file is present (current static portrait stays).
             this._initSpeakingPortrait();
 
+            // ── Pre-warm the Chat-tier model (v1.6.12) ─────────────────
+            // Fire a tiny throwaway request to load the model into VRAM
+            // so the user's first real message gets a hot model. Only
+            // does anything for local providers (Ollama / LM Studio);
+            // skipped for cloud automatically inside warmUp(). Fire-and-
+            // forget — never blocks the dialog from rendering.
+            AIHandler.warmUp();
+
             this._listenersAttached = true;
         }
 

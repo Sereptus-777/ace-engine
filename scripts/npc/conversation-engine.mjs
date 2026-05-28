@@ -128,6 +128,64 @@ function _resolveChatProvider() {
 
 export class AIHandler {
 
+    /**
+     * Background prompt warm-up (v1.6.12).
+     *
+     * Fires a TINY throwaway chat request to the Chat-tier provider purely
+     * to load the model into VRAM. Called when a ConversationApp opens —
+     * by the time the user types and hits send, the model is already hot
+     * (saves the 5–30s "cold-load" delay that hits the first real request
+     * after a Foundry session or scene change).
+     *
+     * Fire-and-forget. Never throws. Never blocks the UI. Quietly skips
+     * for cloud providers (Claude / OpenAI are always hot — no model-load
+     * concept exists for them). Only Ollama / LM Studio benefit, since
+     * those swap models in and out of VRAM based on usage.
+     *
+     * Cost: one extra request per dialog open, ~2 tokens out. On Ollama
+     * this is free. On cloud providers we skip entirely so the warm-up
+     * never costs money.
+     *
+     * Debounced — multiple ConversationApp opens within 30 seconds only
+     * fire one warm-up (the model is still hot from the first call).
+     */
+    static async warmUp() {
+        try {
+            const chatCfg = _resolveChatProvider();
+            // Cloud providers don't have a "cold load" — skip warm-up
+            // entirely so we don't waste API spend on a useless ping.
+            if (chatCfg.provider !== "ollama" && chatCfg.provider !== "lmstudio" && chatCfg.provider !== "lm-studio") {
+                return;
+            }
+            // Debounce — Ollama keeps a model loaded for ~5 minutes after
+            // last use by default. A 30-second debounce on our side is
+            // plenty to avoid double-warming when the GM bounces around
+            // multiple NPC chats in quick succession.
+            const now = Date.now();
+            if (AIHandler._lastWarmUpAt && (now - AIHandler._lastWarmUpAt) < 30_000) {
+                console.debug(`${MODULE_ID} | warmUp skipped — already warmed within 30s`);
+                return;
+            }
+            AIHandler._lastWarmUpAt = now;
+
+            // Minimal payload — Ollama loads the model on first request
+            // regardless of how short the prompt is. "hi" is enough to
+            // trigger the VRAM load. We don't care about the response;
+            // .then/.catch swallow it so this is true fire-and-forget.
+            const messages = [{ role: "user", content: "hi" }];
+            AIHandler._fetchOllama(messages, [], {
+                modelOverride: chatCfg.modelName,
+                urlOverride:   chatCfg.apiUrl,
+            }).then(() => {
+                console.log(`${MODULE_ID} | Chat model pre-warmed: ${chatCfg.modelName}`);
+            }).catch(err => {
+                console.debug(`${MODULE_ID} | Chat warm-up failed (non-fatal):`, err?.message ?? err);
+            });
+        } catch (err) {
+            console.debug(`${MODULE_ID} | warmUp threw (non-fatal):`, err?.message ?? err);
+        }
+    }
+
     // ─── MAIN ENTRY POINT ────────────────────────────────────────────────────
     static async getResponse(actor, input, history, { speakerActor: externalSpeaker } = {}) {
         const chatCfg = _resolveChatProvider();
