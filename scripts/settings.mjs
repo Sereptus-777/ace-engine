@@ -249,8 +249,8 @@ export class AceSettings {
     });
 
     s("modelName", {
-      name: "AI Model",
-      hint: "Pick a model. ⭐ = best fit for your VRAM tier (set above). FREE = local Ollama, no API cost, runs on your GPU. $/$$ = paid cloud provider, works on any hardware but charges per request. Match the VRAM hint to your GPU — going over what fits will be very slow.",
+      name: "AI Model — Quality / Default (session summaries, bios, lore)",
+      hint: "Your QUALITY tier model — used for session summaries, NPC bio generation, long-form lore writing, and any other slow-but-important AI call. Used for NPC chat too unless you override it below with a faster Chat Model. ⭐ = best fit for your VRAM tier. FREE = local Ollama. $/$$ = paid cloud. Match VRAM hint to your GPU — going over what fits will be very slow.",
       type: String,
       choices: {
         // ── Cloud: Anthropic (top narrative quality) ──
@@ -283,6 +283,41 @@ export class AceSettings {
         "meta-llama/llama-3.1-70b-instruct":   "OpenRouter → Llama 3.1 70B",
       },
       default: "gpt-4o-mini",
+    });
+
+    // ── Chat Model (separate, FASTER model for NPC conversations) ──
+    // v1.6.11: three-tier model split — Chat (this), Quality (modelName
+    // above), and Digest (digestModel below). Each tier can use its own
+    // model so a GM can run e.g. dolphin3:8b for snappy tavern banter
+    // while still using qwen2.5:32b for the meaty session summary.
+    s("chatApiKey", {
+      name: "Chat API Key (if different provider)",
+      hint: "If your Chat Model uses a different provider than your main Quality model (e.g., Quality = Claude Sonnet, Chat = local Ollama), enter that provider's API key here (or leave blank for Ollama since local doesn't need a key). Leave blank to use your main API key. Stored as a password.",
+      type: String,
+      default: "",
+    });
+
+    // Chat model: "provider:model" format so we know which API to call.
+    // Empty string = use main provider + Quality model (no override).
+    // Parsed by AIHandler.getResponse via _resolveChatProvider().
+    s("chatModel", {
+      name: "Chat Model — NPC Conversations (speed-tier)",
+      hint: "Optional FAST model dedicated to real-time NPC chat. Empty = use your main Quality model for chat too. The Chat tier should prioritize SPEED over depth — sub-2-second responses feel natural in dialogue; 30-second waits don't. Set a smaller / faster model here while keeping your Quality model untouched for session summaries.",
+      type: String,
+      choices: {
+        "":                                       "— Same as main Quality model —",
+        // ── Local Ollama (FREE, fast, runs on your GPU) ──
+        "ollama:dolphin3:8b":                     "⭐ Ollama: Dolphin 3 8B (free, uncensored, ~2s on RTX 4090)",
+        "ollama:llama3.1:8b":                     "Ollama: Llama 3.1 8B (free, fast, family-friendly)",
+        "ollama:mistral-nemo:12b":                "Ollama: Mistral Nemo 12B (free, slightly slower, richer prose)",
+        "ollama:llama3.2:3b":                     "Ollama: Llama 3.2 3B (free, blazing fast on any GPU)",
+        // ── Cloud Anthropic ──
+        "anthropic:claude-haiku-4-5-20251001":    "⭐ Anthropic: Claude Haiku 4.5 (paid, sub-second, ~$0.80/M tokens)",
+        // ── Cloud OpenAI ──
+        "openai:gpt-4o-mini":                     "OpenAI: GPT-4o Mini (paid, fast + cheap)",
+        "openai:gpt-4.1-nano":                    "OpenAI: GPT-4.1 Nano (paid, cheapest)",
+      },
+      default: "",
     });
 
     // ── Digest Model (separate, cheaper model for bulk extraction) ──

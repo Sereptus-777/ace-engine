@@ -57,11 +57,81 @@ const EngineBridge = {
 // local models room to breathe.
 const AI_FETCH_TIMEOUT = 180_000;
 
+/**
+ * Default endpoint URL per provider — used when the Chat tier overrides
+ * to a different provider than the main one (so we don't accidentally
+ * send Claude requests to Ollama's URL etc.).
+ */
+function _defaultUrlForProvider(provider) {
+    switch (provider) {
+        case "anthropic":  return "https://api.anthropic.com";
+        case "openai":     return "https://api.openai.com";
+        case "openrouter": return "https://openrouter.ai/api";
+        case "ollama":     return "http://localhost:11434";
+        case "lmstudio":
+        case "lm-studio":  return "http://localhost:1234";
+        default:           return "";
+    }
+}
+
+/**
+ * Resolve the active CHAT-tier provider config for an NPC conversation.
+ *
+ * Three-tier model split (v1.6.11):
+ *   - QUALITY (settings.modelName)       — session summaries, bios, lore
+ *   - CHAT    (settings.chatModel)       — real-time NPC conversation
+ *   - DIGEST  (settings.digestModel)     — background entity extraction
+ *
+ * Returns an object the AI fetcher uses to know which provider/url/key/model
+ * to call for THIS request. If `chatModel` is unset, falls back to the main
+ * Quality config (current behavior — no breaking change).
+ *
+ * Format of `chatModel`:
+ *   ""                       → use main provider + main model
+ *   "model-name"             → use main provider, override model only
+ *   "provider:model-name"    → cross-provider override (auto-routes URL,
+ *                              optionally uses chatApiKey for auth)
+ */
+function _resolveChatProvider() {
+    const main = getEnvoyAIConfig();
+    let provider = main.provider;
+    let apiKey   = main.apiKey;
+    let apiUrl   = main.apiUrl;
+    let model    = main.modelName;
+
+    try {
+        const cm = game.settings.get(MODULE_ID, "chatModel");
+        if (cm && cm.length > 0) {
+            const colon = cm.indexOf(":");
+            if (colon > 0) {
+                // "provider:model" — cross-provider override
+                const overrideProvider = cm.slice(0, colon);
+                provider = overrideProvider;
+                model    = cm.slice(colon + 1);
+                // Cross-provider call needs the right URL — derive from provider name
+                if (overrideProvider !== main.provider) {
+                    apiUrl = _defaultUrlForProvider(overrideProvider) || apiUrl;
+                    // Use Chat-specific API key if set (cross-provider needs different auth)
+                    const chatKey = game.settings.get(MODULE_ID, "chatApiKey");
+                    if (chatKey && chatKey.length > 0) apiKey = chatKey;
+                }
+            } else {
+                // Bare model name — same provider, different model
+                model = cm;
+            }
+            console.debug(`${MODULE_ID} | Chat using override: ${provider} → ${model}`);
+        }
+    } catch (_) { /* setting unregistered — fall through to main config */ }
+
+    return { provider, apiKey, apiUrl, modelName: model };
+}
+
 export class AIHandler {
 
     // ─── MAIN ENTRY POINT ────────────────────────────────────────────────────
     static async getResponse(actor, input, history, { speakerActor: externalSpeaker } = {}) {
-        const { provider, apiKey } = getEnvoyAIConfig();
+        const chatCfg = _resolveChatProvider();
+        const { provider, apiKey } = chatCfg;
         const scene     = canvas.scene;
         const sceneName = scene?.name || "an unknown location";
         const token     = actor.getActiveTokens()[0];
@@ -325,7 +395,12 @@ RULES:
 - If the conversation genuinely warrants a skill check from the player (e.g., you are being deceptive and they should roll Insight, or you mention arcane lore they might recognize, or you hint at something hidden they might notice), include this tag ONCE at the END of your response: [SUBTLE_CHECK:skill:dc:flavor text]. Example: [SUBTLE_CHECK:ins:14:Something about this story doesn't quite add up...]. Valid skills: ins, his, arc, rel, nat, prc, inv, sur, med, dec, itm, per, ath, acr, slt, ste, ani. Only use this when genuinely appropriate — do NOT overuse it.
         `.trim();
 
-        return await this.callAI(systemPrompt, history, input, provider, apiKey);
+        // Pass the Chat-tier override (provider, apiUrl, model, key) down
+        // so the fetcher hits the right endpoint with the right model.
+        return await this.callAI(systemPrompt, history, input, provider, apiKey, [], {
+            modelOverride: chatCfg.modelName,
+            urlOverride:   chatCfg.apiUrl,
+        });
     }
 
     // ── Cross-Module: Get reputation context from ACE Engine (via bridge) ──
@@ -603,18 +678,29 @@ RULES:
     }
 
     // ─── CALL AI PROVIDER ────────────────────────────────────────────────────
-    static async callAI(systemPrompt, history, input, provider, apiKey, images = []) {
+    /**
+     * Three-tier override support (v1.6.11): `opts.modelOverride` and
+     * `opts.urlOverride` are passed in from getResponse when the GM has
+     * configured a Chat-tier model that differs from the main Quality
+     * model. When unset, we fall back to the main config (no change to
+     * pre-v1.6.11 behavior).
+     */
+    static async callAI(systemPrompt, history, input, provider, apiKey, images = [], opts = {}) {
         const messages = [
             { role: "system", content: systemPrompt },
             ...history,
             { role: "user", content: input }
         ];
 
+        // Effective config — prefer the per-call overrides, fall back to main.
         const aiCfg = getEnvoyAIConfig();
+        const useModel  = opts.modelOverride || aiCfg.modelName;
+        const useUrl    = opts.urlOverride   || aiCfg.apiUrl;
+        const useApiKey = apiKey             || aiCfg.apiKey;
 
         // ── Anthropic (different API format) ─────────────────────────────
         if (provider === "anthropic") {
-            if (!aiCfg.apiKey) {
+            if (!useApiKey) {
                 ui.notifications.error("ACE: Engine — Anthropic is selected but no API key is set. Check module settings.");
                 return "*speaks, but no words come — the magic is unset*";
             }
@@ -644,12 +730,12 @@ RULES:
                     signal: ctrl,
                     headers: {
                         "Content-Type": "application/json",
-                        "x-api-key": aiCfg.apiKey,
+                        "x-api-key": useApiKey,
                         "anthropic-version": "2023-06-01",
                         "anthropic-dangerous-direct-browser-access": "true",
                     },
                     body: JSON.stringify({
-                        model: aiCfg.modelName || "claude-sonnet-4-20250514",
+                        model: useModel || "claude-sonnet-4-20250514",
                         max_tokens: 1024,
                         system: sysMsg,
                         messages: nonSys,
@@ -672,7 +758,7 @@ RULES:
 
         // ── OpenAI / OpenRouter / LM Studio / Custom (OpenAI-compatible) ─
         if (["openai", "openrouter", "lm-studio", "lmstudio", "custom"].includes(provider)) {
-            if (!aiCfg.apiKey && provider === "openai") {
+            if (!useApiKey && provider === "openai") {
                 ui.notifications.error("ACE: Engine — OpenAI is selected but no API key is set. Check module settings.");
                 return "*speaks, but no words come — the magic is unset*";
             }
@@ -693,12 +779,12 @@ RULES:
                     }
                 }
                 const headers = { "Content-Type": "application/json" };
-                if (aiCfg.apiKey) headers["Authorization"] = `Bearer ${aiCfg.apiKey}`;
-                const response = await fetch(`${aiCfg.apiUrl}/v1/chat/completions`, {
+                if (useApiKey) headers["Authorization"] = `Bearer ${useApiKey}`;
+                const response = await fetch(`${useUrl}/v1/chat/completions`, {
                     method: "POST",
                     signal: AbortSignal.timeout(AI_FETCH_TIMEOUT),
                     headers,
-                    body: JSON.stringify({ model: aiCfg.modelName || "gpt-4o", messages: oaiMessages, temperature: 0.7 })
+                    body: JSON.stringify({ model: useModel || "gpt-4o", messages: oaiMessages, temperature: 0.7 })
                 });
                 const data = await response.json();
                 if (data.error) {
@@ -719,7 +805,10 @@ RULES:
             // Pass `images` through — when present, Ollama call switches to
             // /api/chat (native vision endpoint) and injects images on the
             // last user message in Ollama's expected format.
-            const text = await AIHandler._callOllamaViaGM(messages, images);
+            // v1.6.11: `opts` carries Chat-tier overrides (modelOverride,
+            // urlOverride) so a GM running e.g. Quality=qwen2.5:32b can
+            // route Chat through dolphin3:8b without touching main settings.
+            const text = await AIHandler._callOllamaViaGM(messages, images, opts);
             if (!text) {
                 ui.notifications?.warn("Ollama returned an empty response. Is your model loaded? Try: ollama pull llama3.2");
                 return "My mind is foggy...";
@@ -756,17 +845,18 @@ RULES:
     // user message using Ollama's expected `message.images = [base64...]`
     // shape. Vision-capable models (llava, llama3.2-vision, qwen2-vl,
     // bakllava) honor this; non-vision models silently ignore it.
-    static _callOllamaViaGM(messages, images = []) {
+    static _callOllamaViaGM(messages, images = [], opts = {}) {
         if (game.user.isGM) {
-            return AIHandler._fetchOllama(messages, images);
+            return AIHandler._fetchOllama(messages, images, opts);
         }
         return AIHandler._callOllamaViaSocket(messages, images);
     }
 
-    static async _fetchOllama(messages, images = []) {
+    static async _fetchOllama(messages, images = [], opts = {}) {
         const { apiUrl, modelName } = getEnvoyAIConfig();
-        const ollamaUrl   = apiUrl || "http://localhost:11434";
-        const ollamaModel = modelName || "llama3.2";
+        // v1.6.11: opts.urlOverride / opts.modelOverride from Chat tier
+        const ollamaUrl   = opts.urlOverride   || apiUrl   || "http://localhost:11434";
+        const ollamaModel = opts.modelOverride || modelName || "llama3.2";
 
         // ── Vision path: use Ollama's native /api/chat endpoint ──
         // The OpenAI-compat /v1/chat/completions endpoint may strip Ollama's
