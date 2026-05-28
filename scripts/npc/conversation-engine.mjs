@@ -47,7 +47,15 @@ const EngineBridge = {
 /** Max wait time for a direct AI fetch before aborting (ms).
  *  90s accommodates large local models (e.g. 27B+) on first prompt
  *  when Ollama is still loading weights into VRAM. */
-const AI_FETCH_TIMEOUT = 90_000;
+// AI request timeout. Increased from 90s → 180s in v1.6.10 because local
+// 32B+ models (qwen2.5:32b, llama3.3, etc.) need 60–120 seconds to PREFILL
+// the system prompt on first request (the NPC chat system prompt assembles
+// ~5–10K input tokens of personality + memory + world bible + scene state).
+// After the first request, Ollama caches the prompt prefix and subsequent
+// calls are fast (10–20s). Cloud providers (Claude, OpenAI) finish well
+// under 30s even with the same context — the larger timeout just gives
+// local models room to breathe.
+const AI_FETCH_TIMEOUT = 180_000;
 
 export class AIHandler {
 
