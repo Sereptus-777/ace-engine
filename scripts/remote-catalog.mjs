@@ -14,7 +14,7 @@
 // even if both remote AND bundled JSON fail.
 
 const MODULE_ID  = "ace-engine";
-const REMOTE_URL = "https://raw.githubusercontent.com/Sereptus-777/ace-engine/main/model-catalog.json";
+const REMOTE_URL = "https://raw.githubusercontent.com/Sereptus-777/ace-engine/master/model-catalog.json";
 const BUNDLED_URL = `modules/${MODULE_ID}/model-catalog.json`;
 
 const CACHE_SETTING_KEY  = "remoteCatalogCache";   // stores the last successful fetch
