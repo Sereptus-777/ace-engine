@@ -54,17 +54,67 @@ export async function fetchModelsForProvider(provider, opts = {}) {
 
 // ── Per-provider fetchers ────────────────────────────────────────────────
 
+// VRAM / quality hints for known Ollama models. Used to enrich the LIVE
+// dropdown labels (otherwise we'd just show raw "model:tag (size)").
+// Star (⭐) marks best-in-tier; warnings ("NOT for narrative") flag
+// mis-fits before the GM picks them.
+const _OLLAMA_HINTS = Object.freeze({
+    "llama3.3:70b":      { star: false, hint: "Top narrative · needs 40+ GB VRAM (dual GPU / Apple M-series)" },
+    "qwen2.5:32b":       { star: true,  hint: "Best 24 GB sweet spot · ~20GB VRAM" },
+    "deepseek-r1:32b":   { star: false, hint: "Best reasoning · ~20GB VRAM" },
+    "mistral-nemo:12b":  { star: true,  hint: "Long context, great prose · ~10GB VRAM" },
+    "qwen2.5:14b":       { star: false, hint: "Balanced · ~10GB VRAM" },
+    "deepseek-r1:14b":   { star: false, hint: "Reasoning · ~10GB VRAM" },
+    "llama3.1:8b":       { star: true,  hint: "Mid-range GPU sweet spot · ~6GB VRAM" },
+    "llama3.1":          { star: true,  hint: "Mid-range GPU sweet spot · ~6GB VRAM" },
+    "gemma2:9b":         { star: false, hint: "Fast, poetic prose · ~6GB VRAM" },
+    "gemma2":            { star: false, hint: "Fast, poetic prose · ~6GB VRAM" },
+    "dolphin3:8b":       { star: false, hint: "Uncensored (dark campaigns) · ~5GB VRAM" },
+    "mistral":           { star: false, hint: "Fast classic · ~5GB VRAM" },
+    "mistral:latest":    { star: false, hint: "Fast classic · ~5GB VRAM" },
+    "llama3.2:3b":       { star: true,  hint: "Tiny, runs on any GPU · ~2GB VRAM" },
+    "llama3.2:latest":   { star: true,  hint: "Tiny, runs on any GPU · ~2GB VRAM" },
+    "llama3.2":          { star: true,  hint: "Tiny, runs on any GPU · ~2GB VRAM" },
+    "qwen2.5-coder:32b": { star: false, hint: "CODE-tuned, NOT for narrative · ~20GB VRAM" },
+    "qwen2.5-coder:14b": { star: false, hint: "CODE-tuned, NOT for narrative · ~9GB VRAM" },
+    "qwen2.5-coder:7b":  { star: false, hint: "CODE-tuned, NOT for narrative · ~6GB VRAM" },
+    "llama2-uncensored": { star: false, hint: "Old (2023) — try dolphin3:8b for modern uncensored" },
+    "llama3":            { star: false, hint: "Old — superseded by llama3.1+" },
+    "nomic-embed-text":  { star: false, hint: "EMBEDDING model — used internally by ACE Engine, don't pick for chat" },
+});
+
+/** Look up a curated hint for an Ollama model name (with or without :tag). */
+function _hintForOllama(name) {
+    if (_OLLAMA_HINTS[name]) return _OLLAMA_HINTS[name];
+    // Try stripping :latest
+    const noLatest = name.replace(/:latest$/, "");
+    if (_OLLAMA_HINTS[noLatest]) return _OLLAMA_HINTS[noLatest];
+    // Try the base name without any tag
+    const base = name.split(":")[0];
+    if (_OLLAMA_HINTS[base]) return _OLLAMA_HINTS[base];
+    return null;
+}
+
 async function _fetchOllamaModels(apiUrl) {
     const url = `${(apiUrl || "http://localhost:11434").replace(/\/$/, "")}/api/tags`;
     const resp = await fetch(url, { signal: AbortSignal.timeout(5_000) });
     if (!resp.ok) throw new Error(`Ollama /api/tags returned ${resp.status}`);
     const data = await resp.json();
-    return (data.models ?? []).map(m => ({
-        value:  m.name,
-        label:  `${m.name} (${_formatBytes(m.size)})`,
-        free:   true,                                          // all local models are free
-        vision: _hasVisionPrefix(m.name),
-    })).sort(_sortFreeFirst);
+    return (data.models ?? []).map(m => {
+        const hint = _hintForOllama(m.name);
+        const star = hint?.star ? "⭐ " : "";
+        const tail = hint?.hint ? ` — ${hint.hint}` : "";
+        // If no hint is known for this model, fall back to the size-only label.
+        const label = hint
+            ? `${star}${m.name}${tail}`
+            : `${m.name} (${_formatBytes(m.size)})`;
+        return {
+            value:  m.name,
+            label,
+            free:   true,                                          // all local models are free
+            vision: _hasVisionPrefix(m.name),
+        };
+    }).sort(_sortFreeFirst);
 }
 
 async function _fetchLmStudioModels(apiUrl) {

@@ -973,14 +973,20 @@ export class AceSettings {
       { value: "claude-opus-4-20250514",    label: "Claude Opus 4 — Most Capable · ~$15/M tokens" },
     ],
     ollama: [
-      { value: "llama3.2",             label: "Llama 3.2 — Fast · ~4GB VRAM" },
-      { value: "mistral",              label: "Mistral — Fast · ~5GB VRAM" },
-      { value: "qwen2.5-coder:7b",    label: "Qwen 2.5 Coder 7B — Fast · ~6GB VRAM" },
-      { value: "qwen2.5-coder:14b",   label: "Qwen 2.5 Coder 14B — Balanced · ~10GB VRAM" },
-      { value: "qwen2.5-coder:32b",   label: "Qwen 2.5 Coder 32B — Best Quality · ~20GB VRAM" },
-      { value: "deepseek-r1",          label: "DeepSeek R1 — Reasoning · varies" },
-      { value: "gemma2",               label: "Gemma 2 — Fast · ~6GB VRAM" },
-      { value: "phi3",                 label: "Phi-3 — Fast · ~4GB VRAM" },
+      // Sorted high-VRAM → low-VRAM. ⭐ marks best-in-tier for each VRAM bracket.
+      // `free: true` makes the dropdown prepend 🆓 to the label automatically.
+      { value: "llama3.3:70b",         label: "Llama 3.3 70B — Top narrative · needs 40+ GB VRAM (dual GPU / Apple M-series)", free: true },
+      { value: "qwen2.5:32b",          label: "⭐ Qwen 2.5 32B — Best 24 GB sweet spot · ~20GB VRAM", free: true },
+      { value: "deepseek-r1:32b",      label: "DeepSeek R1 32B — Best reasoning · ~20GB VRAM", free: true },
+      { value: "mistral-nemo:12b",     label: "⭐ Mistral Nemo 12B — Long context, great prose · ~10GB VRAM", free: true },
+      { value: "qwen2.5:14b",          label: "Qwen 2.5 14B — Balanced · ~10GB VRAM", free: true },
+      { value: "deepseek-r1:14b",      label: "DeepSeek R1 14B — Reasoning · ~10GB VRAM", free: true },
+      { value: "llama3.1:8b",          label: "⭐ Llama 3.1 8B — Mid-range GPU sweet spot · ~6GB VRAM", free: true },
+      { value: "gemma2:9b",            label: "Gemma 2 9B — Fast, poetic prose · ~6GB VRAM", free: true },
+      { value: "dolphin3:8b",          label: "Dolphin 3 8B — Uncensored (dark campaigns) · ~5GB VRAM", free: true },
+      { value: "mistral",              label: "Mistral 7B — Fast classic · ~5GB VRAM", free: true },
+      { value: "llama3.2:3b",          label: "⭐ Llama 3.2 3B — Tiny, runs on any GPU · ~2GB VRAM", free: true },
+      { value: "qwen2.5-coder:32b",    label: "Qwen 2.5 Coder 32B — CODE-tuned, NOT for narrative · ~20GB VRAM", free: true },
     ],
     lmstudio: [
       { value: "default",  label: "Default (auto-detect loaded model)" },
