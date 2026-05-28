@@ -4392,14 +4392,31 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
             console.warn(`${MODULE_ID} | Session end vault snapshot failed:`, vErr);
           }
         }
+      } else {
+        // Empty summary — provider returned nothing useful (could be a stream
+        // that closed cleanly with no content, or a malformed response that
+        // generateSessionSummary swallowed).
+        this._pushSystemNote(
+          `📖 **Session summary FAILED** — provider returned empty content. Click **Save Session Recap** again to retry, or check your AI provider settings.`
+        );
+        ui.notifications?.error("ACE: Session summary failed — provider returned empty.");
       }
     } catch (err) {
       console.error(`${MODULE_ID} | End session error:`, err);
+      this._pushSystemNote(
+        `📖 **Session summary FAILED** — ${err?.message ?? err}. Click **Save Session Recap** again to retry.`
+      );
       ui.notifications?.error("ACE: Failed to generate session summary — see console.");
+    } finally {
+      // ── v1.6.4 fix ───────────────────────────────────────────────────
+      // Runs even on hang, timeout, or thrown error. Without this, a stalled
+      // provider call would leave the button spinning forever (production
+      // repro: GM clicked Save → button spun for 10+ minutes → AI provider
+      // had silently dropped the stream). The 90s timeout in
+      // memory-manager.generateSessionSummary now throws, which lands here.
+      this._isGeneratingSummary = false;
+      this._updateEndSessionButton();
     }
-
-    this._isGeneratingSummary = false;
-    this._updateEndSessionButton();
   }
 
   /**

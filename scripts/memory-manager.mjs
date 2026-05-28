@@ -1000,17 +1000,41 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
     let summary = "";
     try {
       const sceneContext = sceneCtx?.gatherCompact?.() ?? "";
+
+      // ── Timeout wrapper (v1.6.4) ───────────────────────────────────────
+      // Without this, a stalled provider (dropped stream, network hang,
+      // malformed response) blocks the await forever, leaving the Save
+      // Session Recap button spinning indefinitely. Production repro:
+      // GM clicked Save Session → button spun for 10+ minutes → no error,
+      // no completion. Race against a 90s timeout so the UI always recovers.
+      const TIMEOUT_MS = 90_000;
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`AI provider timed out after ${TIMEOUT_MS / 1000}s — summary not generated`)),
+          TIMEOUT_MS
+        )
+      );
+
       if (onChunk) {
-        await aiProvider.chatStream(prompt, sceneContext, "", [], (chunk) => {
-          summary += chunk;
-          onChunk(chunk);
-        });
+        await Promise.race([
+          aiProvider.chatStream(prompt, sceneContext, "", [], (chunk) => {
+            summary += chunk;
+            onChunk(chunk);
+          }),
+          timeoutPromise,
+        ]);
       } else {
-        summary = await aiProvider.chat(prompt, sceneContext);
+        summary = await Promise.race([
+          aiProvider.chat(prompt, sceneContext),
+          timeoutPromise,
+        ]);
       }
     } catch (err) {
       console.error(`${MODULE_ID} | generateSessionSummary failed:`, err);
-      summary = `Session summary could not be generated. Events: ${digest.slice(0, 500)}`;
+      // Preserve any partial-stream content we received before the failure
+      // so the journal entry at least carries SOMETHING useful for the GM.
+      const partial = summary ? `\n\n[Partial summary before failure:]\n${summary}` : "";
+      summary = `Session summary could not be generated (${err?.message ?? err}). Events: ${digest.slice(0, 500)}${partial}`;
     }
     return summary.trim();
   }
