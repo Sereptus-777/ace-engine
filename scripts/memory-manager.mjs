@@ -118,8 +118,98 @@ export class MemoryManager {
       this._scheduleSave("world");
     }
 
+    // ── v1.6.5: Bidirectional journal-edit sync ────────────────────────
+    // When the GM edits a Session journal page in the "📖 ACE > Session
+    // Logs" folder, propagate the changes back to the world store's
+    // session record so the AI context picks up the edits. Single hook
+    // registration — guard against duplicate listeners on hot-reload.
+    if (!this._journalSyncRegistered) {
+      Hooks.on("updateJournalEntryPage", (page, changes, options, userId) =>
+        this._onSessionJournalEdit(page, changes, userId).catch(err =>
+          console.warn(`${MODULE_ID} | Journal sync handler threw:`, err)
+        )
+      );
+      this._journalSyncRegistered = true;
+    }
+
     const totalRecords = Array.from(this._stores.values()).reduce((n, s) => n + s.recordCount, 0);
     console.debug(`${MODULE_ID} | MemoryManager: loaded ${totalRecords} total records across ${this._stores.size} stores.`);
+  }
+
+  /**
+   * Bidirectional sync handler — GM edits a Session journal in Foundry's
+   * sidebar → those edits flow back to the world store's session record.
+   * Without this, the AI would keep seeing the original AI-generated
+   * summary even after the GM corrected/expanded it.
+   *
+   * Matching strategy:
+   *   1. Page must be inside the "📖 ACE > Session Logs" folder chain
+   *   2. Parent journal's name must match "Session N — DATE"
+   *   3. Extract N, find the session record, update its summary
+   *
+   * @private
+   */
+  async _onSessionJournalEdit(page, changes, userId) {
+    if (!this._loaded) return;
+    // Only react to content edits, not metadata-only updates (rename, sort, etc.)
+    const newContent = changes?.text?.content;
+    if (newContent === undefined || newContent === null) return;
+
+    const journal = page?.parent;
+    if (!journal) return;
+
+    // Folder check — must be in the Session Logs subfolder of ACE root
+    if (!this._isInSessionLogsFolder(journal)) return;
+
+    // Name parse — "Session 5 — 2025-12-01" → 5
+    const nameMatch = String(journal.name ?? "").match(/Session\s+(\d+)/i);
+    if (!nameMatch) return;
+    const sessionNum = Number(nameMatch[1]);
+    if (!Number.isFinite(sessionNum)) return;
+
+    // Convert the edited HTML back to plain text for the JSON store.
+    // The store value is what feeds the AI context — plain text is cleaner
+    // for the model than raw HTML markup.
+    const newText = MemoryManager._htmlToPlainText(newContent);
+    if (!newText) return;
+
+    // Cap at the same length as fresh-generated summaries (saveSessionSummary
+    // slices at 2000). Bumped to 4000 here to allow GM-expanded summaries.
+    const ok = this.world.updateSession(sessionNum, {
+      summary: newText.slice(0, 4000),
+      lastEditedFromJournal: Math.floor(Date.now() / 1000),
+    });
+    if (!ok) {
+      console.warn(`${MODULE_ID} | Journal sync: no session record found for number ${sessionNum} (journal "${journal.name}")`);
+      return;
+    }
+    this._scheduleSaves(["world"]);
+    console.log(`${MODULE_ID} | Journal sync: session ${sessionNum} summary updated from journal edit (${newText.length} chars)`);
+  }
+
+  /** True if `journal` is inside the ACE > Session Logs subfolder chain. */
+  _isInSessionLogsFolder(journal) {
+    let folder = journal?.folder;
+    while (folder) {
+      if (folder.name === ACE_SUB_SESSIONS) return true;
+      folder = folder.folder;
+    }
+    return false;
+  }
+
+  /**
+   * Strip HTML tags from a string for plain-text storage. <br> becomes \n
+   * so paragraph breaks survive. Other tags get stripped — the AI doesn't
+   * need formatting, just content.
+   */
+  static _htmlToPlainText(html) {
+    const div = document.createElement("div");
+    div.innerHTML = html ?? "";
+    div.querySelectorAll("br").forEach(br => br.replaceWith("\n"));
+    div.querySelectorAll("p, div, h1, h2, h3, h4, h5, h6, li").forEach(el => {
+      el.append("\n");
+    });
+    return (div.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
   }
 
   /** Save all dirty stores immediately. */

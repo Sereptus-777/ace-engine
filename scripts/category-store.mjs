@@ -967,6 +967,24 @@ export class WorldStore extends CategoryStore {
     return this._data.sessions.length ? this._data.sessions[this._data.sessions.length - 1] : null;
   }
 
+  /**
+   * Update an existing session record in place. Returns true if a matching
+   * session was found and updated, false otherwise. Used by the bidirectional
+   * journal-sync hook so GM edits to "Session N" journals flow back to the
+   * JSON store that feeds the AI context.
+   *
+   * @param {number} num — session number to update
+   * @param {object} patch — fields to merge into the existing record
+   * @returns {boolean}
+   */
+  updateSession(num, patch) {
+    const idx = this._data.sessions.findIndex(s => Number(s.num) === Number(num));
+    if (idx === -1) return false;
+    this._data.sessions[idx] = { ...this._data.sessions[idx], ...patch };
+    this._dirty = true;
+    return true;
+  }
+
   /** Add a world note. */
   addWorldNote(text, scene, category) {
     if (!text) return;
