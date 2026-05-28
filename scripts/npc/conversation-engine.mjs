@@ -955,10 +955,21 @@ RULES:
     static _callOllamaViaSocket(messages, images = []) {
         return new Promise((resolve, reject) => {
             const requestId = foundry.utils.randomID();
+            // v1.6.13: bumped from 30s → 180s to match AI_FETCH_TIMEOUT.
+            // The GM-side fetch to Ollama can take 60–120s on the FIRST
+            // message of a session (cold model load + 8K-char system
+            // prompt prefill). The previous 30s ceiling left players
+            // staring at "My mind is foggy..." (the hardcoded fallback
+            // that fires on any failed call) every time, even when the
+            // GM was actually getting a real response from Ollama —
+            // they just never lived long enough to see it. After the
+            // first message the prompt prefix is cached and subsequent
+            // calls return in 5–10s.
+            const SOCKET_PROXY_TIMEOUT_MS = 180_000;
             const timeout   = setTimeout(() => {
                 game.socket.off(`module.${MODULE_ID}`, handler);
-                reject(new Error("Ollama GM proxy timed out after 30s — is a GM logged in?"));
-            }, 30000);
+                reject(new Error(`Ollama GM proxy timed out after ${SOCKET_PROXY_TIMEOUT_MS / 1000}s — is a GM logged in?`));
+            }, SOCKET_PROXY_TIMEOUT_MS);
 
             const handler = (data) => {
                 if (data.action !== "ollamaResponse" || data.requestId !== requestId) return;
