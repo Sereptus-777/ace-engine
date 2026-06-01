@@ -16,31 +16,40 @@ const MODULE_ID = "ace-engine";
 const QOL_ID    = "ace-qol";
 const TAG       = "ACE: Engine | Bio";
 
-// ─── Sweep stuck bioInFlight flags on world ready ──────────────────────────
+// ─── Stuck bioInFlight flag recovery ──────────────────────────────────────
 // Vulnerability identified by Gemini code review (2026-05-31):
 //
 // `bioInFlight` is stored on the actor (Foundry DB) and cleared in a
 // `try/finally`. The finally block handles standard JS errors + API
-// timeouts perfectly. BUT — if the GM client is terminated abruptly
-// (F5 refresh, browser crash, power outage, OS kill) during generation,
-// the JS execution environment is destroyed and the `finally` never
-// fires. The DB write of bioInFlight=true persists.
+// timeouts perfectly. BUT — if the JS execution environment is
+// destroyed mid-generation (F5 refresh, browser crash, power outage,
+// OS kill), the `finally` never fires. The DB write of bioInFlight=true
+// persists. ace-token-art's chooser then sees the flag, waits, fails.
 //
-// On next world load, ace-token-art's chooser sees bioInFlight=true,
-// waits 60 seconds (per the post-fix timeout), then fails. Every time
-// it's asked to generate art for that actor. Permanent until manual
-// flag clear.
+// Two-layer recovery (Gemini's "mid-session staleness" follow-up):
 //
-// Fix: sweep all actors on ready and clear any stuck bioInFlight flags.
-// GM-only — only the GM has permission to update actor flags world-wide,
-// and the GM is the source of truth for bio generation state anyway.
+//   Layer 1 (world ready): clear all stuck bioInFlight flags on load.
+//     Recovers from full-session crashes (browser closed, world reload).
+//
+//   Layer 2 (mid-session staleness check): `bioInFlightSince` companion
+//     timestamp flag is set alongside bioInFlight. Read sites (token-art
+//     chooser etc.) treat the flag as stale if the timestamp is older
+//     than 5 minutes. A bio generation that legitimately takes > 5 min
+//     is broken anyway and shouldn't block other actors.
+//
+// GM-only — only the GM has permission to update actor flags world-wide.
+const BIO_INFLIGHT_STALE_MS = 5 * 60 * 1000;  // 5 minutes
+
 Hooks.once("ready", async () => {
     if (!game.user.isGM) return;
     try {
         const stuck = game.actors?.filter?.(a => a.getFlag?.(MODULE_ID, "bioInFlight")) ?? [];
         if (!stuck.length) return;
         for (const actor of stuck) {
-            try { await actor.setFlag(MODULE_ID, "bioInFlight", false); }
+            try {
+                await actor.setFlag(MODULE_ID, "bioInFlight", false);
+                await actor.unsetFlag?.(MODULE_ID, "bioInFlightSince");
+            }
             catch (_) { /* per-actor failure shouldn't block the sweep */ }
         }
         console.log(`${TAG} | Cleared ${stuck.length} stuck bioInFlight flag(s) on world load (recovery from crashed prior session).`);
@@ -48,6 +57,43 @@ Hooks.once("ready", async () => {
         console.warn(`${TAG} | bioInFlight sweep failed:`, err);
     }
 });
+
+/**
+ * Check whether an actor's bioInFlight flag is "live" (currently generating)
+ * vs "stuck" (mid-session staleness from an aborted prior generation).
+ *
+ * Returns true if the bio is genuinely in-flight RIGHT NOW (chooser should
+ * wait). Returns false if either (a) no flag set, OR (b) flag is set but
+ * the timestamp is older than the staleness window (treat as stale and
+ * proceed without waiting).
+ *
+ * Used by ace-token-art's chooser via the engine API
+ * (game.aceEngine.isBioInFlight) so the cross-module signal stays consistent
+ * with our internal queue state.
+ *
+ * @param {Actor} actor
+ * @returns {boolean} true if a live generation is in-flight for this actor
+ */
+export function isBioInFlight(actor) {
+    if (!actor) return false;
+    const inFlight = actor.getFlag?.(MODULE_ID, "bioInFlight");
+    if (!inFlight) return false;
+    const since = actor.getFlag?.(MODULE_ID, "bioInFlightSince");
+    if (!since) return true;  // legacy: no timestamp → trust the boolean
+    const age = Date.now() - Number(since);
+    if (age > BIO_INFLIGHT_STALE_MS) {
+        // Stale flag — opportunistic cleanup if we have permission
+        if (game.user?.isGM) {
+            try {
+                actor.setFlag(MODULE_ID, "bioInFlight", false);
+                actor.unsetFlag?.(MODULE_ID, "bioInFlightSince");
+                console.log(`${TAG} | Cleared stale bioInFlight on ${actor.name} (age ${Math.round(age / 1000)}s — was orphaned mid-session).`);
+            } catch (_) { /* non-fatal */ }
+        }
+        return false;
+    }
+    return true;
+}
 
 /** Read engine's AI config (replaces envoy's getEnvoyAIConfig). */
 function getEnvoyAIConfig() {
@@ -187,8 +233,11 @@ export async function queueBioGeneration(tokenDocument) {
     // `_processQueue` actually picks up the token. Without this, there's
     // a race window where token-art runs its check between queue and
     // process, sees no in-flight flag, and decides not to wait.
+    // Companion `bioInFlightSince` timestamp enables mid-session staleness
+    // recovery — see isBioInFlight() above.
     try {
         await tokenDocument.actor?.setFlag?.(MODULE_ID, "bioInFlight", true);
+        await tokenDocument.actor?.setFlag?.(MODULE_ID, "bioInFlightSince", Date.now());
     } catch (_) { /* non-fatal — flag is advisory */ }
 
     _queue.push(tokenDocument);
@@ -218,9 +267,10 @@ async function _processQueue() {
                 error = err;
                 console.error(`${TAG} | Generation failed for ${tokenDoc.actor?.name}:`, err);
             } finally {
-                // Clear in-flight flag — match scope of the set above
+                // Clear in-flight flag + companion timestamp — match scope of the set above
                 try {
                     await tokenDoc.actor?.setFlag?.(MODULE_ID, "bioInFlight", false);
+                    await tokenDoc.actor?.unsetFlag?.(MODULE_ID, "bioInFlightSince");
                 } catch (_) { /* non-fatal */ }
                 // Clear dedup tracking for linked actors
                 if (tokenDoc.actorLink && tokenDoc.actor) _pendingActorIds.delete(tokenDoc.actor.id);

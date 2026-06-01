@@ -4,6 +4,7 @@
 // ============================================================
 
 import { AcePanel }          from "./panel.mjs";
+import { isBioInFlight }     from "./npc/bio-generator.mjs";
 import { AceSettings }       from "./settings.mjs";
 import { initRemoteCatalog } from "./remote-catalog.mjs";
 import { SceneContext }       from "./scene-context.mjs";
@@ -1928,6 +1929,14 @@ Hooks.once("ready", async () => {
       askAI:     (prompt) => aiProvider?.chat(prompt, "", "", []),
       narrate:   (text) => panel?.narrateText?.(text),
       stopAllAudio: _stopAllAudio,
+
+      // ── Cross-module bio-generation status (used by ace-token-art) ──
+      // Staleness-aware: returns true ONLY if a bio is genuinely in-flight
+      // RIGHT NOW. Mid-session-orphaned flags (timestamp older than 5 min)
+      // are auto-cleaned and reported as not-in-flight. Synchronous since
+      // ace-token-art's chooser code path can't easily await.
+      // See `isBioInFlight` in npc/bio-generator.mjs.
+      isBioInFlight,
 
       // Auto Token Art API moved to module "ace-token-art":
       //   game.modules.get("ace-token-art").api.rescanTokenArt()
