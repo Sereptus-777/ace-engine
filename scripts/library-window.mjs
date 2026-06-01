@@ -149,6 +149,37 @@ export class LibraryWindow extends ApplicationV2 {
         this._wireEvents(content);
     }
 
+    /**
+     * Inject a minimize button into the window header.
+     *
+     * Foundry V13's ApplicationV2 frame only ships a close button by default —
+     * the minimize button needs to be added manually. AcePanel does this with
+     * a custom "minimize to floating badge" flow; the Library doesn't need
+     * that flourish, so we use Foundry's built-in `this.minimize()` which
+     * collapses to a standard horizontal bar (same as any native Foundry
+     * window). Idempotent — won't double-add on re-renders.
+     */
+    _onRender(_context, _options) {
+        const header = this.element?.querySelector?.(".window-header");
+        if (!header) return;
+        if (header.querySelector(".ace-library-btn-minimize")) return;
+        const minBtn = document.createElement("button");
+        minBtn.type = "button";
+        minBtn.className = "header-control ace-library-btn-minimize";
+        minBtn.title = "Minimize";
+        minBtn.innerHTML = '<i class="fas fa-minus"></i>';
+        minBtn.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            this.minimize();
+        });
+        // Insert immediately before the close button so the order matches
+        // every other Foundry window (minimize, then close, top-right corner).
+        const closeBtn = header.querySelector('button[data-action="close"], button.close, .header-control:last-of-type');
+        if (closeBtn) header.insertBefore(minBtn, closeBtn);
+        else header.appendChild(minBtn);
+    }
+
     _buildHTML() {
         // Wrap the panel's existing _buildLibraryPanel output in a window-
         // scoped container so our larger-font, higher-contrast CSS hits

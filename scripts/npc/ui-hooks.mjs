@@ -318,6 +318,24 @@ export function registerUiHooks() {
 
         if (token.actor.type !== "npc") return;
 
+        // ── ACE QOL interop: skip chat overlay on dead tokens ──
+        // When ace-qol's death pipeline kills a token (NPC at 0 HP, or any
+        // permanent-kill effect like Vorpal), it sets flags.ace-qol.isDead
+        // on the TokenDocument. The token's texture has been swapped to a
+        // corpse image at that point, and ace-qol routes clicks on dead
+        // tokens to the loot dialog. Drawing the "talk to me" chat bubble
+        // on top of a corpse breaks both the immersion AND the loot UX,
+        // because the chat-bubble image steals the click. Bail early.
+        try {
+            const isDeadByAceQol = token.document?.flags?.["ace-qol"]?.isDead === true;
+            if (isDeadByAceQol) {
+                // Defensive: scrub any stale chat-bubble div left over from a
+                // pre-death render of the same token HUD.
+                try { $(html).find(".ai-token-controls").remove(); } catch (_) {}
+                return;
+            }
+        } catch (_) { /* fall through to normal chat overlay flow */ }
+
         const actor  = token.actor;
         const isGM   = game.user.isGM;
         const jHtml  = $(html);
@@ -567,6 +585,15 @@ export function registerUiHooks() {
             // Skip if GM disabled chat or creature is mindless
             if (_getFlag(actor, MODULE_ID, "chatDisabled")) return;
             if (_isMindless(actor)) return;
+
+            // ── ACE QOL interop: dead tokens get the loot dialog, not chat ──
+            // Bail without preventDefault so the right-click falls through to
+            // Foundry's normal Token._onClickRight handler, which ace-qol has
+            // patched to open the loot dialog on dead tokens. If we eat the
+            // event here, the loot UX silently breaks.
+            try {
+                if (clickedToken.document?.flags?.["ace-qol"]?.isDead === true) return;
+            } catch (_) { /* fall through */ }
 
             ev.preventDefault();
             ev.stopPropagation();

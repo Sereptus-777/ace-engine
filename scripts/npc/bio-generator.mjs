@@ -148,6 +148,16 @@ export function queueBioGeneration(tokenDocument) {
         ui.notifications?.warn(`Envoy: Bio generation queue full (${MAX_QUEUE_SIZE} max). Some tokens were skipped.`);
         return;
     }
+
+    // Mark bio in-flight at QUEUE time (not at processing time) so the
+    // ace-token-art `_shouldWaitForBio` check sees the flag even before
+    // `_processQueue` actually picks up the token. Without this, there's
+    // a race window where token-art runs its check between queue and
+    // process, sees no in-flight flag, and decides not to wait.
+    try {
+        await tokenDocument.actor?.setFlag?.(MODULE_ID, "bioInFlight", true);
+    } catch (_) { /* non-fatal — flag is advisory */ }
+
     _queue.push(tokenDocument);
     _processQueue();
 }
@@ -163,12 +173,27 @@ async function _processQueue() {
         while (_queue.length > 0) {
             const tokenDoc = _queue.shift();
             let error = null;
+            // ── Mark bio in-flight for this actor ──
+            // The ace-token-art chooser checks `bioInFlight` to decide whether
+            // to wait for completion. We set it at pipeline start and clear it
+            // in the finally block — so the flag is true exclusively during
+            // active generation. Without this flag, the chooser couldn't tell
+            // a re-generation (should wait) from a permanently-completed bio
+            // (no need to wait).
+            try {
+                await tokenDoc.actor?.setFlag?.(MODULE_ID, "bioInFlight", true);
+            } catch (_) { /* non-fatal — flag is advisory */ }
+
             try {
                 await _generateBio(tokenDoc);
             } catch (err) {
                 error = err;
                 console.error(`${TAG} | Generation failed for ${tokenDoc.actor?.name}:`, err);
             } finally {
+                // Clear in-flight flag — match scope of the set above
+                try {
+                    await tokenDoc.actor?.setFlag?.(MODULE_ID, "bioInFlight", false);
+                } catch (_) { /* non-fatal */ }
                 // Clear dedup tracking for linked actors
                 if (tokenDoc.actorLink && tokenDoc.actor) _pendingActorIds.delete(tokenDoc.actor.id);
                 // Fire completion hook so listeners (ace-token-art chooser,
@@ -1464,6 +1489,40 @@ async function _generateBio(tokenDocument) {
         await actor.setFlag(MODULE_ID, "bioGenerated", true);
         await actor.setFlag(MODULE_ID, "bioSceneId", canvas.scene?.id || "");
         await actor.setFlag(MODULE_ID, "bioSceneName", canvas.scene?.name || "");
+
+        // ── Rename the linked actor (matches unlinked branch behavior) ──
+        // When the GM checked "Rename NPC" in the faction-setup dialog, an AI-
+        // generated proper name (e.g. "Aldric Thorne" instead of "Death Knight")
+        // was produced and stored in `generatedName`. The unlinked branch above
+        // applies that name to the tokenDocument via `tokenDocument.update`.
+        // The linked branch previously SKIPPED this step — bio got written but
+        // the actor stayed named "Death Knight", which is wrong because the GM
+        // explicitly consented to the rename via the checkbox.
+        //
+        // For linked actors, the rename has to happen on the actor itself (and
+        // optionally the token document, though linked tokens inherit from the
+        // actor by default). We update the actor's name; tokens already on
+        // canvas linked to this actor will reflect the new name automatically.
+        if (generatedName && generatedName !== actor.name) {
+            try {
+                const oldName = actor.name;
+                await actor.update({ name: generatedName });
+                await actor.setFlag(MODULE_ID, "nameRevealed", true);
+                console.log(`${TAG} | Linked actor renamed: "${oldName}" → "${generatedName}"`);
+
+                // If a token document was passed in, also update its name and
+                // make the nameplate always-visible (matches unlinked branch).
+                if (tokenDocument && tokenDocument !== actor) {
+                    try {
+                        await tokenDocument.update({ name: generatedName, displayName: 50 });
+                    } catch (tokErr) {
+                        console.warn(`${TAG} | Token nameplate update failed (non-fatal):`, tokErr);
+                    }
+                }
+            } catch (renameErr) {
+                console.warn(`${TAG} | Linked actor rename failed (non-fatal — bio still saved):`, renameErr);
+            }
+        }
 
         // Save personality to actor flag (shown in AI Setup dialog)
         if (generatedPersonality) {

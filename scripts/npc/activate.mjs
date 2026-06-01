@@ -314,15 +314,32 @@ function _registerHooks() {
     // closed in an unclean way (browser reload mid-conversation, crash,
     // network drop before the close handler awaited its unsetFlag) the
     // flag survives to the next session and blocks all player movement
-    // forever. On every world load, scan every token the current user
-    // owns and clear any lingering flag. By definition no conversation is
-    // active at world load — so any flag is stale and safe to drop.
+    // forever. On every world load, scan every token and clear any
+    // lingering flag. By definition no conversation is active at world
+    // load — so any flag is stale and safe to drop.
+    //
+    // ── CRITICAL LAUNCH FIX (May 31) ────────────────────────────────────
+    // Original code: `if (!tokenDoc.isOwner) continue;` — sweep only ran
+    // on tokens the current user OWNED. The GM does NOT own player tokens,
+    // so loading as GM (the most common case) silently skipped clearing
+    // stale locks on Firaxis / Logan / any other PC token. The lock then
+    // persisted until the player happened to log in AND their own sweep
+    // ran without failures. Real customers hit this constantly — every
+    // crashed chat = a permanently locked PC token for the GM's session.
+    //
+    // Fix: GM clears EVERY token's lock (GM has permission to update any
+    // token in the world). Players still only clear their own tokens, but
+    // since the GM sweep runs every load, the lock typically clears before
+    // the player even sees it.
     Hooks.once("ready", async () => {
         try {
             let cleared = 0;
+            const isGM = game.user.isGM;
             for (const scene of game.scenes) {
                 for (const tokenDoc of scene.tokens) {
-                    if (!tokenDoc.isOwner) continue;
+                    // GM: clear all locks (GM owns all permissions).
+                    // Player: only clear own tokens (no permission for others).
+                    if (!isGM && !tokenDoc.isOwner) continue;
                     const a = tokenDoc.getFlag(MODULE_ID, "conversationLocked");
                     const b = tokenDoc.flags?.npclink?.conversationLocked;
                     if (!a && !b) continue;
@@ -330,7 +347,7 @@ function _registerHooks() {
                         if (a) await tokenDoc.unsetFlag(MODULE_ID, "conversationLocked");
                         if (b) await tokenDoc.unsetFlag("npclink", "conversationLocked");
                         cleared++;
-                    } catch (_) { /* permission denied on tokens we don't own — skip */ }
+                    } catch (_) { /* permission denied — skip silently */ }
                 }
             }
             if (cleared > 0) {

@@ -18,6 +18,7 @@ import { AceConfigPanel } from "./config-panel.mjs";
 // AceSettings.injectMainPageStatus() further down — see that hook.
 const VISIBLE_IN_MAIN_CONFIG = new Set([
     "moduleEnabled",   // master on/off — quick reach, only editable thing on main page
+    "gameRulesEdition", // 5e ruleset toggle (2014 / 2024 / Auto) — strategic launch setting
 ]);
 
 const DEFAULT_SYSTEM_PROMPT = `You are ACE, an expert AI Game Master assistant for tabletop RPGs running in Foundry VTT.
@@ -94,6 +95,26 @@ export class AceSettings {
       hint: "Master on/off switch for the entire module. When OFF, Engine's panel, AI calls, digest/vault/reputation engines, and all subsystems are skipped. Requires a world reload to take effect.",
       type: Boolean,
       default: true,
+    });
+
+    // ── Game Rules Edition (mirror of ace-qol's same setting) ──
+    // Strategic launch toggle that drives every edition-aware feature
+    // (class abilities, magic items, feats with different mechanics in
+    // 2014 vs 2024 5e). ace-qol is the source of truth for combat
+    // mechanics; ace-engine registers its own copy so the user sees the
+    // toggle when they open ACE Engine settings too. Both default to
+    // "auto" so a fresh install picks the right edition automatically
+    // from each actor's class items.
+    s("gameRulesEdition", {
+      name: "D&D 5e Rules Edition",
+      hint: "Which 5e ruleset ACE should follow for narration, NPC behavior, and rules references. Default: Auto — detect per-actor from class items. Mirror this with the same setting in ACE QOL for full consistency.",
+      type: String,
+      choices: {
+        auto:   "Auto — detect per actor from their class items (recommended)",
+        "2014": "2014 Rules (original 5e Player's Handbook)",
+        "2024": "2024 Rules (new Player's Handbook / One D&D)",
+      },
+      default: "auto",
     });
 
     // ── AI Provider ─────────────────────────────────────────
