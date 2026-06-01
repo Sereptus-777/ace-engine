@@ -16,6 +16,39 @@ const MODULE_ID = "ace-engine";
 const QOL_ID    = "ace-qol";
 const TAG       = "ACE: Engine | Bio";
 
+// ─── Sweep stuck bioInFlight flags on world ready ──────────────────────────
+// Vulnerability identified by Gemini code review (2026-05-31):
+//
+// `bioInFlight` is stored on the actor (Foundry DB) and cleared in a
+// `try/finally`. The finally block handles standard JS errors + API
+// timeouts perfectly. BUT — if the GM client is terminated abruptly
+// (F5 refresh, browser crash, power outage, OS kill) during generation,
+// the JS execution environment is destroyed and the `finally` never
+// fires. The DB write of bioInFlight=true persists.
+//
+// On next world load, ace-token-art's chooser sees bioInFlight=true,
+// waits 60 seconds (per the post-fix timeout), then fails. Every time
+// it's asked to generate art for that actor. Permanent until manual
+// flag clear.
+//
+// Fix: sweep all actors on ready and clear any stuck bioInFlight flags.
+// GM-only — only the GM has permission to update actor flags world-wide,
+// and the GM is the source of truth for bio generation state anyway.
+Hooks.once("ready", async () => {
+    if (!game.user.isGM) return;
+    try {
+        const stuck = game.actors?.filter?.(a => a.getFlag?.(MODULE_ID, "bioInFlight")) ?? [];
+        if (!stuck.length) return;
+        for (const actor of stuck) {
+            try { await actor.setFlag(MODULE_ID, "bioInFlight", false); }
+            catch (_) { /* per-actor failure shouldn't block the sweep */ }
+        }
+        console.log(`${TAG} | Cleared ${stuck.length} stuck bioInFlight flag(s) on world load (recovery from crashed prior session).`);
+    } catch (err) {
+        console.warn(`${TAG} | bioInFlight sweep failed:`, err);
+    }
+});
+
 /** Read engine's AI config (replaces envoy's getEnvoyAIConfig). */
 function getEnvoyAIConfig() {
     try {
@@ -96,7 +129,7 @@ export async function runItemAndLootOnly(tokenDocument) {
  * Called from the createToken hook in main.js.
  * @param {TokenDocument} tokenDocument
  */
-export function queueBioGeneration(tokenDocument) {
+export async function queueBioGeneration(tokenDocument) {
     const actor = tokenDocument.actor;
     if (!actor) return;
 
@@ -173,16 +206,11 @@ async function _processQueue() {
         while (_queue.length > 0) {
             const tokenDoc = _queue.shift();
             let error = null;
-            // ── Mark bio in-flight for this actor ──
-            // The ace-token-art chooser checks `bioInFlight` to decide whether
-            // to wait for completion. We set it at pipeline start and clear it
-            // in the finally block — so the flag is true exclusively during
-            // active generation. Without this flag, the chooser couldn't tell
-            // a re-generation (should wait) from a permanently-completed bio
-            // (no need to wait).
-            try {
-                await tokenDoc.actor?.setFlag?.(MODULE_ID, "bioInFlight", true);
-            } catch (_) { /* non-fatal — flag is advisory */ }
+            // ── bioInFlight already set at QUEUE time (in addToBioQueue) ──
+            // Previous code re-set it here too — redundant DB write (and DB
+            // writes sync to all clients, so each one costs network traffic).
+            // The flag was set when this token entered the queue and survives
+            // until the `finally` block below clears it.
 
             try {
                 await _generateBio(tokenDoc);
