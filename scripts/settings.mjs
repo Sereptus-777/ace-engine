@@ -780,6 +780,33 @@ export class AceSettings {
       hint: "Add a subtle colored glow around player character tokens using each player's chosen color. Personal setting — each user controls their own.",
       type: Boolean,
       default: true,
+      onChange: () => {
+        import("./canvas-highlight.mjs").then(({ CanvasHighlight }) => {
+          CanvasHighlight.refreshAllPcGlows?.();
+        }).catch(() => {});
+      },
+    });
+
+    s("attunementPromptEnabled", {
+      scope: "world",
+      name: "Auto-Prompt for Item Attunement",
+      hint: "When a magic item that requires attunement is added to a PC's inventory (drag from compendium, loot, etc.), pop up a dialog offering to attune the item immediately. Honors the RAW 3-item attunement limit. Skips items that don't need attunement, NPCs, and unidentified items.",
+      type: Boolean,
+      default: true,
+    });
+
+    s("pcGlowSize", {
+      scope: "client",
+      name: "PC Glow Size",
+      hint: "Scale the PC token glow disc. 1.00 = slightly larger than the token (default — peeks out as a ring). Drop to 0.50 to make it small enough to fit inside the token's own square. Personal setting — each user controls their own.",
+      type: Number,
+      default: 1.0,
+      range: { min: 0.3, max: 1.5, step: 0.05 },
+      onChange: () => {
+        import("./canvas-highlight.mjs").then(({ CanvasHighlight }) => {
+          CanvasHighlight.refreshAllPcGlows?.();
+        }).catch(() => {});
+      },
     });
 
     // ── Combat (moved from ACE: Envoy — merger Phase 1A) ────

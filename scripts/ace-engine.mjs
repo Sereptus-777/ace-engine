@@ -27,6 +27,7 @@ import { VaultSearch }         from "./vault-search.mjs";
 import { SceneIntelligence }   from "./scene-intelligence.mjs";
 // Combat — Initiative Reorder (moved from ACE: Envoy, merger Phase 1A)
 import { injectReorderButtons } from "./combat/initiative-reorder.mjs";
+import { AttunementPrompt }     from "./attunement-prompt.mjs";
 // NPC Chat — gated activation entry point (moved from ACE: Envoy, merger Phase 3)
 import { activateNpcChat, npcChatState } from "./npc/activate.mjs";
 // Serialized biography writer — prevents lost updates when multiple
@@ -653,6 +654,16 @@ Hooks.once("ready", async () => {
   // so users get new models / deprecation warnings without a module
   // release. Falls back gracefully to the bundled copy if offline.
   initRemoteCatalog().catch(err => console.warn(`${MODULE_ID} | remote catalog init failed:`, err));
+
+  // ── Attunement prompt — popup when a requires-attunement item is added
+  //    to a PC's inventory. Setting `attunementPromptEnabled` (default ON)
+  //    gates the feature. Lives in ACE Engine because it's an item-lifecycle
+  //    UX feature alongside bio-generator's npc-side item flow.
+  try {
+    AttunementPrompt.register();
+  } catch (err) {
+    console.error(`${MODULE_ID} | AttunementPrompt init failed:`, err);
+  }
 
   // ── Socket listener — runs for ALL users (GM + players) ──────
   // This lets players receive SFX broadcast by the GM.

@@ -122,7 +122,14 @@ export class CanvasHighlight {
     const hexInt = parseInt(hexColor.replace("#", ""), 16);
 
     const size = Math.max(token.w ?? 100, token.h ?? 100);
-    const radius = size * 0.55;   // slightly larger than the token so it peeks out as a ring
+    // User-configurable size multiplier (default 1.0 = current behavior, 0.55x token).
+    // Drop to ~0.5 to make the disc fit inside the token's own square cell.
+    let sizeScale = 1.0;
+    try {
+      const v = game.settings.get("ace-engine", "pcGlowSize");
+      if (Number.isFinite(v) && v > 0) sizeScale = v;
+    } catch (_) { /* setting not yet registered → fall through to default */ }
+    const radius = size * 0.55 * sizeScale;
     const center = size / 2;
 
     // Solid disc underneath the token — static, no blur, no pulse.

@@ -6910,16 +6910,113 @@ li.ace-toolbar-btn:hover {
     inset 0 0 32px rgba(0, 0, 0, 0.55);
 }
 
-/* ── Two-column layout: tab rail + pane ────────────────────────────── */
+/* ── Layout: search bar on top, two-column body (tab rail + pane) below ── */
 
 .ace-cfg-root {
   position: relative;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;       /* search bar on top, body below */
   flex: 1 1 auto;
   overflow: hidden;
   background: transparent;
   border: none;
+}
+
+.ace-cfg-body {
+  position: relative;
+  display: flex;
+  flex-direction: row;          /* tab list left, pane right (old layout) */
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+/* ── Cross-tab search bar (port of ace-qol-cfg-search) ───────────────── */
+.ace-cfg-search {
+  position: relative;
+  width: 100%;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.35);
+  border-bottom: 1px solid rgba(212, 175, 55, 0.25);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ace-cfg-search-icon {
+  color: #d4af37;
+  font-size: 14px;
+  padding-left: 4px;
+}
+.ace-cfg-search-input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: #f0e4c0;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  border-radius: 4px;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.ace-cfg-search-input:focus {
+  border-color: #d4af37;
+  box-shadow: 0 0 6px rgba(212, 175, 55, 0.4);
+}
+.ace-cfg-search-input::placeholder {
+  color: #888;
+  font-style: italic;
+}
+.ace-cfg-search-clear {
+  background: transparent;
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  color: #c0b288;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.ace-cfg-search-clear:hover {
+  background: rgba(212, 175, 55, 0.15);
+  color: #f0e4c0;
+}
+
+/* Each search result wraps a setting with a "jump to tab" chip above it */
+.ace-cfg-search-result {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed rgba(212, 175, 55, 0.18);
+}
+.ace-cfg-search-result:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+.ace-cfg-search-tab-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(212, 175, 55, 0.12);
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  color: #d4af37;
+  padding: 3px 9px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.ace-cfg-search-tab-chip:hover {
+  background: rgba(212, 175, 55, 0.25);
+  color: #fff7cc;
+}
+.ace-cfg-search-tab-chip .ace-cfg-tab-icon {
+  width: 14px;
+  height: 14px;
 }
 
 /* ── Left rail: tab list ──────────────────────────────────────────── */

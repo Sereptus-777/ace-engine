@@ -51,6 +51,11 @@ const TABS = [
         keys: ["npcChatEnabled", "autoGenerateBio", "tokenDropAI", "alwaysRunItemAndLoot", "skipBioForSummons", "autoLinkSummons", "enableSocialProfiles", "enableAutoLink", "npcKnowledgeBudget", "npcIntelligenceScaling", "npcKnowledgeCap", "enableFactions", "factionSpyChance", "factionWildcardChance", "defaultVoiceRegion", "npcWebpFolder"],
     },
     {
+        id: "items", label: "Items & Attunement", icon: "fa-solid fa-link",
+        intro: "Item lifecycle UX — auto-prompt for attunement when a magic item needing it is added to a PC's inventory, honoring the 3-item attunement limit. More item-lifecycle features will land here over time (auto-equip suggestions, ration tracking, magic item identification flow).",
+        keys: ["attunementPromptEnabled"],
+    },
+    {
         id: "combat", label: "Combat", icon: "fa-solid fa-shield-alt",
         intro: "Initiative reorder arrows, auto-XP on kill, auto-move dead NPCs to the ☠ Fallen folder.",
         keys: ["initiativeReorder", "autoDistributeXP", "autoCleanupDead"],
@@ -66,9 +71,14 @@ const TABS = [
         keys: ["enableDocumentLibrary", "docContextBudget", "autoMergeDigests", "autoLearnToBible", "enableVisionImages"],
     },
     {
+        id: "visualaids", label: "Visual Aids", icon: "fa-solid fa-eye",
+        intro: "Token-level visual decorations the GM (or each player) can toggle. PC Token Glow draws a coloured base disc under each player character matching their chosen colour — making it easy to spot the party on a busy map.",
+        keys: ["pcGlow", "pcGlowSize"],
+    },
+    {
         id: "misc", label: "Misc", icon: "fa-solid fa-cog",
-        intro: "Profanity filter, suggestion engine, PC glow indicator, debug mode.",
-        keys: ["profanityFilter", "autoSuggestions", "suggestionInterval", "pcGlow", "debugMode"],
+        intro: "Profanity filter, suggestion engine, debug mode.",
+        keys: ["profanityFilter", "autoSuggestions", "suggestionInterval", "debugMode"],
     },
 ];
 
@@ -95,6 +105,7 @@ export class AceConfigPanel extends ApplicationV2 {
     constructor(options = {}) {
         super(options);
         this._activeTab = TABS[0].id;
+        this._searchQuery = ""; // cross-tab filter input value
         // Per-provider API key cache (Phase: settings cleanup 2026-05-01).
         // Mirrors the apiKeysByProvider setting; lets us stash the visible
         // key in-memory when the user swaps providers, then write everything
@@ -162,15 +173,28 @@ export class AceConfigPanel extends ApplicationV2 {
             </li>
         `).join("");
 
-        const activeTab = TABS.find(t => t.id === this._activeTab) || TABS[0];
-        const settingsHtml = this._buildSettingsHTML(activeTab);
+        // ── Search bar (cross-tab) ──
+        // When query has 2+ chars, the pane shows search results across ALL
+        // tabs instead of the active tab's settings. Each result is rendered
+        // with a small chip showing which tab it belongs to (clickable jump).
+        const q = String(this._searchQuery ?? "").trim();
+        const searchBar = `
+            <div class="ace-cfg-search">
+                <span class="ace-cfg-search-icon"><i class="fa-solid fa-magnifying-glass"></i></span>
+                <input type="search" class="ace-cfg-search-input" placeholder="Search all settings…"
+                       value="${this._esc(this._searchQuery ?? "")}"
+                       autocomplete="off" spellcheck="false" />
+                ${q ? `<button type="button" class="ace-cfg-search-clear" data-action="clear-search" title="Clear search"><i class="fa-solid fa-xmark"></i></button>` : ""}
+            </div>
+        `;
 
-        // No honeypot needed — secret fields are now type="text" with CSS
-        // text-security masking, so Chrome can't detect a password form at all.
-
-        return `
-            <div class="ace-cfg-root">
-                <ul class="ace-cfg-tablist" role="tablist">${tabRail}</ul>
+        let paneHtml;
+        if (q.length >= 2) {
+            paneHtml = this._renderSearchResults(q);
+        } else {
+            const activeTab = TABS.find(t => t.id === this._activeTab) || TABS[0];
+            const settingsHtml = this._buildSettingsHTML(activeTab);
+            paneHtml = `
                 <div class="ace-cfg-pane" data-tab="${activeTab.id}">
                     <header class="ace-cfg-pane-header">
                         <span class="ace-cfg-pane-icon"><i class="${activeTab.icon}"></i></span>
@@ -180,6 +204,16 @@ export class AceConfigPanel extends ApplicationV2 {
                     ${activeTab.id === "ai" ? this._buildDeprecationBanners() : ""}
                     ${activeTab.id === "ai" ? this._buildAiTabActions() : ""}
                     <div class="ace-cfg-settings">${settingsHtml}</div>
+                </div>
+            `;
+        }
+
+        return `
+            <div class="ace-cfg-root">
+                ${searchBar}
+                <div class="ace-cfg-body">
+                    <ul class="ace-cfg-tablist" role="tablist">${tabRail}</ul>
+                    ${paneHtml}
                 </div>
             </div>
             <footer class="ace-cfg-footer">
@@ -194,6 +228,68 @@ export class AceConfigPanel extends ApplicationV2 {
                     <i class="fa-solid fa-save"></i> Save Changes
                 </button>
             </footer>
+        `;
+    }
+
+    /**
+     * Cross-tab search results. Walks every tab's settings, matches the
+     * query (case-insensitive) against setting key, name, and hint.
+     * Each match is shown with a clickable "tab chip" so the user can jump
+     * to that tab and edit the setting in context.
+     */
+    _renderSearchResults(query) {
+        const q = query.toLowerCase();
+        const results = [];
+        for (const tab of TABS) {
+            for (const key of (tab.keys ?? [])) {
+                const fullKey = `${MODULE_ID}.${key}`;
+                const meta = game.settings.settings.get(fullKey);
+                if (!meta) continue;
+                const name = String(meta.name ?? "").toLowerCase();
+                const hint = String(meta.hint ?? "").toLowerCase();
+                if (name.includes(q) || hint.includes(q) || key.toLowerCase().includes(q)) {
+                    results.push({ tab, key, meta });
+                }
+            }
+        }
+
+        if (!results.length) {
+            return `
+                <div class="ace-cfg-pane" data-tab="__search__">
+                    <header class="ace-cfg-pane-header">
+                        <span class="ace-cfg-pane-icon"><i class="fa-solid fa-magnifying-glass"></i></span>
+                        <h2>Search Results</h2>
+                    </header>
+                    <p class="ace-cfg-intro">No settings match <strong>"${this._esc(query)}"</strong>. Try a shorter query or different keyword.</p>
+                </div>
+            `;
+        }
+
+        // Build a quick virtual tab containing only the matching keys so we can
+        // reuse _buildSettingsHTML for the actual setting rows.
+        const itemsHtml = results.map(r => {
+            const fakeTab = { keys: [r.key] };
+            const settingRow = this._buildSettingsHTML(fakeTab);
+            return `
+                <div class="ace-cfg-search-result">
+                    <button type="button" class="ace-cfg-search-tab-chip" data-action="jump-to-tab"
+                            data-tab="${r.tab.id}" title="Jump to ${this._esc(r.tab.label)} tab">
+                        <span class="ace-cfg-tab-icon"><i class="${r.tab.icon}"></i></span>
+                        ${this._esc(r.tab.label)}
+                    </button>
+                    ${settingRow}
+                </div>
+            `;
+        }).join("");
+
+        return `
+            <div class="ace-cfg-pane" data-tab="__search__">
+                <header class="ace-cfg-pane-header">
+                    <span class="ace-cfg-pane-icon"><i class="fa-solid fa-magnifying-glass"></i></span>
+                    <h2>Search Results — ${results.length} match${results.length === 1 ? "" : "es"} for "${this._esc(query)}"</h2>
+                </header>
+                <div class="ace-cfg-settings">${itemsHtml}</div>
+            </div>
         `;
     }
 
@@ -425,11 +521,56 @@ export class AceConfigPanel extends ApplicationV2 {
     // ─── Event wiring (manual, after _replaceHTML) ───────────────────────
 
     _wireEvents(content) {
-        // Tab clicks → switch active tab + re-render
+        // ── Search input ── re-renders on each keystroke to filter across
+        // all tabs. Focus and caret position are restored after re-render so
+        // typing stays smooth.
+        const searchInput = content.querySelector(".ace-cfg-search-input");
+        if (searchInput) {
+            searchInput.addEventListener("input", (ev) => {
+                const newQuery = ev.target.value ?? "";
+                const caretPos = ev.target.selectionStart;
+                this._searchQuery = newQuery;
+                this.render(false);
+                // Re-render is async — restore focus + caret on next tick
+                setTimeout(() => {
+                    const fresh = this.element?.querySelector?.(".ace-cfg-search-input");
+                    if (fresh) {
+                        fresh.focus();
+                        try { fresh.setSelectionRange(caretPos, caretPos); } catch (_) {}
+                    }
+                }, 0);
+            });
+        }
+        content.querySelector("[data-action='clear-search']")?.addEventListener("click", () => {
+            this._searchQuery = "";
+            this.render(false);
+        });
+        // Jump-to-tab chips inside search results
+        content.querySelectorAll("[data-action='jump-to-tab']").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const id = btn.dataset.tab;
+                if (id) {
+                    this._activeTab = id;
+                    this._searchQuery = "";
+                    this.render(false);
+                }
+            });
+        });
+
+        // Tab clicks → switch active tab + re-render.
+        // Preserve the tab-rail scroll position across re-render — without this,
+        // clicking a tab below the fold causes the left rail to jump to top
+        // (the new DOM has fresh scrollTop=0). Capture before, restore after.
         content.querySelectorAll(".ace-cfg-tab").forEach(el => {
             el.addEventListener("click", () => {
+                const tablistEl = content.querySelector(".ace-cfg-tablist");
+                const savedScroll = tablistEl?.scrollTop ?? 0;
                 this._activeTab = el.dataset.tab;
-                this.render(false);
+                const renderResult = this.render(false);
+                Promise.resolve(renderResult).then(() => {
+                    const newTablist = this.element?.querySelector?.(".ace-cfg-tablist");
+                    if (newTablist) newTablist.scrollTop = savedScroll;
+                });
             });
         });
 
