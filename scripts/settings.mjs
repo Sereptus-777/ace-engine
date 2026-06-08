@@ -809,6 +809,69 @@ export class AceSettings {
       },
     });
 
+    s("pcGlowOpacity", {
+      scope: "client",
+      name: "PC Glow Opacity",
+      hint: "How visible the PC token glow is. 1.00 = fully opaque (current default). Drop to 0.40 for a subtle hint.",
+      type: Number,
+      default: 0.85,
+      range: { min: 0.1, max: 1.0, step: 0.05 },
+      onChange: () => {
+        import("./canvas-highlight.mjs").then(({ CanvasHighlight }) => {
+          CanvasHighlight.refreshAllPcGlows?.();
+        }).catch(() => {});
+      },
+    });
+
+    s("pcGlowStyle", {
+      scope: "client",
+      name: "PC Glow Style",
+      hint: "Visual style for the under-token PC glow. Soft Disc = filled circle with dark outline (current default). Solid Ring = hollow circle outline only. Soft Glow = wider falloff halo. Pulse = breathing disc.",
+      type: String,
+      default: "soft_disc",
+      choices: {
+        "soft_disc": "Soft Disc (filled circle + dark outline)",
+        "solid_ring": "Solid Ring (hollow outline only)",
+        "soft_glow": "Soft Glow (wider halo, no outline)",
+        "pulse": "Pulse (disc that breathes in and out)",
+      },
+      onChange: () => {
+        import("./canvas-highlight.mjs").then(({ CanvasHighlight }) => {
+          CanvasHighlight.refreshAllPcGlows?.();
+        }).catch(() => {});
+      },
+    });
+
+    s("pcGlowColorMode", {
+      scope: "client",
+      name: "PC Glow Color Source",
+      hint: "Where the glow color comes from. Player's chosen color (default — each player's Foundry color) or a single custom color applied to all PCs.",
+      type: String,
+      default: "player",
+      choices: {
+        "player": "Each player's chosen color (Foundry user color)",
+        "custom": "Custom color (applied to all PCs uniformly)",
+      },
+      onChange: () => {
+        import("./canvas-highlight.mjs").then(({ CanvasHighlight }) => {
+          CanvasHighlight.refreshAllPcGlows?.();
+        }).catch(() => {});
+      },
+    });
+
+    s("pcGlowCustomColor", {
+      scope: "client",
+      name: "PC Glow Custom Color",
+      hint: "Hex color used when Color Source is set to 'Custom'. Default is gold (#d4af37).",
+      type: String,
+      default: "#d4af37",
+      onChange: () => {
+        import("./canvas-highlight.mjs").then(({ CanvasHighlight }) => {
+          CanvasHighlight.refreshAllPcGlows?.();
+        }).catch(() => {});
+      },
+    });
+
     // ── Combat (moved from ACE: Envoy — merger Phase 1A) ────
     s("initiativeReorder", {
       name: "Initiative Reorder Arrows",

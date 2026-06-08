@@ -116,35 +116,73 @@ export class CanvasHighlight {
       this.removePcGlow(token);
     }
 
-    // Owner's chosen color — falls back to a default red if no owner found.
-    const owner = game.users?.find(u => !u.isGM && token.actor.testUserPermission(u, "OWNER"));
-    const hexColor = owner?.color?.toString?.() ?? owner?.color ?? "#e51c1c";
-    const hexInt = parseInt(hexColor.replace("#", ""), 16);
+    // ── Color resolution ──
+    let hexColor = "#e51c1c"; // fallback red
+    let colorMode = "player";
+    try { colorMode = game.settings.get("ace-engine", "pcGlowColorMode") ?? "player"; }
+    catch (_) {}
+    if (colorMode === "custom") {
+      try { hexColor = game.settings.get("ace-engine", "pcGlowCustomColor") ?? "#d4af37"; }
+      catch (_) { hexColor = "#d4af37"; }
+    } else {
+      const owner = game.users?.find(u => !u.isGM && token.actor.testUserPermission(u, "OWNER"));
+      hexColor = owner?.color?.toString?.() ?? owner?.color ?? "#e51c1c";
+    }
+    const hexInt = parseInt(String(hexColor).replace("#", ""), 16);
 
+    // ── Geometry ──
     const size = Math.max(token.w ?? 100, token.h ?? 100);
-    // User-configurable size multiplier (default 1.0 = current behavior, 0.55x token).
-    // Drop to ~0.5 to make the disc fit inside the token's own square cell.
     let sizeScale = 1.0;
-    try {
-      const v = game.settings.get("ace-engine", "pcGlowSize");
-      if (Number.isFinite(v) && v > 0) sizeScale = v;
-    } catch (_) { /* setting not yet registered → fall through to default */ }
+    let opacity = 0.85;
+    let style = "soft_disc";
+    try { const v = game.settings.get("ace-engine", "pcGlowSize");    if (Number.isFinite(v) && v > 0) sizeScale = v; } catch (_) {}
+    try { const v = game.settings.get("ace-engine", "pcGlowOpacity"); if (Number.isFinite(v) && v > 0) opacity = v; } catch (_) {}
+    try { style = game.settings.get("ace-engine", "pcGlowStyle") ?? "soft_disc"; } catch (_) {}
+
     const radius = size * 0.55 * sizeScale;
     const center = size / 2;
 
-    // Solid disc underneath the token — static, no blur, no pulse.
-    // Filled body + darker outline for contrast against varied map backgrounds.
+    // ── Draw based on style ──
     const disc = new PIXI.Graphics();
-    disc.lineStyle(3, 0x000000, 0.55);      // thin dark outline for contrast
-    disc.beginFill(hexInt, 0.85);
-    disc.drawCircle(center, center, radius);
-    disc.endFill();
+    if (style === "solid_ring") {
+      // Hollow circle outline only — no fill
+      disc.lineStyle(4, hexInt, opacity);
+      disc.drawCircle(center, center, radius);
+    } else if (style === "soft_glow") {
+      // Wider falloff halo — thicker line + lower opacity inner fill
+      disc.lineStyle(2, hexInt, opacity * 0.5);
+      disc.beginFill(hexInt, opacity * 0.4);
+      disc.drawCircle(center, center, radius * 1.15);
+      disc.endFill();
+    } else {
+      // soft_disc (default) + pulse use the same draw
+      disc.lineStyle(3, 0x000000, opacity * 0.65);
+      disc.beginFill(hexInt, opacity);
+      disc.drawCircle(center, center, radius);
+      disc.endFill();
+    }
 
     // Render BEHIND the token art
     try { token.addChildAt(disc, 0); }
     catch (_) { token.addChild(disc); }
 
-    this.#pcGlowFilters.set(token.id, { shadow: disc });
+    // ── Pulse animation (only for "pulse" style) ──
+    let animFrameId = null;
+    if (style === "pulse") {
+      const start = performance.now();
+      const animate = (now) => {
+        if (!disc.parent) return; // destroyed
+        const elapsed = (now - start) / 1000;
+        // Sine wave 0.85 → 1.15 scale, period ~2s
+        const scale = 1 + 0.15 * Math.sin(elapsed * Math.PI);
+        disc.scale.set(scale);
+        disc.position.set(-(center * (scale - 1)), -(center * (scale - 1)));
+        animFrameId = requestAnimationFrame(animate);
+      };
+      animFrameId = requestAnimationFrame(animate);
+    }
+
+    this.#pcGlowFilters.set(token.id, { shadow: disc, animFrameId });
   }
 
   /** Convert hex color string to [r, g, b] floats (0–1). */
@@ -160,10 +198,16 @@ export class CanvasHighlight {
   static removePcGlow(token) {
     if (!token) return;
 
-    // Stop breathing animation
+    // Stop legacy breathing animation
     if (token._acePcGlowAnim) {
       cancelAnimationFrame(token._acePcGlowAnim);
       delete token._acePcGlowAnim;
+    }
+
+    // Stop v0.7.20+ pulse animation (stored on the entry)
+    const entryForAnim = this.#pcGlowFilters.get(token.id);
+    if (entryForAnim?.animFrameId) {
+      cancelAnimationFrame(entryForAnim.animFrameId);
     }
 
     const entry = this.#pcGlowFilters.get(token.id);

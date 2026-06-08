@@ -72,8 +72,8 @@ const TABS = [
     },
     {
         id: "visualaids", label: "Visual Aids", icon: "fa-solid fa-eye",
-        intro: "Token-level visual decorations the GM (or each player) can toggle. PC Token Glow draws a coloured base disc under each player character matching their chosen colour — making it easy to spot the party on a busy map.",
-        keys: ["pcGlow", "pcGlowSize"],
+        intro: "Token-level visual decorations the GM (or each player) can toggle. PC Token Glow draws a coloured base disc under each player character — making it easy to spot the party on a busy map. Size, opacity, style, and color source are all configurable per-user.",
+        keys: ["pcGlow", "pcGlowSize", "pcGlowOpacity", "pcGlowStyle", "pcGlowColorMode", "pcGlowCustomColor"],
     },
     {
         id: "misc", label: "Misc", icon: "fa-solid fa-cog",
