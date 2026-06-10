@@ -19,28 +19,8 @@ const _FP = () =>
   foundry.applications?.apps?.FilePicker?.implementation ?? // v13+
   globalThis.FilePicker;                                     // v12 fallback
 
-/** Upload a file silently — suppresses Foundry v13 notification toast.
- *  Uses refcount so concurrent uploads don't clobber the restore. */
-let _silentDepth = 0;
-let _origNotifyInfo = null;
-async function _silentUpload(source, dir, file) {
-  try {
-    if (ui.notifications) {
-      if (_silentDepth === 0) _origNotifyInfo = ui.notifications.info;
-      _silentDepth++;
-      ui.notifications.info = () => {};
-    }
-    return await _FP().upload(source, dir, file, { notify: false });
-  } finally {
-    if (ui.notifications && _silentDepth > 0) {
-      _silentDepth--;
-      if (_silentDepth === 0 && _origNotifyInfo) {
-        ui.notifications.info = _origNotifyInfo;
-        _origNotifyInfo = null;
-      }
-    }
-  }
-}
+// Silent uploader moved to the shared, corruption-proof module.
+import { silentUpload as _silentUpload } from "./silent-upload.mjs";
 
 // Journal constants — hierarchical folder structure
 const ACE_FOLDER_NAME     = "\u{1F4D6} ACE Engine";
@@ -1517,8 +1497,25 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
     }
     lines.push(`<p><b>Encounters:</b> ${rec.met ?? 0} &nbsp; | &nbsp; <b>First seen:</b> ${rec.firstSeen ? new Date(rec.firstSeen * 1000).toLocaleDateString() : "?"} &nbsp; | &nbsp; <b>Last seen:</b> ${rec.lastSeen ? new Date(rec.lastSeen * 1000).toLocaleDateString() : "?"}</p>`);
 
-    // Scenes
-    if (rec.scenes?.length) {
+    // ── v0.7.21 Two-Part Bio System — Memory page: summary + last-5 ──
+    // The Memory page is the only page regenerated from the store. Full
+    // historical appearance log lives in append-only "Appearances — Page N"
+    // sibling pages on the same JournalEntry. Memory page just shows a
+    // quick reference (last 5 appearances) + a count of older entries.
+    if (rec.sceneAppearances?.length) {
+      const total = rec.sceneAppearances.length;
+      const recent = rec.sceneAppearances.slice(-5).reverse();  // newest first
+      lines.push(`<h3>Recent Appearances <span style="font-weight:400;font-size:0.85em;opacity:0.7;">(last 5 of ${total} — full log on the "Appearances — Page N" tabs)</span></h3>`);
+      lines.push(`<ul>`);
+      for (const ap of recent) {
+        const date = ap.t ? new Date(ap.t * 1000).toLocaleDateString() : "?";
+        const sceneName = ap.sceneName ? e(ap.sceneName) : "Unknown scene";
+        const ctx = ap.contextText ? e(ap.contextText).slice(0, 240) + (ap.contextText.length > 240 ? "…" : "") : "<em>(no context recorded)</em>";
+        lines.push(`<li><strong>${date}</strong> — <em>${sceneName}</em><br>${ctx}</li>`);
+      }
+      lines.push(`</ul>`);
+    } else if (rec.scenes?.length) {
+      // Legacy fallback for records that don't have dated appearances yet
       lines.push(`<h3>Scenes</h3><ul>${rec.scenes.map(s => `<li>${e(s)}</li>`).join("")}</ul>`);
     }
 

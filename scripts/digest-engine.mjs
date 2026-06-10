@@ -22,37 +22,8 @@ const _FP = () =>
  *  when the upload itself succeeds). Foundry V13 fires this through BOTH
  *  warn() and error() depending on context — we intercept both. The upload
  *  itself is fine, only the toast spam is the problem. */
-let _silentDepth = 0;
-let _origNotifyInfo = null;
-let _origNotifyWarn = null;
-let _origNotifyErr  = null;
-const _PERM_RX = /does not have permission to upload/i;
-
-async function _silentUpload(source, dir, file) {
-  try {
-    if (ui.notifications) {
-      if (_silentDepth === 0) {
-        _origNotifyInfo = ui.notifications.info;
-        _origNotifyWarn = ui.notifications.warn.bind(ui.notifications);
-        _origNotifyErr  = ui.notifications.error.bind(ui.notifications);
-        ui.notifications.warn  = (msg, ...rest) => (typeof msg === "string" && _PERM_RX.test(msg)) ? null : _origNotifyWarn(msg, ...rest);
-        ui.notifications.error = (msg, ...rest) => (typeof msg === "string" && _PERM_RX.test(msg)) ? null : _origNotifyErr(msg, ...rest);
-      }
-      _silentDepth++;
-      ui.notifications.info = () => {};
-    }
-    return await _FP().upload(source, dir, file, { notify: false });
-  } finally {
-    if (ui.notifications && _silentDepth > 0) {
-      _silentDepth--;
-      if (_silentDepth === 0) {
-        if (_origNotifyInfo) { ui.notifications.info  = _origNotifyInfo; _origNotifyInfo = null; }
-        if (_origNotifyWarn) { ui.notifications.warn  = _origNotifyWarn; _origNotifyWarn = null; }
-        if (_origNotifyErr)  { ui.notifications.error = _origNotifyErr;  _origNotifyErr  = null; }
-      }
-    }
-  }
-}
+// Silent uploader moved to the shared, corruption-proof module.
+import { silentUpload as _silentUpload } from "./silent-upload.mjs";
 
 
 // ── Extraction Prompt ────────────────────────────────────────

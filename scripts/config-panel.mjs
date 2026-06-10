@@ -80,7 +80,7 @@ const TABS = [
         intro: "Profanity filter, suggestion engine, debug mode.",
         keys: ["profanityFilter", "autoSuggestions", "suggestionInterval", "debugMode"],
     },
-];
+].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" })); // tabs displayed alphabetically
 
 // ─── Panel Class ──────────────────────────────────────────────────────────
 

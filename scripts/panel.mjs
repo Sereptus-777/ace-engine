@@ -4392,6 +4392,25 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
             console.warn(`${MODULE_ID} | Session end vault snapshot failed:`, vErr);
           }
         }
+
+        // ── v0.7.21: Triple-Backup session snapshot ──
+        // Memory Sync Engine snapshot — captures the complete campaign state
+        // (NPC profiles, factions, journals, world graph, world bible) as a
+        // single gzipped JSON file in D:/FoundryVTT/Data/ace-backups/snapshots/.
+        // Survives accidental deletions, module corruption, and (if user has
+        // Google Drive Desktop pointed at the backups folder) drive failure.
+        try {
+          const syncApi = game.modules?.get?.(MODULE_ID)?.api?.memorySync;
+          if (syncApi?.takeSessionSnapshot) {
+            const label = `Session_${sessionNum}_${canvas?.scene?.name ?? "Scene"}`;
+            const result = await syncApi.takeSessionSnapshot(label);
+            if (result?.filename) {
+              console.log(`${MODULE_ID} | Session end: triple-backup snapshot "${result.filename}" (${(result.sizeGz / 1024).toFixed(1)} KB gzipped).`);
+            }
+          }
+        } catch (snapErr) {
+          console.warn(`${MODULE_ID} | Session end triple-backup snapshot failed (non-fatal):`, snapErr);
+        }
       } else {
         // Empty summary — provider returned nothing useful (could be a stream
         // that closed cleanly with no content, or a malformed response that

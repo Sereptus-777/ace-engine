@@ -344,6 +344,18 @@ export async function assignToFaction(tokenDoc, factionId, role) {
     }
 
     console.log(`${TAG} | Assigned ${actor.name} to faction "${faction?.name || factionId}"${role ? ` as ${role}` : ""}`);
+
+    // ── v0.7.21 Step 4: Cross-reference into the Factions journal folder ──
+    // Append-only entry showing this actor was added to this faction.
+    // Idempotent — if already recorded, no-op. GM is the only editor.
+    if (faction) {
+        try {
+            const { recordFactionMember } = await import("./cross-reference-journal.mjs");
+            await recordFactionMember(actor, faction, role);
+        } catch (xrefErr) {
+            console.warn(`${TAG} | Cross-reference write to Factions journal failed (non-fatal):`, xrefErr);
+        }
+    }
 }
 
 // ─── CREATURE BASE RESOLUTION ────────────────────────────────────────────────

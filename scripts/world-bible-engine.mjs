@@ -14,27 +14,8 @@ const _FP = () =>
   foundry.applications?.apps?.FilePicker?.implementation ??
   globalThis.FilePicker;
 
-/** Silent upload — suppresses Foundry notification toast. */
-let _silentDepth = 0;
-let _origNotifyInfo = null;
-async function _silentUpload(source, dir, file) {
-  try {
-    if (ui.notifications) {
-      if (_silentDepth === 0) _origNotifyInfo = ui.notifications.info;
-      _silentDepth++;
-      ui.notifications.info = () => {};
-    }
-    return await _FP().upload(source, dir, file, { notify: false });
-  } finally {
-    if (ui.notifications && _silentDepth > 0) {
-      _silentDepth--;
-      if (_silentDepth === 0 && _origNotifyInfo) {
-        ui.notifications.info = _origNotifyInfo;
-        _origNotifyInfo = null;
-      }
-    }
-  }
-}
+// Silent uploader moved to the shared, corruption-proof module.
+import { silentUpload as _silentUpload } from "./silent-upload.mjs";
 
 // ── Region Definitions ─────────────────────────────────────────
 // Each region becomes one AI call. Prompt hints ensure thorough coverage.

@@ -11,6 +11,7 @@ import { writeBiography }                                        from "../bio-wr
 import { processTokenFaction, buildFactionBioContext,
          resolveCreatureBase }                                   from "./faction-registry.mjs";
 import { SocialProfileEngine }                                   from "./social-profile.mjs";
+import npcProfileJournal                                         from "./npc-profile-journal.mjs";
 
 const MODULE_ID = "ace-engine";
 const QOL_ID    = "ace-qol";
@@ -74,8 +75,21 @@ Hooks.once("ready", async () => {
  * @param {Actor} actor
  * @returns {boolean} true if a live generation is in-flight for this actor
  */
-export function isBioInFlight(actor) {
+export function isBioInFlight(actor, tokenDoc = null) {
     if (!actor) return false;
+    // ── Synchronous in-memory check FIRST (closes the queue-vs-flag race). ──
+    // _inFlightTokenIds is updated synchronously at addToBioQueue entry,
+    // BEFORE the async setFlag. Token-art's createToken hook may fire
+    // between queue and setFlag-commit — this sync set catches that window.
+    if (tokenDoc?.id && _inFlightTokenIds.has(tokenDoc.id)) return true;
+    // Also scan for any active token of this actor (covers callers who only
+    // pass the actor, not the specific tokenDoc).
+    try {
+        for (const t of actor.getActiveTokens?.() ?? []) {
+            if (_inFlightTokenIds.has(t.document?.id ?? t.id)) return true;
+        }
+    } catch (_) { /* non-fatal */ }
+
     const inFlight = actor.getFlag?.(MODULE_ID, "bioInFlight");
     if (!inFlight) return false;
     const since = actor.getFlag?.(MODULE_ID, "bioInFlightSince");
@@ -148,6 +162,17 @@ let _processing = false;
 const _pendingActorIds = new Set();  // Dedup linked actors in queue/in-flight
 
 /**
+ * SYNCHRONOUS in-memory tracker of token IDs whose bio is in-flight.
+ * Updated synchronously at addToBioQueue() entry and cleared in the queue's
+ * `finally` block. Closes the race window between addToBioQueue's async
+ * setFlag commit and ace-token-art's createToken hook reading the actor flag.
+ * Covers BOTH linked and unlinked tokens (unlike _pendingActorIds, which only
+ * dedups linked actors). Exported via game.aceEngine API for cross-module use.
+ * (Audit-mandated 2026-06-08 — Grok pre-launch audit, Critical #4.)
+ */
+const _inFlightTokenIds = new Set();
+
+/**
  * Run item flavor + loot generation only — bypasses the bio paragraph and
  * faction popup. Used when the master "Always Check Items & Loot on Token
  * Drop" setting is ON but bio generation is disabled (autoGenerateBio off,
@@ -171,6 +196,89 @@ export async function runItemAndLootOnly(tokenDocument) {
 }
 
 /**
+ * v0.7.21 Two-Part Bio System — Scene-context journal pipeline.
+ *
+ * Runs when a linked NPC with an existing sheet bio is dropped on a scene.
+ * Sheet bio is SACRED — never touched here. Instead:
+ *   1. Ensure the NPC's profile journal exists (idempotent)
+ *   2. Check the date-gap rule (same scene + same day = reuse)
+ *   3. If a fresh entry is warranted, run a SHORT AI prompt (5-10 lines,
+ *      "why is this NPC here on this scene RIGHT NOW")
+ *   4. Append the dated entry to the journal's Scenes section
+ *
+ * Fire-and-forget — never blocks token drop. All errors caught + logged.
+ */
+async function _maybeGenerateSceneContext(tokenDocument) {
+    const actor = tokenDocument?.actor;
+    const scene = tokenDocument?.parent;
+    if (!actor || !scene?.id) return;
+
+    // Ensure profile exists (creates record + anchors UUID if first time).
+    npcProfileJournal.ensureProfile(actor, tokenDocument);
+
+    // Date-gap rule — skip if the most-recent entry for (actor, scene) is
+    // from the same calendar day, OR within the sceneContextMinDays window.
+    if (!npcProfileJournal.shouldGenerateForScene(actor, scene.id)) {
+        const latest = npcProfileJournal.getLatestSceneAppearance(actor, scene.id);
+        if (latest) {
+            console.log(`${TAG} | Scene-context for ${actor.name} on "${scene.name}" — reusing existing entry from ${new Date(latest.t * 1000).toLocaleDateString()}.`);
+        }
+        return;
+    }
+
+    console.log(`${TAG} | Scene-context for ${actor.name} on "${scene.name}" — generating fresh entry.`);
+
+    try {
+        const { provider, apiKey } = getEnvoyAIConfig();
+        if (!provider) {
+            console.warn(`${TAG} | Scene-context skipped — no AI provider configured.`);
+            return;
+        }
+
+        // Pull the core bio from the sheet so the AI knows who this NPC is.
+        const coreBio = String(actor.system?.details?.biography?.value ?? "")
+            .replace(/<[^>]+>/g, " ")     // strip HTML for a clean plaintext feed
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 2000);              // cap context — we only need the gist
+
+        // Look up the NPC's prior appearances on OTHER scenes so the AI can
+        // weave in continuity ("Aldric returns from Vallaki...").
+        const rec = npcProfileJournal.ensureProfile(actor);
+        const recentAppearances = (rec?.sceneAppearances ?? [])
+            .filter(a => a.sceneId !== scene.id)
+            .slice(-3)                    // last 3 OTHER appearances
+            .map(a => `On ${new Date(a.t * 1000).toLocaleDateString()} in "${a.sceneName}": ${a.contextText}`)
+            .join("\n");
+
+        const systemPrompt = `You are a Dungeon Master's narrative assistant. Write a SHORT scene-context paragraph — 5 to 10 lines, NO MORE — explaining why a specific NPC has appeared on a specific scene RIGHT NOW. Voice: evocative but grounded. No headings, no lists, no labels. Just prose. Treat the NPC's core biography (provided below) as immutable canon — do not contradict it. If prior appearances on other scenes are provided, weave in continuity where natural. The reader is the GM, who will use this as a single-paragraph reminder of why this NPC is here on this date.`;
+
+        const userMsg = `NPC: ${actor.name}
+Scene: ${scene.name}
+Current real-world date: ${new Date().toLocaleDateString()}
+
+Core biography (immutable canon — respect it):
+${coreBio || "(no prior bio recorded — improvise minimally)"}
+
+${recentAppearances ? `Recent appearances on other scenes:\n${recentAppearances}\n` : ""}
+Write the 5-10 line scene-context paragraph now. Just the paragraph — no preamble, no title.`;
+
+        const response = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey);
+        const text = String(response ?? "").trim();
+        if (!text) {
+            console.warn(`${TAG} | Scene-context generator returned empty for ${actor.name}.`);
+            return;
+        }
+
+        // Persist + sync journal page.
+        await npcProfileJournal.addSceneAppearance(actor, scene, text);
+        console.log(`${TAG} | Scene-context written for ${actor.name} on "${scene.name}" (${text.length} chars).`);
+    } catch (err) {
+        console.warn(`${TAG} | Scene-context generation failed for ${actor?.name ?? "?"} (non-fatal):`, err);
+    }
+}
+
+/**
  * Queue a token for biography generation.
  * Called from the createToken hook in main.js.
  * @param {TokenDocument} tokenDocument
@@ -188,23 +296,26 @@ export async function queueBioGeneration(tokenDocument) {
     const hasOurBio = existingBio.includes('class="ace-engine-bio"');
 
     if (tokenDocument.actorLink) {
-        // Linked token → skip if our bio exists AND we're on the same scene.
-        // If the scene changed, allow regeneration so the bio explains why
-        // the NPC is HERE now (e.g. moved from Barovia to Waterdeep).
+        // ── v0.7.21 Two-Part Bio System (Steps 1-3 wired) ──
+        // Linked NPC with existing ACE bio → SHEET stays static. Branch into
+        // the scene-context journal pipeline instead. Date-gap rule decides
+        // whether to spend an API call on a fresh "why is he here NOW" entry.
+        // (Design source: session_april1_2026.md "Two-Part Bio System".)
         if (hasOurBio) {
-            const bioSceneId = actor.getFlag(MODULE_ID, "bioSceneId") || "";
-            const currentSceneId = canvas.scene?.id || "";
-            if (bioSceneId === currentSceneId || !currentSceneId) {
-                console.log(`${TAG} | Skipping ${actor.name} — ACE bio already exists for this scene (linked actor).`);
-                _generateItemBios(tokenDocument).then(() => _generateLoot(tokenDocument)).catch(() => {});
-                return;
-            }
-            console.log(`${TAG} | ${actor.name} — scene changed (${bioSceneId} → ${currentSceneId}), regenerating bio.`);
+            console.log(`${TAG} | ${actor.name} — ACE bio core already on sheet; routing to scene-context journal pipeline.`);
+            // Fire-and-forget scene-context generation (non-blocking — items
+            // and loot continue in parallel, just like before).
+            _maybeGenerateSceneContext(tokenDocument).catch(err => {
+                console.warn(`${TAG} | scene-context journal pipeline threw (non-fatal):`, err);
+            });
+            _generateItemBios(tokenDocument).then(() => _generateLoot(tokenDocument)).catch(() => {});
+            return;
         }
 
-        // NOTE: Linked actors with existing non-ACE bios (e.g. from adventure modules)
-        // are NOT skipped — they proceed through generation, but the existing text is
-        // fed into the AI prompt as canon that must be respected and expanded upon.
+        // NOTE: Linked actors with existing non-ACE bios (e.g. from adventure modules
+        // or compendium MM text like Aldric Thorne's stat-block flavor) are NOT skipped —
+        // they proceed through ONE-TIME generation that incorporates the canon text.
+        // After that, the sheet bio is permanent. Scene-context lives in the journal.
         // See _buildPrompt() canonBio parameter.
     } else {
         // Unlinked token → same logic: only skip if our bio section exists
@@ -228,13 +339,25 @@ export async function queueBioGeneration(tokenDocument) {
         return;
     }
 
-    // Mark bio in-flight at QUEUE time (not at processing time) so the
-    // ace-token-art `_shouldWaitForBio` check sees the flag even before
-    // `_processQueue` actually picks up the token. Without this, there's
-    // a race window where token-art runs its check between queue and
-    // process, sees no in-flight flag, and decides not to wait.
-    // Companion `bioInFlightSince` timestamp enables mid-session staleness
-    // recovery — see isBioInFlight() above.
+    // ── SYNCHRONOUS in-memory in-flight mark (closes race window) ──
+    // Set BEFORE the async setFlag so isBioInFlight() returns true
+    // immediately, before any other createToken hook listener runs its
+    // check. Companion `ace-engine.bioQueued` hook fires synchronously so
+    // listeners can react in the same tick. (Audit-mandated 2026-06-08.)
+    _inFlightTokenIds.add(tokenDocument.id);
+    try {
+        Hooks.callAll("ace-engine.bioQueued", {
+            tokenDoc: tokenDocument,
+            actor: tokenDocument.actor ?? null,
+        });
+    } catch (hookErr) {
+        console.warn(`${TAG} | bioQueued hook callAll failed (non-fatal):`, hookErr);
+    }
+
+    // Mark bio in-flight at QUEUE time (the DB-backed flag — survives crashes).
+    // The sync _inFlightTokenIds add above covers the race window before the
+    // setFlag commit propagates. Companion `bioInFlightSince` timestamp enables
+    // mid-session staleness recovery — see isBioInFlight() above.
     try {
         await tokenDocument.actor?.setFlag?.(MODULE_ID, "bioInFlight", true);
         await tokenDocument.actor?.setFlag?.(MODULE_ID, "bioInFlightSince", Date.now());
@@ -267,6 +390,12 @@ async function _processQueue() {
                 error = err;
                 console.error(`${TAG} | Generation failed for ${tokenDoc.actor?.name}:`, err);
             } finally {
+                // Clear sync in-memory tracker FIRST so any concurrent
+                // isBioInFlight() check sees the cleared state immediately.
+                // Cleared only AFTER bioGenerated has been written (in the
+                // bio path below), preserving the "in-flight until bio set"
+                // invariant Grok's audit called out.
+                _inFlightTokenIds.delete(tokenDoc.id);
                 // Clear in-flight flag + companion timestamp — match scope of the set above
                 try {
                     await tokenDoc.actor?.setFlag?.(MODULE_ID, "bioInFlight", false);

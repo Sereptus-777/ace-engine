@@ -947,6 +947,29 @@ export class AceSettings {
       default: "full",
     });
 
+    s("sceneContextMinDays", {
+      name: "Scene Context — Min Days Between Regens",
+      hint: "When a linked NPC re-appears on a scene they've been on before, ACE generates a fresh 'why is this NPC here NOW' entry in their journal. This setting controls how recent the last entry has to be to be reused vs regenerated. 0 = any new calendar day triggers a fresh entry (default — works for most groups). 7 = once per week max (good for groups running multiple sessions per week). Set higher to reduce API spend. Same-day re-drops always reuse the existing entry regardless of this value.",
+      type: Number,
+      default: 0,
+      range: { min: 0, max: 90, step: 1 },
+    });
+
+    // ─── Triple-Backup Memory Sync Engine ──────────────────────
+    s("memorySyncEnabled", {
+      name: "Backups — Enable Triple-Backup System",
+      hint: "ACE's Memory Sync Engine automatically mirrors all campaign-affecting data (NPC profiles, factions, journals, world graph, world bible) to a backup folder and takes snapshots at session start / end. Default backup folder is D:/FoundryVTT/Data/ace-backups/ — point Google Drive Desktop or OneDrive at it for cloud backup. Disable only if you handle your own backups via another tool.",
+      type: Boolean,
+      default: true,
+    });
+
+    s("memorySyncExternalPath", {
+      name: "Backups — External Mirror Instructions",
+      hint: "READ-ONLY informational field. To enable cloud backup: (1) Open Google Drive Desktop. (2) Settings → Preferences → Folders from your computer → Add Folder. (3) Pick D:/FoundryVTT/Data/ace-backups/. (4) Set destination to your preferred Google Drive folder (suggested: ACE Suite/ACE World Backups). OneDrive/Dropbox/NAS sync tools work the same way. Once configured, every snapshot is auto-mirrored to the cloud.",
+      type: String,
+      default: "",
+    });
+
     s("alwaysRunItemAndLoot", {
       name: "Always Check Items & Loot on Token Drop",
       hint: "When ON, every dropped NPC gets item flavor text and loot generation regardless of whether you generated a bio. Pick 'Off' on the drop popup (or set Token Drop AI Level to 'Off') to skip everything for a specific NPC. When OFF, items + loot only run when the bio runs (legacy behavior — quieter worlds, less to interact with). Existing creature rules still apply: beasts/oozes/plants/mindless creatures don't carry items regardless.",

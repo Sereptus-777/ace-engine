@@ -19,36 +19,9 @@ const _FP = () =>
  * warning (fires on some hosted Foundry setups even when uploads succeed).
  * Uses refcount so concurrent uploads don't clobber the restore.
  */
-let _silentDepth = 0;
-let _origNotifyInfo = null;
-let _origNotifyWarn = null;
-let _origNotifyErr  = null;
-const _PERM_RX = /does not have permission to upload/i;
-async function _silentUpload(source, dir, file) {
-  try {
-    if (ui.notifications) {
-      if (_silentDepth === 0) {
-        _origNotifyInfo = ui.notifications.info;
-        _origNotifyWarn = ui.notifications.warn.bind(ui.notifications);
-        _origNotifyErr  = ui.notifications.error.bind(ui.notifications);
-        ui.notifications.warn  = (msg, ...rest) => (typeof msg === "string" && _PERM_RX.test(msg)) ? null : _origNotifyWarn(msg, ...rest);
-        ui.notifications.error = (msg, ...rest) => (typeof msg === "string" && _PERM_RX.test(msg)) ? null : _origNotifyErr(msg, ...rest);
-      }
-      _silentDepth++;
-      ui.notifications.info = () => {};
-    }
-    return await _FP().upload(source, dir, file, { notify: false });
-  } finally {
-    if (ui.notifications && _silentDepth > 0) {
-      _silentDepth--;
-      if (_silentDepth === 0) {
-        if (_origNotifyInfo) { ui.notifications.info  = _origNotifyInfo; _origNotifyInfo = null; }
-        if (_origNotifyWarn) { ui.notifications.warn  = _origNotifyWarn; _origNotifyWarn = null; }
-        if (_origNotifyErr)  { ui.notifications.error = _origNotifyErr;  _origNotifyErr  = null; }
-      }
-    }
-  }
-}
+// Silent uploader moved to the shared, corruption-proof module (the old
+// per-file copy raced with the other engines' copies and broke notifications).
+import { silentUpload as _silentUpload } from "./silent-upload.mjs";
 
 // ── Base Class ──────────────────────────────────────────────
 
@@ -706,6 +679,7 @@ export class NpcStore extends CategoryStore {
       this._data.npcs[key] = {
         displayName: name,
         actorId: null,
+        actorUuid: null,                  // v0.7.21: UUID anchor for rename safety
         type: "unknown",
         race: null,
         class: null,
@@ -715,7 +689,8 @@ export class NpcStore extends CategoryStore {
         killed: false,
         killedBy: null,
         killedAt: null,
-        scenes: [],
+        scenes: [],                       // legacy: simple scene name list (kept for back-compat)
+        sceneAppearances: [],             // v0.7.21: dated appearance log (Two-Part Bio System)
         notes: [],
         relationships: {},
         combatStats: { encounterCount: 0, wasDefeated: false, lastHp: null },
@@ -726,12 +701,75 @@ export class NpcStore extends CategoryStore {
     rec.met++;
     rec.lastSeen = now;
 
+    // Backfill new fields on legacy records
+    if (rec.sceneAppearances === undefined) rec.sceneAppearances = [];
+    if (rec.actorUuid === undefined) rec.actorUuid = null;
+
     if (scene && !rec.scenes.includes(scene)) {
       rec.scenes.push(scene);
       if (rec.scenes.length > 20) rec.scenes.shift();
     }
     this._dirty = true;
     return rec;
+  }
+
+  /**
+   * v0.7.21 Two-Part Bio System — record a dated scene appearance with
+   * AI-generated "why is this NPC here NOW" context.
+   *
+   * Stores a chronological log per NPC-scene pair. Re-dropping a token in
+   * the same scene on a different day produces a fresh entry (matching
+   * Johnny's "session 1 vs session 30" mental model).
+   *
+   * @param {string} name           — NPC display name (will be lowercased for keying)
+   * @param {object} appearance     — { sceneId, sceneName, contextText, actorUuid?, generatedBy? }
+   * @returns {object|null}         — the inserted appearance object, or null on failure
+   */
+  addSceneAppearance(name, appearance) {
+    if (!name || typeof name !== "string") return null;
+    const key = name.toLowerCase().trim();
+    if (!key) return null;
+    const rec = this._data.npcs[key];
+    if (!rec) return null;
+    if (!appearance?.sceneId) return null;
+
+    const now = Math.floor(Date.now() / 1000);
+    const entry = {
+      sceneId:      appearance.sceneId,
+      sceneName:    appearance.sceneName ?? "",
+      contextText:  String(appearance.contextText ?? "").trim(),
+      t:            now,
+      generatedBy:  appearance.generatedBy ?? "ai",
+    };
+
+    if (!Array.isArray(rec.sceneAppearances)) rec.sceneAppearances = [];
+    rec.sceneAppearances.push(entry);
+    // Bounded history — keep last 100 appearances per NPC. Each entry is
+    // small (~500 chars) so 100 entries ≈ 50KB worst-case per NPC.
+    if (rec.sceneAppearances.length > 100) rec.sceneAppearances.shift();
+
+    // Anchor the actor UUID for rename safety the first time we see it.
+    if (appearance.actorUuid && !rec.actorUuid) rec.actorUuid = appearance.actorUuid;
+
+    this._dirty = true;
+    return entry;
+  }
+
+  /**
+   * Most recent appearance entry for the given (npcName, sceneId) pair, or null.
+   * Used by bio-generator to apply the date-gap rule before deciding whether
+   * to spend an API call on a fresh scene-context generation.
+   */
+  getLatestSceneAppearance(name, sceneId) {
+    if (!name || !sceneId) return null;
+    const key = name.toLowerCase().trim();
+    const rec = this._data.npcs[key];
+    if (!rec || !Array.isArray(rec.sceneAppearances)) return null;
+    // Newest-first scan
+    for (let i = rec.sceneAppearances.length - 1; i >= 0; i--) {
+      if (rec.sceneAppearances[i].sceneId === sceneId) return rec.sceneAppearances[i];
+    }
+    return null;
   }
 
   markKilled(name, killerName) {

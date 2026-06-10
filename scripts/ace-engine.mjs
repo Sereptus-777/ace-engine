@@ -12,6 +12,7 @@ import { AiProvider }         from "./ai-provider.mjs";
 import { SuggestionEngine }   from "./suggestion-engine.mjs";
 import { NpcMemoryReader }    from "./npc-memory.mjs";
 import { MemoryManager }      from "./memory-manager.mjs";
+import memorySyncEngine        from "./memory-sync-engine.mjs";
 import { triggerLightning, triggerEarthquake, triggerStealthFail, triggerPerceptionPass, stopAllSfx } from "./sfx.mjs";
 import { CanvasHighlight }   from "./canvas-highlight.mjs";
 import { ReputationEngine }  from "./reputation-engine.mjs";
@@ -1530,6 +1531,27 @@ Hooks.once("ready", async () => {
     aceMemory = null;
   }
 
+  // ── Triple-backup Memory Sync Engine (Tier 2 mirror + snapshots) ──
+  // Initialize AFTER MemoryManager so payload-gather can pull store data.
+  // Non-fatal on init failure — module continues without backups (user
+  // gets a console warning).
+  try {
+    await memorySyncEngine.initialize();
+  } catch (err) {
+    console.error(`${MODULE_ID} | Memory Sync Engine init failed (continuing without backups):`, err);
+  }
+
+  // ── Pre-create Two-Part Bio cross-reference folders (Factions, World Library) ──
+  // Lands them as subfolders inside "📖 ACE Engine" so they show up in the
+  // sidebar immediately, even before any entry is written. Reassures the GM
+  // that the structure is in place. Non-fatal on failure.
+  try {
+    const xref = await import("./npc/cross-reference-journal.mjs");
+    await xref.ensureCrossRefFolders();
+  } catch (err) {
+    console.warn(`${MODULE_ID} | Cross-reference folder pre-creation failed (non-fatal):`, err);
+  }
+
   // ── Reputation / Word-of-Mouth Engine ───────────────────────
   const reputationEnabled = game.settings.get(MODULE_ID, "enableReputation");
   if (reputationEnabled) {
@@ -1948,6 +1970,20 @@ Hooks.once("ready", async () => {
       // ace-token-art's chooser code path can't easily await.
       // See `isBioInFlight` in npc/bio-generator.mjs.
       isBioInFlight,
+
+      // ── v0.7.21 Two-Part Bio System — memory manager exposure ──
+      // npc-profile-journal.mjs reads this to access the NPC store, write
+      // dated scene appearances, and sync journal pages. Read-only for
+      // external consumers; if you need to mutate, use the helpers in
+      // npc/npc-profile-journal.mjs instead.
+      get memoryManager() { return aceMemory; },
+
+      // ── v0.7.21 Triple-Backup Memory Sync Engine ──
+      // Public API for manual snapshot triggers + status. The sync engine
+      // initializes itself + hooks journal/actor updates automatically —
+      // most callers don't need to interact with it. Exposed for the
+      // "Take Snapshot Now" button + Save Session hook + diagnostics.
+      memorySync: memorySyncEngine,
 
       // Auto Token Art API moved to module "ace-token-art":
       //   game.modules.get("ace-token-art").api.rescanTokenArt()
@@ -3221,11 +3257,32 @@ Hooks.on("updateActor", (actor, changes) => {
     if (newHp === 0) {
       // Best-effort: find the current combatant as the killer
       const killer = game.combat?.combatant?.name ?? null;
+      const sceneName = canvas?.scene?.name ?? "";
       aceMemory.logKill({
         victimName: actor.name,
         killerName: killer !== actor.name ? killer : null,
-        scene:      canvas?.scene?.name ?? "",
+        scene:      sceneName,
       });
+
+      // ── v0.7.21 Step 6: Unlinked NPC kill log on the killer's PC journal ──
+      // Unlinked tokens (mooks) don't get full NPC Profile journals — they
+      // get a one-line tally entry on the killer's PC profile journal
+      // instead. Linked NPC deaths are recorded via the full NPC Profile
+      // pipeline (markDeceased). This branch only fires for unlinked.
+      const isUnlinked = !actor.prototypeToken?.actorLink && !actor.hasPlayerOwner;
+      if (isUnlinked && killer && killer !== actor.name) {
+        const killerActor = game.actors?.find(a => a.name === killer && a.hasPlayerOwner);
+        if (killerActor) {
+          (async () => {
+            try {
+              const xref = await import("./npc/cross-reference-journal.mjs");
+              await xref.recordUnlinkedKill(actor.name, killerActor, canvas?.scene);
+            } catch (err) {
+              console.warn(`${MODULE_ID} | Unlinked kill log write failed (non-fatal):`, err);
+            }
+          })();
+        }
+      }
 
       // ── Story note: PC delivers killing blow on a significant enemy ──
       if (killer && killer !== actor.name && !actor.hasPlayerOwner) {

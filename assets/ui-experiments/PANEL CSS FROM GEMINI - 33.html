@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A.C.E - Foundry VTT Interface</title>
+<style>
+    :root {
+        --gold-primary: #d4af37;
+        --gold-light: #f3e5ab;
+        --gold-dark: #8a6a1c;
+    }
+
+    * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    body {
+        background-color: #050505;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        color: white;
+        padding: 20px; 
+    }
+
+    /* The Main Frame Container - Now with Resizer! */
+    .hardware-frame {
+        background-image: url('Black Metal.webp'); 
+        background-size: 100% 100%;
+        background-position: center;
+        background-repeat: no-repeat;
+        
+        /* Sizing and Resize Controls */
+        width: 600px;         /* Starting size */
+        min-width: 300px;     /* Prevents it from getting too tiny to read */
+        max-width: 95vw;      /* Prevents dragging it off the screen */
+        aspect-ratio: 3 / 4;  /* Locks the image shape */
+        margin: 0 auto;       
+        
+        /* The magic lines for the bottom-right drag handle */
+        resize: both;
+        overflow: hidden;
+
+        position: relative; 
+        box-shadow: 0 20px 50px rgba(0,0,0,0.9);
+    }
+
+    /* Customizing the little resize grabber so it matches the dark theme */
+    .hardware-frame::-webkit-resizer {
+        background-color: transparent;
+        border-bottom: 2px solid var(--gold-dark);
+        border-right: 2px solid var(--gold-dark);
+    }
+
+    /* Overlay 1: The Tabs at the top */
+    .tabs-overlay {
+        position: absolute;
+        top: 8.5%;      
+        left: 2.5%;
+        width: 95%;
+        height: 5%;
+        display: flex;
+        justify-content: space-evenly;
+        align-items: center;
+    }
+
+    .tab-text {
+        color: #888;
+        font-size: clamp(0.7rem, 2vw, 0.85rem); 
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        cursor: pointer;
+        transition: color 0.3s, text-shadow 0.3s;
+        width: 15%; 
+        text-align: center;
+    }
+
+    .tab-text:hover, .tab-text.active {
+        color: var(--gold-light);
+        text-shadow: 0 0 8px rgba(212, 175, 55, 0.8);
+    }
+
+    /* Overlay 2: The Main Screen */
+    .main-screen-overlay {
+        position: absolute;
+        top: 15.5%;     
+        left: 5%;       
+        width: 90%;     
+        height: 58%;    
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        box-shadow: inset 0 0 30px rgba(212, 175, 55, 0.05);
+    }
+
+    /* Animations */
+    @keyframes textShimmer {
+        0% { color: var(--gold-primary); text-shadow: 0 0 5px rgba(212, 175, 55, 0.3); }
+        50% { color: var(--gold-light); text-shadow: 0 0 15px rgba(243, 229, 171, 0.8); }
+        100% { color: var(--gold-primary); text-shadow: 0 0 5px rgba(212, 175, 55, 0.3); }
+    }
+    @keyframes borderPulse {
+        0% { border-color: var(--gold-dark); box-shadow: 0 0 5px rgba(212, 175, 55, 0.1); }
+        50% { border-color: var(--gold-primary); box-shadow: 0 0 15px rgba(212, 175, 55, 0.4); }
+        100% { border-color: var(--gold-dark); box-shadow: 0 0 5px rgba(212, 175, 55, 0.1); }
+    }
+
+    .title {
+        font-size: clamp(1.2rem, 4vw, 1.5rem); 
+        font-weight: 600;
+        margin-bottom: 5px;
+        animation: textShimmer 4s infinite alternate;
+    }
+
+    .subtitle {
+        font-size: clamp(0.75rem, 2vw, 0.85rem); 
+        color: #888;
+        margin-bottom: 30px;
+        text-align: center;
+    }
+
+    .action-btn {
+        background: rgba(20, 20, 20, 0.8);
+        border: 1px solid var(--gold-dark);
+        color: var(--gold-primary);
+        padding: clamp(8px, 2vw, 12px) 20px;
+        margin: 8px 0;
+        border-radius: 4px;
+        font-size: clamp(0.8rem, 2.5vw, 0.95rem); 
+        cursor: pointer;
+        width: 80%;
+        animation: borderPulse 3s infinite alternate;
+        transition: 0.2s;
+        backdrop-filter: blur(5px);
+    }
+
+    .action-btn:hover {
+        background: rgba(40, 30, 10, 0.9);
+        color: var(--gold-light);
+        transform: scale(1.02);
+    }
+
+    /* Overlay 3: The Bottom Chat Input */
+    .input-overlay {
+        position: absolute;
+        top: 81%;       
+        left: 5%;
+        width: 90%;
+        height: 9%;     
+        display: flex;
+        align-items: center;
+        padding: 0 15px;
+    }
+
+    .chat-input {
+        background: transparent;
+        border: none;
+        color: var(--gold-light);
+        font-size: clamp(0.85rem, 2.5vw, 1rem); 
+        outline: none;
+        width: 100%;
+        height: 100%;
+        resize: none;
+        padding-top: clamp(10px, 3vw, 15px);
+    }
+
+    .chat-input::placeholder {
+        color: #555;
+        font-style: italic;
+    }
+
+    .submit-btn {
+        background: transparent;
+        border: none;
+        color: var(--gold-primary);
+        font-size: clamp(1.2rem, 3vw, 1.5rem); 
+        cursor: pointer;
+        transition: 0.3s;
+        animation: textShimmer 2s infinite alternate;
+    }
+
+    .submit-btn:hover {
+        transform: scale(1.1);
+    }
+
+</style>
+</head>
+<body>
+
+<div class="hardware-frame">
+    
+    <div class="tabs-overlay">
+        <div class="tab-text active">Chat</div>
+        <div class="tab-text">Story</div>
+        <div class="tab-text">Ideas</div>
+        <div class="tab-text">Rolls</div>
+        <div class="tab-text">Tokens</div>
+        <div class="tab-text">Rules</div>
+    </div>
+
+    <div class="main-screen-overlay">
+        <div class="title">Welcome to ACE</div>
+        <div class="subtitle">Your private AI advisor. Ask anything - players never see this chat.</div>
+        
+        <button class="action-btn">What should happen next?</button>
+        <button class="action-btn">Describe the atmosphere</button>
+        <button class="action-btn">How would NPCs react?</button>
+    </div>
+
+    <div class="input-overlay">
+        <textarea class="chat-input" placeholder="Ask A.C.E. anything..."></textarea>
+        <button class="submit-btn">✈</button>
+    </div>
+
+</div>
+
+</body>
+</html>
