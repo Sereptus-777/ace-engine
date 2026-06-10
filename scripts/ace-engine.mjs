@@ -18,6 +18,10 @@ import { CanvasHighlight }   from "./canvas-highlight.mjs";
 import { ReputationEngine }  from "./reputation-engine.mjs";
 import { SubtleRollManager } from "./subtle-rolls.mjs";
 import { FameEngine }        from "./fame-engine.mjs";
+import { WorldEventLedger }   from "./world-event-ledger.mjs";
+import { scoreKillMagnitude } from "./magnitude.mjs";
+import { getActorFaction, importLibraryFactions } from "./npc/faction-registry.mjs";
+import { propagateCombatEvent } from "./faction-propagation.mjs";
 import { DocumentEngine }    from "./document-engine.mjs";
 import { DigestEngine }      from "./digest-engine.mjs";
 import { SimpleCalendarBridge } from "./simple-calendar-bridge.mjs";
@@ -250,6 +254,7 @@ let npcMemory      = null;
 let aceMemory      = null;   // MemoryManager — persistent campaign log (8-category)
 let reputationEngine = null; // ReputationEngine — faction awareness / word-of-mouth
 let fameEngine     = null;   // FameEngine — party deed fame / geographic reputation
+let worldEventLedger = null; // WorldEventLedger — single source of truth for world events
 let documentEngine = null;   // DocumentEngine — document library / reference RAG
 let digestEngine   = null;   // DigestEngine — AI-powered structured digest (global)
 let worldBible     = null;   // WorldBibleEngine — comprehensive world reference bible
@@ -1582,6 +1587,33 @@ Hooks.once("ready", async () => {
     console.log(`${MODULE_ID} | Fame engine disabled by settings.`);
   }
 
+  // ── World-Event Ledger — the single source of truth for "what happened" ──
+  // Fame + Reputation read THROUGH this once injected. Migration only ADDS to
+  // the ledger; it never alters the original deed/reputation files.
+  try {
+    worldEventLedger = new WorldEventLedger();
+    await worldEventLedger.load(game.world.id);
+
+    // One-time fold-in of legacy deeds. Read them BEFORE injecting the ledger,
+    // because injection makes the deed getters read from the ledger instead.
+    if (!worldEventLedger.migrated) {
+      const legacyFame = aceMemory?.deeds?.getDeeds?.() ?? [];
+      const legacyRep  = reputationEngine?._data?.deeds ?? [];
+      await worldEventLedger.writeMigrationBackup(game.world.id, { fameDeeds: legacyFame, reputationDeeds: legacyRep });
+      worldEventLedger.importLegacy({ fameDeeds: legacyFame, reputationDeeds: legacyRep });
+    }
+
+    // Inject as the single source of truth; deeds + notoriety now flow through it.
+    aceMemory?.setLedger(worldEventLedger);
+    reputationEngine?.setLedger(worldEventLedger);
+    await worldEventLedger.save(game.world.id);
+
+    console.debug(`${MODULE_ID} | World-Event ledger ready (${worldEventLedger.getEvents().length} events).`);
+  } catch (err) {
+    console.error(`${MODULE_ID} | World-Event ledger failed (Fame/Reputation fall back to legacy stores):`, err);
+    worldEventLedger = null;
+  }
+
   // ── Digest Engine — global AI-powered structured digests ──
   try {
     digestEngine = new DigestEngine();
@@ -2217,6 +2249,14 @@ Hooks.once("ready", async () => {
       getFactionStanding: (factionId) => {
         return reputationEngine?.getFactionStanding(factionId) ?? "neutral";
       },
+      setFactionStanding: (factionId, standing) => {
+        return reputationEngine?.setFactionStanding(factionId, standing, game.world.id);
+      },
+
+      // ── Living World: World Library ↔ Registry ──
+      getWorldBibleFactions: () =>
+        worldBible?._factionIndex ? Array.from(worldBible._factionIndex.values()) : [],
+      importLibraryFactions: (opts) => importLibraryFactions(opts),
 
       /** Set notoriety level ("unknown"|"local"|"regional"|"continental"|"legendary"). */
       setNotoriety: async (level) => {
@@ -2357,6 +2397,13 @@ Hooks.once("ready", async () => {
 
       /** Get the fame engine instance (for advanced use). */
       getFameEngine: () => fameEngine,
+
+      // ── World-Event Ledger (single source of truth) ──
+      getWorldEvents:       ()  => worldEventLedger?.getEvents() ?? [],
+      getRecentWorldEvents: (n) => worldEventLedger?.getRecent(n) ?? [],
+      getWorldEventsByFaction: (factionId) => worldEventLedger?.getByFaction(factionId) ?? [],
+      recordWorldEvent:     (e) => worldEventLedger?.recordEvent(e) ?? null,
+      getWorldEventLedger:  ()  => worldEventLedger,
 
       /** Get all deeds. */
       getDeeds: () => aceMemory?.getDeeds() ?? [],
@@ -2821,23 +2868,13 @@ Hooks.once("ready", async () => {
       );
   }, 3000);
 
-  // ── Periodic auto-backup (every 30 minutes while Foundry is running) ──
-  if (aceMemory) {
-    aceMemory._autoBackupInterval = setInterval(() => {
-      if (game.user.isGM) {
-        // Back up all memory stores (NPCs, deeds, history, documents, etc.)
-        aceMemory.autoBackup().catch(err =>
-          console.warn(`${MODULE_ID} | Periodic auto-backup failed:`, err)
-        );
-        // Also back up AI-generated digests (separate global storage)
-        if (digestEngine) {
-          digestEngine.backupDigests(5).catch(err =>
-            console.warn(`${MODULE_ID} | Periodic digest backup failed:`, err)
-          );
-        }
-      }
-    }, 30 * 60 * 1000); // 30 minutes
-  }
+  // ── Periodic auto-backup: RETIRED 2026-06-10 ──
+  // The old every-30-minutes per-store + digest backup wrote timestamped copies
+  // that Foundry can never delete (no client file-delete API), so they grew
+  // without bound — 35 GB / 15,000+ files in one world. The unified Memory Sync
+  // Engine now handles all backups (debounced write-through mirror + forever
+  // gzipped snapshots), so this periodic churn is redundant and removed. Manual
+  // backups remain available via the API (backupMemory) and memory-dialog buttons.
 });
 
 // ── SFX: play locally + broadcast to all other clients ─────────
@@ -3292,16 +3329,30 @@ Hooks.on("updateActor", (actor, changes) => {
           const bullet = scene ? `Slew ${actor.name} in ${scene}` : `Slew ${actor.name}`;
           _appendStoryNote(killerActor, bullet).catch(() => {});
 
-          // ── Deed: significant kill ──────────────────────────────
+          // Score + resolve the victim's faction once — used by both the deed
+          // log and faction propagation (decoupled from the Fame setting).
+          const vf  = getActorFaction(actor);
+          const mag = scoreKillMagnitude({
+            victimCR:       Number(actor.system?.details?.cr),
+            isNamed:        !/^.+\s+\d+$/.test(actor.name),
+            partyAvgLevel:  _getAveragePartyLevel(),
+            partyNotoriety: reputationEngine?.notoriety,
+          });
+
+          // ── Deed: significant kill (faction-tagged, ledger-scored) ──
           if (fameEngine) {
             aceMemory.logDeed({
               text:      bullet,
-              magnitude: _estimateKillMagnitude(actor),
+              magnitude: mag,
               scene,
               pcs:       [killerActor.name],
+              factions:  vf ? [{ id: vf.id, name: vf.name }] : [],
               source:    "auto:kill",
             });
           }
+
+          // ── Step 2: ripple the kill through the faction connection web ──
+          if (vf) propagateCombatEvent({ factionId: vf.id, magnitude: mag }).catch(() => {});
         }
       }
     }

@@ -15,6 +15,8 @@ const _FP = () =>
 
 // Silent uploader moved to the shared, corruption-proof module.
 import { silentUpload as _silentUpload } from "./silent-upload.mjs";
+import { normalizeMagnitude } from "./magnitude.mjs";
+import { requestSync as _requestSync } from "./memory-sync-engine.mjs";
 
 // ── Constants ──────────────────────────────────────────────────
 const NOTORIETY_LEVELS = ["unknown", "local", "regional", "continental", "legendary"];
@@ -130,6 +132,8 @@ export class ReputationEngine {
       await _silentUpload("data", dir, file);
       this._dirty = false;
       console.log(`${MODULE_ID} | Reputation: saved to ${dir}/${REPUTATION_FILE}`);
+      // Nudge the triple-backup mirror so Tier 2 reflects the new standing.
+      try { _requestSync(); } catch (_) { /* sync engine optional */ }
     } catch (err) {
       console.error(`${MODULE_ID} | Reputation: save failed —`, err);
       throw err;
@@ -148,9 +152,28 @@ export class ReputationEngine {
     return this._data?.notoriety ?? "unknown";
   }
 
-  /** Array of deed objects. */
+  /** Array of deed objects — ledger-backed when wired, else the legacy store. */
   get deeds() {
+    if (this._ledger) return this._reputationDeedsFromLedger();
     return this._data?.deeds ?? [];
+  }
+
+  // ── World-Event Ledger hookup (one source of truth) ─────────
+  /** Attach the World-Event ledger; reputation deeds then flow through it. */
+  setLedger(ledger) { this._ledger = ledger ?? null; }
+
+  /** Project ledger events into the reputation-deed shape this engine expects. */
+  _reputationDeedsFromLedger() {
+    const events = this._ledger?.getEvents?.() ?? [];
+    return events.map(e => ({
+      id:               e.id,
+      summary:          e.summary,
+      impact:           normalizeMagnitude(e.magnitude),   // canonical magnitude == impact
+      location:         e.nouns?.location || null,
+      timestamp:        e.ts,
+      factionReactions: e.meta?.factionReactions ?? {},
+      tags:             e.meta?.tags ?? [],
+    }));
   }
 
   /** Array of title strings. */
@@ -265,21 +288,41 @@ export class ReputationEngine {
     if (!summary || !this._data) return null;
 
     const impact = IMPACT_LEVELS.includes(options.impact) ? options.impact : "local";
+    const factionReactions = (options.factionReactions && typeof options.factionReactions === "object")
+      ? options.factionReactions : {};
+    const tags = Array.isArray(options.tags) ? [...options.tags] : [];
 
-    const deed = {
-      id:               `deed_${++this._deedCounter}`,
-      summary:          summary.trim(),
-      location:         options.location   ?? null,
-      session:          options.session    ?? null,
-      timestamp:        new Date().toISOString(),
-      impact,
-      factionReactions: (options.factionReactions && typeof options.factionReactions === "object")
-        ? options.factionReactions
-        : {},
-      tags: Array.isArray(options.tags) ? [...options.tags] : [],
-    };
-
-    this._data.deeds.push(deed);
+    let deed;
+    if (this._ledger) {
+      // One source of truth: record into the World-Event ledger, preserving the
+      // reputation-specific data (impact, faction reactions, tags) in meta.
+      const rec = this._ledger.recordEvent({
+        summary:   summary.trim(),
+        magnitude: impact,
+        source:    options.source || "reputation:deed",
+        scene:     options.location ?? "",
+        location:  options.location ?? "",
+        meta:      { impact, session: options.session ?? null, factionReactions, tags },
+      });
+      if (!rec) return null;
+      deed = {
+        id: rec.id, summary: rec.summary, impact, location: options.location ?? null,
+        session: options.session ?? null, timestamp: new Date().toISOString(),
+        factionReactions, tags,
+      };
+    } else {
+      deed = {
+        id:               `deed_${++this._deedCounter}`,
+        summary:          summary.trim(),
+        location:         options.location   ?? null,
+        session:          options.session    ?? null,
+        timestamp:        new Date().toISOString(),
+        impact,
+        factionReactions,
+        tags,
+      };
+      this._data.deeds.push(deed);
+    }
 
     // Auto-update knownInRegions from deed location
     if (deed.location) {
@@ -324,8 +367,11 @@ export class ReputationEngine {
     if (!this._data) return;
 
     const counts = { local: 0, regional: 0, continental: 0, legendary: 0 };
-    for (const deed of this._data.deeds) {
-      if (counts[deed.impact] !== undefined) counts[deed.impact]++;
+    for (const deed of this.deeds) {
+      // National fame folds into the continental bucket (notoriety has no
+      // separate "national" level); trivial deeds don't count toward notoriety.
+      const imp = deed.impact === "national" ? "continental" : deed.impact;
+      if (counts[imp] !== undefined) counts[imp]++;
     }
 
     let level = "unknown";
@@ -444,10 +490,10 @@ export class ReputationEngine {
   _filterDeedsForNpc(factionKey, locationKey, notoriety) {
     if (!this._data) return [];
 
-    return this._data.deeds.filter(deed => {
+    return this.deeds.filter(deed => {
       // High-impact deeds are known when fame is widespread
       if (notoriety === "legendary" || notoriety === "continental") {
-        if (deed.impact === "legendary" || deed.impact === "continental") return true;
+        if (["national", "continental", "legendary"].includes(deed.impact)) return true;
       }
 
       // Deeds that specifically name this faction in reactions
@@ -689,7 +735,7 @@ export class ReputationEngine {
     }
     return {
       notoriety:    this._data.notoriety,
-      deedCount:    this._data.deeds.length,
+      deedCount:    this.deeds.length,
       titleCount:   this._data.titles.length,
       factionCount: Object.keys(this._data.factionStanding).length,
       regionCount:  this._data.knownInRegions.length,

@@ -246,23 +246,11 @@ export class CategoryStore {
         .sort(); // ISO timestamps sort alphabetically = chronologically
 
       if (myBackups.length > maxBackups) {
-        const toDelete = myBackups.slice(0, myBackups.length - maxBackups);
-        for (const path of toDelete) {
-          try {
-            // Foundry doesn't have a native delete API for data files,
-            // so we overwrite with an empty marker to reclaim intent.
-            // In practice, GMs can manually clear the backups folder.
-            // Log what would be pruned for manual cleanup.
-            console.debug(`${MODULE_ID} | ${this.category}: old backup eligible for cleanup: ${path.split("/").pop()}`);
-          } catch (_) { /* ignore cleanup errors */ }
-        }
-        if (toDelete.length) {
-          // Demoted from log to debug — Foundry has no file-delete API for
-          // data files, so this message is informational only (the count
-          // grows forever until the user manually deletes the folder). No
-          // value spamming the console with it every backup cycle.
-          console.debug(`${MODULE_ID} | ${this.category}: ${toDelete.length} old backup(s) eligible for manual cleanup (keeping ${maxBackups} newest).`);
-        }
+        // Foundry has no client-side file-delete API, so we cannot actually
+        // prune. Emit ONE summary — never one line per file (that flooded the
+        // console with hundreds of lines). Retention is handled by the unified
+        // Memory Sync Engine; the GM can clear the backups folder manually.
+        console.debug(`${MODULE_ID} | ${this.category}: ${myBackups.length - maxBackups} old backup file(s) in ${backupDir} (no delete API — clear manually if needed).`);
       }
     } catch (_) { /* prune is best-effort */ }
   }

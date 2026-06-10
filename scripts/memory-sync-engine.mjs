@@ -307,6 +307,33 @@ async function _gatherPayload() {
     }
   } catch (_) { /* non-fatal */ }
 
+  // 4b. Reputation + World-Event ledger — per-world ace-engine JSON files.
+  //     Browse the folder once so we never fetch (and 404-log) a file that
+  //     hasn't been created yet — reputation/ledger files appear on first save.
+  let reputation  = null;
+  let worldEvents = null;
+  try {
+    const worldId = game.world?.id;
+    if (worldId) {
+      const dir = `worlds/${worldId}/ace-engine`;
+      let present = new Set();
+      try {
+        const listing = await _FP().browse("data", dir);
+        present = new Set((listing?.files ?? []).map(f => f.split("/").pop()));
+      } catch (_) { /* folder doesn't exist yet */ }
+      if (present.has("ace-party-reputation.json")) {
+        const t = await _fetchText(`${dir}/ace-party-reputation.json`); if (t) reputation = JSON.parse(t);
+      }
+      if (present.has("ace-world-events.json")) {
+        const t = await _fetchText(`${dir}/ace-world-events.json`); if (t) worldEvents = JSON.parse(t);
+      }
+    }
+  } catch (_) { /* non-fatal */ }
+
+  // 4c. Faction registry — a world setting (the living faction roster).
+  let factionRegistry = null;
+  try { factionRegistry = game.settings.get(MODULE_ID, "factionRegistry") ?? null; } catch (_) { /* not registered */ }
+
   // 5. Meta — when, who, what version
   const meta = {
     capturedAt: Date.now(),
@@ -324,9 +351,9 @@ async function _gatherPayload() {
   };
 
   const elapsed = Math.round(performance.now() - t0);
-  console.log(`${TAG} | Gathered payload — ${actors.length} actors, ${journals.length} journals, world-graph=${!!worldGraph}, world-bible=${!!worldBible} (${elapsed}ms)`);
+  console.log(`${TAG} | Gathered payload — ${actors.length} actors, ${journals.length} journals, world-graph=${!!worldGraph}, world-bible=${!!worldBible}, reputation=${!!reputation}, events=${worldEvents?.events?.length ?? 0}, factions=${factionRegistry ? Object.keys(factionRegistry).length : 0} (${elapsed}ms)`);
 
-  return { meta, actors, journals, memory, worldGraph, worldBible };
+  return { meta, actors, journals, memory, worldGraph, worldBible, reputation, worldEvents, factionRegistry };
 }
 
 // ─── Write-Through to Tier 2 Live Mirror ─────────────────────────────────────

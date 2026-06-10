@@ -1251,26 +1251,13 @@ export class DigestEngine {
       return;
     }
 
-    // Prune old backups — keep only the newest maxBackups
-    try {
-      const listing = await _FP().browse("data", BACKUP_DIR);
-      const backupFiles = (listing?.files ?? [])
-        .filter(f => f.split("/").pop().startsWith("digest-backup."))
-        .sort(); // ISO timestamps sort chronologically
-
-      if (backupFiles.length > maxBackups) {
-        const toDelete = backupFiles.slice(0, backupFiles.length - maxBackups);
-        for (const filePath of toDelete) {
-          // Foundry has no file delete API — overwrite with tiny tombstone
-          const oldName = filePath.split("/").pop();
-          const tombstone = new File(['{"pruned":true}'], oldName, { type: "application/json" });
-          await _silentUpload("data", BACKUP_DIR, tombstone);
-        }
-        console.debug(`${MODULE_ID} | Pruned ${toDelete.length} old digest backup(s), keeping ${maxBackups}.`);
-      }
-    } catch (err) {
-      console.warn(`${MODULE_ID} | Digest backup pruning failed:`, err);
-    }
+    // NOTE: No pruning here. Foundry has no client-side file-delete API. The
+    // previous approach overwrote old backups with a tiny "tombstone", but
+    // tombstoned files still match the "digest-backup." filter and still count,
+    // so every cycle re-tombstoned the same files forever — flooding the console
+    // with upload logs and re-uploading needlessly with zero benefit. Disabled.
+    // Backup retention is handled by the unified Memory Sync Engine; clear the
+    // ace-engine-library/digest-backups folder manually if it grows too large.
   }
 
   /**

@@ -13,7 +13,7 @@
 const MODULE_ID = "ace-engine";
 
 // Magnitude order for filtering / display
-const MAGNITUDE_ORDER = ["trivial", "local", "regional", "major", "legendary"];
+const MAGNITUDE_ORDER = ["trivial", "local", "regional", "national", "continental", "legendary"];
 
 // How many deeds to include in context (avoid prompt bloat)
 const MAX_DEEDS_IN_CONTEXT = 25;
@@ -37,7 +37,7 @@ export class FameEngine {
    * @returns {string} — Formatted context block for AI prompt, or ""
    */
   buildFameContext(npcName, currentScene) {
-    const deeds = this._mm?.deeds?.getDeeds() ?? [];
+    const deeds = this._mm?.getFameDeeds?.() ?? [];
     if (!deeds.length) return "";
 
     // Filter out trivial deeds for NPC context (trivial = location tracking only)
@@ -77,13 +77,14 @@ export class FameEngine {
     ctx += `Magnitude guide:\n`;
     ctx += `- LOCAL: Only people in the same town/area would know\n`;
     ctx += `- REGIONAL: Nearby towns and trade partners might have heard rumors\n`;
-    ctx += `- MAJOR: Well-known across the region; neighboring regions have heard\n`;
-    ctx += `- LEGENDARY: Continental fame — everyone has heard something\n\n`;
+    ctx += `- NATIONAL: Known across the whole kingdom/realm\n`;
+    ctx += `- CONTINENTAL: Several realms have heard; widely known\n`;
+    ctx += `- LEGENDARY: The whole world has heard something — even distant powers\n\n`;
 
     ctx += `IMPORTANT: Adjust your knowledge of the party based on this NPC's location, `;
     ctx += `role, and connections. Do NOT reveal deeds this NPC would not reasonably know about. `;
     ctx += `A bartender in a distant desert town would not know about a LOCAL deed in a northern city. `;
-    ctx += `But a MAJOR or LEGENDARY deed might reach them as vague rumors.`;
+    ctx += `But a CONTINENTAL or LEGENDARY deed might reach them as vague rumors.`;
 
     return ctx;
   }
@@ -95,7 +96,7 @@ export class FameEngine {
    * @returns {{ total: number, highest: string, recentDeed: string }}
    */
   getFameSummary() {
-    const deeds = this._mm?.deeds?.getDeeds() ?? [];
+    const deeds = this._mm?.getFameDeeds?.() ?? [];
     if (!deeds.length) return { total: 0, highest: "none", recentDeed: "" };
 
     let highestIdx = -1;
@@ -120,7 +121,7 @@ export class FameEngine {
   getDeedsForScene(sceneName) {
     if (!sceneName) return [];
     const lower = sceneName.toLowerCase();
-    return (this._mm?.deeds?.getDeeds() ?? []).filter(d =>
+    return (this._mm?.getFameDeeds?.() ?? []).filter(d =>
       (d.scene ?? "").toLowerCase() === lower
     );
   }
@@ -133,7 +134,7 @@ export class FameEngine {
   getDeedsForPC(pcName) {
     if (!pcName) return [];
     const lower = pcName.toLowerCase();
-    return (this._mm?.deeds?.getDeeds() ?? []).filter(d =>
+    return (this._mm?.getFameDeeds?.() ?? []).filter(d =>
       (d.pcs ?? []).some(pc => pc.toLowerCase() === lower)
     );
   }

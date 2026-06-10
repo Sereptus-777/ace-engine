@@ -752,28 +752,69 @@ export class MemoryManager {
       session: deed.session ?? (this.world.getLastSession()?.num ?? 0),
     };
 
-    const record = this.deeds.addDeed(enriched);
+    // One source of truth: record into the World-Event ledger when it's wired.
+    // Falls back to the legacy DeedStore only if the ledger isn't attached yet,
+    // so behaviour is unchanged until init injects the ledger.
+    let record;
+    if (this._ledger) {
+      record = this._ledger.recordEvent({
+        summary:   enriched.text,
+        magnitude: enriched.magnitude,
+        scene:     enriched.scene,
+        actors:    enriched.pcs,
+        factions:  enriched.factions,
+        source:    enriched.source,
+        meta:      { day: enriched.day, session: enriched.session },
+      });
+    } else {
+      record = this.deeds.addDeed(enriched);
+    }
     if (!record) return null;  // duplicate or invalid
 
     // Also log to history for timeline visibility
     this.history.push({
       k:   "deed",
-      txt: record.text,
+      txt: record.summary ?? record.text,
       s:   record.scene,
-      a:   record.pcs?.join(", ") ?? "",
+      a:   (record.nouns?.actors ?? record.pcs)?.join(", ") ?? "",
     });
 
-    this._scheduleSaves(["deeds", "history"]);
-    console.log(`${MODULE_ID} | Deed logged: "${record.text}" (${record.magnitude}) [${record.source}]`);
+    this._scheduleSaves(this._ledger ? ["history"] : ["deeds", "history"]);
+    console.log(`${MODULE_ID} | Deed logged: "${record.summary ?? record.text}" (${record.magnitude}) [${record.source}]`);
     return record;
   }
 
+  // ── World-Event Ledger hookup (one source of truth) ─────────
+  /** Attach the World-Event ledger; deeds then flow through it. */
+  setLedger(ledger) { this._ledger = ledger ?? null; }
+
+  /** Project ledger events into the deed shape Fame and other consumers expect. */
+  _fameDeedsFromLedger() {
+    const events = this._ledger?.getEvents?.() ?? [];
+    return events.map(e => ({
+      id:        e.id,
+      text:      e.summary,
+      magnitude: e.magnitude,
+      scene:     e.scene,
+      day:       e.meta?.day ?? 0,
+      session:   e.meta?.session ?? 0,
+      pcs:       e.nouns?.actors ?? [],
+      source:    e.source,
+      timestamp: e.ts,
+    }));
+  }
+
+  /** Deeds for the Fame system — ledger-backed when wired, else legacy store. */
+  getFameDeeds() {
+    return this._ledger ? this._fameDeedsFromLedger() : (this.deeds?.getDeeds() ?? []);
+  }
+
   /** Get all deeds. */
-  getDeeds()            { return this.deeds.getDeeds(); }
+  getDeeds()            { return this.getFameDeeds(); }
   /** Get N most recent deeds. */
-  getRecentDeeds(n)     { return this.deeds.getRecentDeeds(n); }
+  getRecentDeeds(n = 20) { return this.getFameDeeds().slice(-n); }
   /** Get deed count by magnitude. */
-  getDeedCounts()       { return this.deeds.getMagnitudeCounts(); }
+  getDeedCounts()       { return this._ledger ? this._ledger.getMagnitudeCounts() : this.deeds.getMagnitudeCounts(); }
 
   // ── Simple Calendar Bridge (set externally by ace-engine.mjs) ─
   /** @type {import("./simple-calendar-bridge.mjs").SimpleCalendarBridge|null} */
@@ -1137,16 +1178,13 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
    * Debounced — won't fire more than once per 5 minutes.
    */
   async autoBackup() {
-    const now = Date.now();
-    if (this._lastAutoBackup && (now - this._lastAutoBackup) < 300_000) {
-      // Demoted from log to debug — routine background operation, no need
-      // to spam the console with skip notifications.
-      console.debug(`${MODULE_ID} | Auto-backup skipped (last was ${Math.round((now - this._lastAutoBackup) / 1000)}s ago).`);
-      return;
-    }
-    this._lastAutoBackup = now;
-    console.debug(`${MODULE_ID} | Auto-backup triggered…`);
-    await this.backup(null, 10);
+    // RETIRED 2026-06-10: automatic per-store backups are superseded by the
+    // unified Memory Sync Engine (write-through mirror + forever snapshots).
+    // The old path wrote timestamped copies Foundry can never delete, so they
+    // accumulated without bound. Now a no-op; manual backups via backup() and
+    // the memory-dialog buttons still work. Session-summary changes are still
+    // captured automatically because their journal write triggers a sync mirror.
+    return;
   }
 
   // ── Export / Import ───────────────────────────────────────

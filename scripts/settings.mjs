@@ -1048,6 +1048,20 @@ export class AceSettings {
       default: true,
     });
 
+    s("factionPropagation", {
+      name: "Faction Propagation (Living World)",
+      hint: "When ON, a PC killing a faction member ripples through the connection web — the victim's faction, its kin (other tribes of the same kind), and its allies grow more hostile toward the party, while its enemies warm to them. Scaled by how notable the kill was.",
+      type: Boolean,
+      default: true,
+    });
+
+    s("factionDispositionOnDrop", {
+      name: "Faction Disposition on Token Drop",
+      hint: "When ON, a token dropped onto a scene inherits its faction's standing toward the party as its starting disposition — an angered faction arrives hostile, a revered one arrives friendly. Neutral factions keep the token's default disposition.",
+      type: Boolean,
+      default: true,
+    });
+
     s("factionSpyChance", {
       name: "Spy/Deserter Chance (1 in N)",
       hint: "When assigning faction, there is a 1-in-N chance the NPC is secretly from a DIFFERENT faction (spy, deserter, captured, or turncoat). Set to 0 to disable. Does not apply to constructs, undead, or beasts.",

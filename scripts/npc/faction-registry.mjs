@@ -183,6 +183,8 @@ function _load() {
 async function _save(data) {
     try {
         await game.settings.set(MODULE_ID, SETTING_KEY, data);
+        // Nudge the triple-backup mirror so Tier 2 reflects the new registry.
+        try { const { requestSync } = await import("../memory-sync-engine.mjs"); requestSync(); } catch (_) { /* sync optional */ }
     } catch (e) {
         console.error(`${TAG} | Failed to save faction registry:`, e);
     }
@@ -207,6 +209,171 @@ async function _serializedSave(data) {
  */
 export function getAllFactions() {
     return _load();
+}
+
+// ─── LIVING WORLD: Import World Library factions into the registry ────────────
+// Pulls every faction from the World Bible into the operational registry as a
+// medium-weight entry (enough to USE — name, type, leader, allies/enemies,
+// inferred creature kind — plus a live reference back to the Library for deep
+// lore). Deduped by normalized name; existing registry duplicates are folded
+// together and any standings preserved. GM-triggered; backs the registry up first.
+
+const _NORM = (s) => String(s || "").toLowerCase()
+    .replace(/^(the|a|an)\s+/, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+// Creature-kind inference so monster factions can ride the kin-propagation web.
+// Empty string = a human/organisation faction (no creature kin).
+const _CREATURE_HINTS = [
+    ["hobgoblin", "hobgoblin"], ["bugbear", "bugbear"], ["goblinoid", "goblin"], ["goblin", "goblin"],
+    ["kobold", "kobold"], ["gnoll", "gnoll"], ["\\borc", "orc"], ["drow", "drow"], ["duergar", "duergar"],
+    ["lizardfolk", "lizardfolk"], ["yuan", "yuan-ti"], ["sahuagin", "sahuagin"], ["kuo-?toa", "kuo-toa"],
+    ["bullywug", "bullywug"], ["\\bgiant", "giant"], ["\\bogre", "ogre"], ["\\btroll", "troll"],
+    ["vampire|lich|wight|ghoul|zombie|skeleton|\\bundead|wraith|spectre|specter", "undead"],
+];
+function _inferCreatureBase(f) {
+    const text = [(f.name || ""), (f.type || ""), (f.description || ""), (f.purpose || "")].join(" ").toLowerCase();
+    for (const [pat, base] of _CREATURE_HINTS) {
+        if (new RegExp(pat, "i").test(text)) return base;
+    }
+    return "";
+}
+
+function _buildLibraryEntry(f, keepId) {
+    return {
+        id:           keepId || f.id || foundry.utils.randomID(),
+        name:         f.name || "(unnamed faction)",
+        type:         f.type || "",
+        creatureBase: _inferCreatureBase(f),
+        leader:       f.leader || "",
+        scope:        f.scope || "",
+        nation:       f.nation || "",
+        headquarters: f.headquarters || "",
+        purpose:      f.purpose || "",
+        description:  String(f.description || "").slice(0, 600),
+        allies:       Array.isArray(f.allies)   ? f.allies.slice(0, 24)   : [],
+        enemies:      Array.isArray(f.enemies)  ? f.enemies.slice(0, 24)  : [],
+        presence:     Array.isArray(f.presence) ? f.presence.slice(0, 24) : [],
+        worldTag:     game.world?.title || "",
+        source:       "library",
+        bibleRef:     { factionId: f.id || null, regionId: f._regionId || null },
+        lastActive:   Date.now(),
+    };
+}
+
+async function _backupRegistry(registry) {
+    try {
+        const worldId = game.world?.id;
+        if (!worldId) return;
+        const dir  = `worlds/${worldId}/ace-engine`;
+        const json = JSON.stringify({ savedAt: new Date().toISOString(), factionRegistry: registry }, null, 2);
+        const file = new File([new Blob([json], { type: "application/json" })],
+                              "ace-faction-registry.pre-import.bak.json", { type: "application/json" });
+        const FP = foundry.applications?.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
+        try { await FP.createDirectory("data", dir, { notify: false }); } catch (_) { /* exists */ }
+        const { silentUpload } = await import("../silent-upload.mjs");
+        await silentUpload("data", dir, file);
+        console.log(`${TAG} | Registry backed up to ${dir}/ace-faction-registry.pre-import.bak.json`);
+    } catch (e) {
+        console.warn(`${TAG} | Registry backup failed (continuing):`, e);
+    }
+}
+
+/**
+ * Import every World Library faction into the registry (medium + live reference),
+ * deduped by normalized name, folding existing registry duplicates and preserving
+ * standings. GM-triggered.
+ * @param {{dryRun?:boolean}} [opts] — dryRun:true reports what WOULD happen, writes nothing.
+ * @returns {Promise<object>} summary of the import
+ */
+export async function importLibraryFactions({ dryRun = false } = {}) {
+    if (!game.user?.isGM) return { error: "GM only" };
+    const api = game.modules.get(MODULE_ID)?.api;
+    const bibleFactions = api?.getWorldBibleFactions?.() ?? [];
+    if (!bibleFactions.length) return { error: "No World Library factions found — is the World Bible loaded for this world?" };
+
+    const registry = _load();
+    if (!dryRun) await _backupRegistry(registry);
+
+    // 1. Index existing registry by normalized name; fold internal duplicates.
+    const byNorm = new Map();
+    const dupMerges = [];   // { fromId, toId }
+    for (const [id, f] of Object.entries(registry)) {
+        const norm = _NORM(f.name);
+        if (!norm) continue;
+        if (!byNorm.has(norm)) {
+            byNorm.set(norm, { id, faction: { ...f, id } });
+        } else {
+            const primary = byNorm.get(norm);
+            primary.faction.allies  = Array.from(new Set([...(primary.faction.allies  || []), ...(f.allies  || [])]));
+            primary.faction.enemies = Array.from(new Set([...(primary.faction.enemies || []), ...(f.enemies || [])]));
+            dupMerges.push({ fromId: id, toId: primary.id });
+            if (!dryRun) delete registry[id];
+        }
+    }
+
+    // 2. Dedup the Library factions by normalized name.
+    const bibleByNorm = new Map();
+    for (const bf of bibleFactions) {
+        const norm = _NORM(bf.name);
+        if (!norm) continue;
+        if (!bibleByNorm.has(norm)) { bibleByNorm.set(norm, { ...bf }); continue; }
+        const ex = bibleByNorm.get(norm);
+        ex.allies  = Array.from(new Set([...(ex.allies  || []), ...(bf.allies  || [])]));
+        ex.enemies = Array.from(new Set([...(ex.enemies || []), ...(bf.enemies || [])]));
+        if ((bf.description || "").length > (ex.description || "").length) ex.description = bf.description;
+        if (!ex.leader && bf.leader) ex.leader = bf.leader;
+    }
+
+    // 3. Merge Library factions into the registry.
+    let added = 0, enriched = 0;
+    for (const [norm, bf] of bibleByNorm) {
+        const existing = byNorm.get(norm);
+        const entry = _buildLibraryEntry(bf, existing?.id);
+        if (existing) {
+            const merged = { ...existing.faction };
+            for (const k of ["type", "leader", "scope", "nation", "headquarters", "purpose", "description"]) {
+                if (!merged[k] && entry[k]) merged[k] = entry[k];
+            }
+            merged.allies   = Array.from(new Set([...(merged.allies   || []), ...(entry.allies   || [])]));
+            merged.enemies  = Array.from(new Set([...(merged.enemies  || []), ...(entry.enemies  || [])]));
+            if (!merged.creatureBase && entry.creatureBase) merged.creatureBase = entry.creatureBase;
+            merged.bibleRef = entry.bibleRef;
+            merged.source   = merged.source || "library";
+            if (!dryRun) registry[existing.id] = merged;
+            enriched++;
+        } else {
+            if (!dryRun) registry[entry.id] = entry;
+            added++;
+        }
+    }
+
+    // 4. Preserve standings for folded duplicates (keep the non-neutral one).
+    if (!dryRun && api?.getFactionStanding && api?.setFactionStanding) {
+        for (const { fromId, toId } of dupMerges) {
+            const from = api.getFactionStanding(fromId);
+            const to   = api.getFactionStanding(toId);
+            if (from && from !== "neutral" && to === "neutral") {
+                await api.setFactionStanding(toId, from);
+            }
+        }
+    }
+
+    if (!dryRun) await _serializedSave(registry);
+
+    const summary = {
+        dryRun,
+        libraryFactions:  bibleFactions.length,
+        distinctLibrary:  bibleByNorm.size,
+        added, enriched,
+        duplicatesFolded: dupMerges.length,
+        totalNow:         dryRun
+            ? (Object.keys(registry).length - dupMerges.length + added)   // projected
+            : Object.keys(registry).length,
+    };
+    console.log(`${TAG} | Library import ${dryRun ? "(DRY RUN) " : ""}— +${added} new, ${enriched} enriched, ${dupMerges.length} dupes folded → ${summary.totalNow} factions total.`);
+    return summary;
 }
 
 /**
@@ -344,6 +511,16 @@ export async function assignToFaction(tokenDoc, factionId, role) {
     }
 
     console.log(`${TAG} | Assigned ${actor.name} to faction "${faction?.name || factionId}"${role ? ` as ${role}` : ""}`);
+
+    // ── Living World Step 2: pre-set the token's disposition from the faction's
+    // current standing toward the party (angered → hostile, revered → friendly).
+    // Lazy import avoids a static cycle (faction-propagation imports this file).
+    try {
+        const { applyFactionDispositionToToken } = await import("../faction-propagation.mjs");
+        await applyFactionDispositionToToken(tokenDoc, factionId);
+    } catch (dispErr) {
+        console.warn(`${TAG} | Faction disposition-on-drop failed (non-fatal):`, dispErr);
+    }
 
     // ── v0.7.21 Step 4: Cross-reference into the Factions journal folder ──
     // Append-only entry showing this actor was added to this faction.
