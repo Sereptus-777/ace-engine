@@ -85,30 +85,47 @@ async function _aceConfirmDialog(title, content, {
 // Returns "save" | "exit" | "minimize".  Throws (reject) on X → caller cancels close.
 async function _aceCloseDialog(eventCount, eventLines = []) {
   const _esc = s => (s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-  // Build scrollable event list
+  // Build a compact, text-wrapping, vertically-scrolling event list.
   const listHtml = eventLines.length
-    ? `<div style="max-height:220px;overflow-y:auto;margin:8px 0 4px;padding:6px 8px;` +
-      `background:rgba(0,0,0,0.25);border:1px solid rgba(212,175,55,0.2);border-radius:4px;` +
-      `font-size:12px;line-height:1.6;color:#ccc;">` +
-      eventLines.map(l => `<div style="border-bottom:1px solid rgba(255,255,255,0.05);padding:2px 0;">${_esc(l)}</div>`).join("") +
+    ? `<div class="ace-close-events">` +
+      eventLines.map(l => `<div class="ace-close-evt">${_esc(l)}</div>`).join("") +
       `</div>`
     : "";
 
   const content =
-    `<p><strong>${eventCount}</strong> events since your last session summary:</p>` +
+    `<style>
+      .ace-close-dlg .window-content { font-size:13px; }
+      .ace-close-intro { margin:0 0 6px; font-size:14px; color:#e8dcc0; }
+      .ace-close-intro strong { color:#e8b923; }
+      .ace-close-events { max-height:240px; overflow-y:auto; overflow-x:hidden; margin:6px 0;
+        padding:4px 10px; background:rgba(0,0,0,0.30); border:1px solid rgba(212,175,55,0.25); border-radius:5px; }
+      .ace-close-evt { font-size:11px; line-height:1.35; color:#dccfb0; padding:4px 0;
+        border-bottom:1px solid rgba(255,255,255,0.06);
+        white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
+      .ace-close-evt:last-child { border-bottom:none; }
+      .ace-close-hint { margin-top:8px; font-size:12px; color:#b0a484; }
+      .ace-close-dlg footer.form-footer { gap:8px; flex-wrap:wrap; }
+      .ace-close-dlg footer button { font-size:14px; padding:7px 12px; border-radius:6px;
+        background:#2a2418; color:#e8dcc0; border:1px solid #5a4c28; }
+      .ace-close-dlg footer button:hover { background:#3a3120; border-color:#7a6838; }
+      .ace-close-dlg footer button[data-action="save"] { background:#3a2f12; color:#f0d98a; border-color:#8a6e22; }
+    </style>` +
+    `<p class="ace-close-intro"><strong>${eventCount}</strong> events since your last session summary:</p>` +
     listHtml +
-    `<p style="margin-top:8px;font-size:12px;color:#999;">Events stay in memory either way — saving creates an AI journal recap.</p>`;
+    `<p class="ace-close-hint">Events stay in memory either way — saving creates an AI journal recap.</p>`;
 
   const DV2 = foundry.applications?.api?.DialogV2;
   if (DV2) {
     return new Promise((resolve, reject) => {
       const dlg = new DV2({
+        classes: ["ace-close-dlg"],
+        position: { width: 520 },
         window: { title: "Close ACE?" },
         content,
         buttons: [
-          { action: "save",     label: "Exit & Save Session",    icon: "fas fa-book-open",       default: true, callback: () => resolve("save") },
-          { action: "exit",     label: "Exit Without Saving",    icon: "fas fa-door-open",                      callback: () => resolve("exit") },
-          { action: "minimize", label: "Minimize ACE",           icon: "fas fa-window-minimize",                callback: () => resolve("minimize") }
+          { action: "save",     label: "Exit & Save Session",    icon: "fas fa-book-open",  default: true, callback: () => resolve("save") },
+          { action: "exit",     label: "Exit Without Saving",    icon: "fas fa-door-open",                 callback: () => resolve("exit") },
+          { action: "minimize", label: "Minimize ACE",           icon: "fas fa-minus",                     callback: () => resolve("minimize") }
         ],
         close: () => reject()
       });
@@ -123,7 +140,7 @@ async function _aceCloseDialog(eventCount, eventLines = []) {
       buttons: {
         save:     { icon: '<i class="fas fa-book-open"></i>',       label: "Exit & Save Session",  callback: () => resolve("save") },
         exit:     { icon: '<i class="fas fa-door-open"></i>',       label: "Exit Without Saving",  callback: () => resolve("exit") },
-        minimize: { icon: '<i class="fas fa-window-minimize"></i>', label: "Minimize ACE",         callback: () => resolve("minimize") }
+        minimize: { icon: '<i class="fas fa-minus"></i>', label: "Minimize ACE",         callback: () => resolve("minimize") }
       },
       default: "save",
       close: () => reject()

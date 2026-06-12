@@ -65,12 +65,10 @@ export class SuggestionEngine {
     try {
       // ── Auto-cycle guards: skip AI calls that would waste tokens ──
       if (auto) {
-        // Guard 1: No non-GM players connected → GM is developing, not playing
+        // Guard 1: No non-GM players connected → GM is developing, not playing.
+        // Silent — this fires on every auto-cycle when soloing and is pure noise.
         const activePlayers = game.users?.filter(u => u.active && !u.isGM) ?? [];
-        if (!activePlayers.length) {
-          console.debug(`${MODULE_ID} | Suggestions skipped — no players connected`);
-          return [];
-        }
+        if (!activePlayers.length) return [];
       }
 
       const sceneCtx = this.scene.gatherCompact();

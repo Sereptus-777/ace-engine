@@ -22,6 +22,7 @@ import { WorldEventLedger }   from "./world-event-ledger.mjs";
 import { scoreKillMagnitude } from "./magnitude.mjs";
 import { getActorFaction, importLibraryFactions } from "./npc/faction-registry.mjs";
 import { propagateCombatEvent } from "./faction-propagation.mjs";
+import { LivingWorldDashboard } from "./living-world-dashboard.mjs";
 import { DocumentEngine }    from "./document-engine.mjs";
 import { DigestEngine }      from "./digest-engine.mjs";
 import { SimpleCalendarBridge } from "./simple-calendar-bridge.mjs";
@@ -2257,6 +2258,7 @@ Hooks.once("ready", async () => {
       getWorldBibleFactions: () =>
         worldBible?._factionIndex ? Array.from(worldBible._factionIndex.values()) : [],
       importLibraryFactions: (opts) => importLibraryFactions(opts),
+      openLivingWorldDashboard: () => { const app = new LivingWorldDashboard(); app.render(true); return app; },
 
       /** Set notoriety level ("unknown"|"local"|"regional"|"continental"|"legendary"). */
       setNotoriety: async (level) => {

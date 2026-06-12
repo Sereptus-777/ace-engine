@@ -213,17 +213,16 @@ export function registerUiHooks() {
         const existing = token.children?.find(c => c.name === PARTY_FACE_CHILD_NAME);
         if (existing) { token.removeChild(existing); existing.destroy(); }
 
-        const faceUserId = (() => {
+        const faceActorId = (() => {
             try { return game.settings.get(MODULE_ID, "partyFace") || ""; }
             catch (_) { return ""; }
         })();
-        if (!faceUserId) return;
-        const faceUser = game.users.get(faceUserId);
-        if (!faceUser) return;
-
+        if (!faceActorId) return;
         const tokenActor = token.actor ?? token.document?.actor;
-        if (!tokenActor?.hasPlayerOwner) return;
-        if (!tokenActor.testUserPermission(faceUser, "OWNER")) return;
+        // Tie the diamond to the SPECIFIC actor, not its owning user — otherwise
+        // every token that user owns (companions, a shared hireling everyone
+        // owns) inherits the marker. Only the designated actor's token shows it.
+        if (!tokenActor || tokenActor.id !== faceActorId) return;
 
         const gridPx = canvas.grid?.size ?? 100;
         const tokenW = token.w ?? (token.document?.width ?? 1) * gridPx;
@@ -271,7 +270,7 @@ export function registerUiHooks() {
                 try { return game.settings.get(MODULE_ID, "partyFace") || ""; }
                 catch (_) { return ""; }
             })();
-            const isThisFace  = currentFace === ownerUser.id;
+            const isThisFace  = currentFace === token.actor.id;
             const charName    = token.actor.name;
             const diamondTip  = isThisFace
                 ? `${charName} is the Party Face (click to remove)`
@@ -300,7 +299,7 @@ export function registerUiHooks() {
                     game.settings.set(MODULE_ID, "partyFace", "");
                     ui.notifications.info(`Party Face disabled — any player can initiate conversations.`);
                 } else {
-                    game.settings.set(MODULE_ID, "partyFace", ownerUser.id);
+                    game.settings.set(MODULE_ID, "partyFace", token.actor.id);
                     ui.notifications.info(`${charName} is now the Party Face — only they can initiate NPC conversations.`);
                 }
                 _refreshPartyFaceIndicator();
@@ -411,9 +410,9 @@ export function registerUiHooks() {
                 try { return game.settings.get(MODULE_ID, "partyFace") || ""; }
                 catch (_) { return ""; }
             })();
-            if (partyFaceId && game.user.id !== partyFaceId) {
-                const faceUser = game.users.get(partyFaceId);
-                const faceName = faceUser?.character?.name || faceUser?.name || "Party Face";
+            const faceActor = partyFaceId ? game.actors.get(partyFaceId) : null;
+            if (faceActor && !faceActor.testUserPermission(game.user, "OWNER")) {
+                const faceName = faceActor.name || "Party Face";
                 jHtml.find(".ai-token-controls").remove();
                 const faceHtml = `
                 <div class="ai-token-controls"
