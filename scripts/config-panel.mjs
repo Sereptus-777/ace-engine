@@ -253,6 +253,21 @@ export class AceConfigPanel extends ApplicationV2 {
             }
         }
 
+        // Rank prefix-first by the setting NAME (start-of-name beats start-of-word
+        // beats mid-name); hint/key-only matches sink to the bottom. Reorders only.
+        const _score = (nm) => {
+            const n = String(nm ?? "").toLowerCase();
+            if (n.startsWith(q)) return 0;
+            if (n.split(/[\s,\-/()'".:]+/).some(w => w.startsWith(q))) return 1;
+            if (n.includes(q)) return 2;
+            return 3;
+        };
+        results.sort((a, b) => {
+            const d = _score(a.meta.name) - _score(b.meta.name);
+            if (d) return d;
+            return String(a.meta.name ?? "").localeCompare(String(b.meta.name ?? ""));
+        });
+
         if (!results.length) {
             return `
                 <div class="ace-cfg-pane" data-tab="__search__">
