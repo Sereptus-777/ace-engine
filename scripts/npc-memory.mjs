@@ -177,8 +177,6 @@ export class NpcMemoryReader {
 
   _stripHtml(html) {
     if (!html) return "";
-    const div = document.createElement("div");
-    div.innerHTML = html;
-    return div.textContent?.trim() ?? "";
+    return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
   }
 }

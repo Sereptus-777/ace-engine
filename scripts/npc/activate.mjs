@@ -95,26 +95,20 @@ export function activateNpcChat() {
         console.log(`${TAG} | npcChatEnabled is false — subsystem stays dormant.`);
         return;
     }
-    _activated = true;
     console.log(`${TAG} | Activating NPC chat hooks.`);
-
     _registerHooks();
+    _activated = true;  // core hooks are now registered; set AFTER _registerHooks()
 
-    // UI hooks (token HUD chat button, scene voice region, party face, etc.)
-    // Lazy import to avoid circular dependency (ui-hooks reads npcChatState
-    // from this file).
-    import("./ui-hooks.mjs").then(({ registerUiHooks }) => {
-        registerUiHooks();
-    }).catch(err => console.error(`${TAG} | UI hooks load failed:`, err));
-
-    // Companion-link feature — right-click context menu in Actors directory
-    // + initiative auto-link hooks. Used for recurring summons that belong
-    // to a specific player (Steel Defender, Iron Defender, familiars, etc.)
-    import("./companion-link.mjs").then(({ registerActorDirectoryContext, registerInitiativeHooks }) => {
-        registerActorDirectoryContext();
-        registerInitiativeHooks();
-        console.log(`${TAG} | Companion-link feature online.`);
-    }).catch(err => console.error(`${TAG} | Companion-link load failed:`, err));
+    // Load dynamic modules together — errors surface in one place.
+    // _activated stays true even on import failure (core hooks remain registered).
+    Promise.all([
+        import("./ui-hooks.mjs").then(({ registerUiHooks }) => registerUiHooks()),
+        import("./companion-link.mjs").then(({ registerActorDirectoryContext, registerInitiativeHooks }) => {
+            registerActorDirectoryContext();
+            registerInitiativeHooks();
+            console.log(`${TAG} | Companion-link feature online.`);
+        }),
+    ]).catch(err => console.error(`${TAG} | NPC chat dynamic module load failed (core hooks remain active):`, err));
 }
 
 /** Expose internal state for the engine api block (so other modules / macros
@@ -218,7 +212,8 @@ function _registerHooks() {
 
         console.log(`${TAG} | Scene scan — checking ${npcs.length} NPC token(s)`);
 
-        for (const token of npcs) {
+        for (let _idx = 0; _idx < npcs.length; _idx++) {
+            const token = npcs[_idx];
             const tokenDoc = token.document;
             if (!tokenDoc?.actor) continue;
 
@@ -232,16 +227,20 @@ function _registerHooks() {
             catch (_) { /* default true */ }
             if (skipReason && skipForSummons) continue;
 
+            // Stagger voice + bio processing so up to ~40 NPC tokens on scene-load
+            // don't all fire DB writes simultaneously. 100ms gap between each token.
+            const _voiceDelay = 50 + _idx * 100;
             import("./voice-engine.mjs").then(({ onTokenCreated }) => {
-                setTimeout(() => onTokenCreated(tokenDoc), 50);
+                setTimeout(() => onTokenCreated(tokenDoc), _voiceDelay);
             }).catch(err => console.error(`${TAG} | Voice Engine load failed:`, err));
 
             try {
                 if (!game.settings.get(MODULE_ID, "autoGenerateBio")) continue;
             } catch (_) { continue; }
 
+            const _bioDelay = 100 + _idx * 150;
             import("./bio-generator.mjs").then(({ queueBioGeneration }) => {
-                setTimeout(() => queueBioGeneration(tokenDoc), 100);
+                setTimeout(() => queueBioGeneration(tokenDoc), _bioDelay);
             }).catch(err => console.error(`${TAG} | Bio-generator load failed:`, err));
         }
     });
@@ -355,35 +354,6 @@ function _registerHooks() {
             }
         } catch (err) {
             console.warn("ACE: Engine | stale conversation-lock sweep failed:", err);
-        }
-    });
-
-    // ── Scene change → end conversation ─────────────────────────────────
-    Hooks.on("preUpdateToken", (tokenDoc, changes) => {
-        if (!("sceneId" in changes)) return;
-        const actor   = tokenDoc.actor;
-        const actorId = actor?.id;
-        if (!actorId) return;
-
-        const moveKey = _convoKey(actorId, tokenDoc);
-        const moveFound = openConversations.get(moveKey)
-            ? { key: moveKey, app: openConversations.get(moveKey) }
-            : _findConvo(actorId, tokenDoc.id);
-
-        if (npcLocks.has(actorId) || moveFound) {
-            console.warn(`${TAG} | NPC token moved to different scene — ending convo`);
-            game.socket.emit(`module.${MODULE_ID}`, {
-                action:  "gmDismiss",
-                actorId,
-                tokenId: tokenDoc.id,
-                source:  "scene-change",
-            });
-            if (npcLocks.has(actorId)) npcLocks.delete(actorId);
-            if (moveFound) {
-                moveFound.app._gmForced = true;
-                moveFound.app.close().catch(() => {});
-                openConversations.delete(moveFound.key);
-            }
         }
     });
 
@@ -545,7 +515,7 @@ async function _moveActorToFallenFolder(actor) {
             const parent = await _getOrCreateAceNpcsFolder();
             const fallen = await _getOrCreateFallenFolder(parent);
             return fallen;
-        })();
+        })().finally(() => { _fallenFolderInflight = null; });
     }
     const fallenFolder = await _fallenFolderInflight;
     if (!fallenFolder) return;

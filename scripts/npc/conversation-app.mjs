@@ -125,7 +125,6 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     static DEFAULT_OPTIONS = {
-        id:     "ace-engine-app",
         window: { title: "ACE: Engine", resizable: true, minimizable: true },
         position: { width: 600, height: 850 },
         classes:  [MODULE_ID],
@@ -404,7 +403,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         // this window to read-only spectator. GM is exempt.
         const npcLocks = npcChatState?.npcLocks;
         if (!game.user.isGM && npcLocks) {
-            const heldBySomeoneElse = [...npcLocks.values()].some(l => l?.userId && l.userId !== game.user.id);
+            const actorLock = npcLocks.get(this.actor.id);
+            const heldBySomeoneElse = actorLock?.userId && actorLock.userId !== game.user.id;
             if (heldBySomeoneElse) {
                 this.readOnly = true;
                 this._isOwner = false;
@@ -509,7 +509,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                     scene: canvas.scene?.id || null
                 },
                 content: `<p>${dialogueOnly}</p>`,
-                flags: { MODULE_ID: { isAIConversation: true } }
+                flags: { [MODULE_ID]: { isAIConversation: true } }
             });
         }
 
@@ -781,7 +781,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                         scene: canvas.scene?.id || null
                     },
                     content: `<p>${dialogueOnly}</p>`,
-                    flags: { MODULE_ID: { isAIConversation: true, gmInterjection: true } }
+                    flags: { [MODULE_ID]: { isAIConversation: true, gmInterjection: true } }
                 });
             }
 
@@ -891,7 +891,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                         scene: canvas.scene?.id || null
                     },
                     content: `<p><strong>${playerName}:</strong> ${text}</p><p>${dialogueOnly}</p>`,
-                    flags: { MODULE_ID: { isAIConversation: true } }
+                    flags: { [MODULE_ID]: { isAIConversation: true } }
                 });
             }
 
@@ -996,18 +996,18 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             candidates.push(`${folder}/${encodeURIComponent(name)}.webp`);
         }
 
-        for (const path of candidates) {
-            // eslint-disable-next-line no-await-in-loop
-            if (await this._fileExists(path)) {
-                this._speakingWebpSrc = path;
-                console.log(`ACE: Engine | Conversation | Speaking WebP found: ${decodeURIComponent(path)}`);
-                break;
+        if (candidates.length) {
+            try {
+                this._speakingWebpSrc = await Promise.any(
+                    candidates.map(path =>
+                        this._fileExists(path).then(found => found ? path : Promise.reject(new Error("not found")))
+                    )
+                );
+                console.log(`ACE: Engine | Conversation | Speaking WebP found: ${decodeURIComponent(this._speakingWebpSrc)}`);
+            } catch {
+                const tried = candidates.map(p => decodeURIComponent(p.split("/").pop())).join(", ") || "(none — actor has no name/type data)";
+                console.log(`ACE: Engine | Conversation | No speaking WebP for ${tokenName || actorName} (tried: ${tried})`);
             }
-        }
-
-        if (!this._speakingWebpSrc) {
-            const tried = candidates.map(p => decodeURIComponent(p.split("/").pop())).join(", ") || "(none — actor has no name/type data)";
-            console.log(`ACE: Engine | Conversation | No speaking WebP for ${tokenName || actorName} (tried: ${tried})`);
         }
 
         // Always wire hooks — even when no WebP is found — so the system stays
@@ -1052,9 +1052,11 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (!this.tokenDocument || this.tokenDocument.actorLink) return;
 
         // Already revealed or bio-generator already named this token? Don't rename again
-        // For unlinked tokens, check the token document's flags (not the base actor)
+        // Instance guard prevents race when two players close first exchange simultaneously.
+        if (this._renameInProgress) return;
         const already = this.tokenDocument.getFlag(MODULE_ID, "nameRevealed");
         if (already) return;
+        this._renameInProgress = true;
 
         // Parse name from biography — strip headings and module-injected labels first
         // so <h3>ACE: BIOGRAPHY</h3><p>Name... doesn't get "ACE" extracted as the name
@@ -1089,12 +1091,15 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         const nameWords = name.split(/\s+/);
         if (nameWords.some(w => BLOCKED_WORDS.test(w))) return;
 
+        // Set nameRevealed flag BEFORE the network ops so concurrent callers see it immediately
+        await this._setFlagSafe("nameRevealed", true);
+
         // Update the token document name + make nameplate always visible
         const sceneId = this.tokenDocument.parent?.id || canvas.scene?.id;
         if (game.user.isGM) {
             const scene = game.scenes.get(sceneId);
             const tokenDoc = scene?.tokens?.get(this.tokenDocument.id);
-            if (tokenDoc) await tokenDoc.update({ name, displayName: 50 }); // 50 = ALWAYS
+            if (tokenDoc) await tokenDoc.update({ name, displayName: CONST.TOKEN_DISPLAY_MODES.ALWAYS });
         } else {
             // Player can't update tokens directly — ask GM via socket
             game.socket.emit(`module.${MODULE_ID}`, {
@@ -1104,9 +1109,6 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 name
             });
         }
-
-        // Flag this token so it's only renamed once
-        await this._setFlagSafe("nameRevealed", true);
 
         // Update the name banner in the portrait area (local + broadcast to spectators)
         this._updateNameLabel(name);

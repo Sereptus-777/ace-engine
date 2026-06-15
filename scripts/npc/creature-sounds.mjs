@@ -24,6 +24,7 @@ const CACHE_TTL  = 120_000;          // 2 minutes
 const EXCLUDE_RE = /(?:walking|footstep|step|ambien|loop|light.saber|electric|cartoon|robotic|sci.fi|singing|chirp)/i;
 
 async function _getFiles(folder) {
+    if (!game.user?.isGM) return [];  // FilePicker.browse is GM-only; players get an empty list
     const now = Date.now();
     const cacheKey = folder;
     const cached = _fileCache.get(cacheKey);

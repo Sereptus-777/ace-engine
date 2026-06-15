@@ -430,10 +430,11 @@ export function registerInitiativeHooks() {
                 : null;
             if (summonerC && summonerC.initiative != null) {
                 const existingSiblings = await countSummonedCompanionsOf(summonerC, combat);
+                // +1: count is queried BEFORE this combatant is added, so add 1 to get correct slot
                 const init = computeCompanionInitiative(
                     summonerC.initiative,
                     getInitOffsetForToken(combatant.token),
-                    existingSiblings,
+                    existingSiblings + 1,
                 );
                 try {
                     await combatant.update({ initiative: init });

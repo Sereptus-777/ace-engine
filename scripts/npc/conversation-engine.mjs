@@ -128,6 +128,12 @@ function _resolveChatProvider() {
 
 export class AIHandler {
 
+    // ── Ollama socket dispatcher (per-call socket.on replacement) ──────────
+    // One static handler replaces per-call registrations that accumulate
+    // without bound and can cross-fire between concurrent requests.
+    static _socketPending = new Map();
+    static _socketListenerRegistered = false;
+
     /**
      * Background prompt warm-up (v1.6.12).
      *
@@ -205,7 +211,7 @@ export class AIHandler {
         // ── NPC State Checks ─────────────────────────────────────────────
         const isUnconscious = this.hasCondition(actor, ["unconscious", "incapacitated", "stunned"]);
         const hasDeadCondition = this.hasCondition(actor, ["dead"]);
-        const isDead           = hasDeadCondition || (hpCurrent <= 0 && !isUnconscious);
+        const isDead           = hasDeadCondition;  // trust dnd5e's condition system; don't shortcut on HP==0
 
         const isUndead  = creatureType.includes("undead");
         const isAnimal  = (intScore < 6) || creatureType.includes("beast");
@@ -260,7 +266,9 @@ export class AIHandler {
                 const gridFt     = canvas.grid.distance;
                 const a = token.center;
                 const b = playerToken.center;
-                const distFt = Math.round((Math.hypot(b.x - a.x, b.y - a.y) / gridSizePx) * gridFt);
+                const distFt = typeof game.aceQol?.distanceFt === "function"
+                    ? game.aceQol.distanceFt(token, playerToken)
+                    : Math.round((Math.hypot(b.x - a.x, b.y - a.y) / gridSizePx) * gridFt);
                 if (distFt <= 5)       distanceContext = "The speaker is right beside you, within arm's reach.";
                 else if (distFt <= 15) distanceContext = `The speaker is close by, about ${distFt} feet away.`;
                 else if (distFt <= 30) distanceContext = `The speaker is ${distFt} feet away — a comfortable conversation distance.`;
@@ -953,6 +961,20 @@ RULES:
     }
 
     static _callOllamaViaSocket(messages, images = []) {
+        // One-time listener registration — prevents unbounded accumulation of per-call
+        // handlers that could cross-fire between concurrent requests.
+        if (!AIHandler._socketListenerRegistered) {
+            AIHandler._socketListenerRegistered = true;
+            game.socket.on(`module.${MODULE_ID}`, (data) => {
+                if (data.action !== "ollamaResponse") return;
+                const pending = AIHandler._socketPending.get(data.requestId);
+                if (!pending) return;
+                AIHandler._socketPending.delete(data.requestId);
+                clearTimeout(pending.timeout);
+                if (data.error) pending.reject(new Error(data.error));
+                else pending.resolve(data.text);
+            });
+        }
         return new Promise((resolve, reject) => {
             const requestId = foundry.utils.randomID();
             // v1.6.13: bumped from 30s → 180s to match AI_FETCH_TIMEOUT.
@@ -966,20 +988,11 @@ RULES:
             // first message the prompt prefix is cached and subsequent
             // calls return in 5–10s.
             const SOCKET_PROXY_TIMEOUT_MS = 180_000;
-            const timeout   = setTimeout(() => {
-                game.socket.off(`module.${MODULE_ID}`, handler);
+            const timeout = setTimeout(() => {
+                AIHandler._socketPending.delete(requestId);
                 reject(new Error(`Ollama GM proxy timed out after ${SOCKET_PROXY_TIMEOUT_MS / 1000}s — is a GM logged in?`));
             }, SOCKET_PROXY_TIMEOUT_MS);
-
-            const handler = (data) => {
-                if (data.action !== "ollamaResponse" || data.requestId !== requestId) return;
-                clearTimeout(timeout);
-                game.socket.off(`module.${MODULE_ID}`, handler);
-                if (data.error) reject(new Error(data.error));
-                else resolve(data.text);
-            };
-
-            game.socket.on(`module.${MODULE_ID}`, handler);
+            AIHandler._socketPending.set(requestId, { resolve, reject, timeout });
             game.socket.emit(`module.${MODULE_ID}`, {
                 action: "ollamaRequest",
                 requestId,
@@ -1025,7 +1038,7 @@ RULES:
             const a = t.center;
             const b = originToken.center;
             const distPixels = Math.hypot(a.x - b.x, a.y - b.y);
-            const distFeet   = Math.round(distPixels / gridSize) * gridDist;
+            const distFeet   = Math.round((distPixels / gridSize) * gridDist);
             const relation   = t.actor?.getFlag(MODULE_ID, "relationship")
                             || t.actor?.flags?.npclink?.relationship || "unknown";
             const type       = t.actor?.type || "creature";
@@ -1119,7 +1132,11 @@ RULES:
         }
 
         // Concentration check
-        const concentrating = actor?.effects?.find(e => e.statuses?.has("concentrating") || e.name?.toLowerCase()?.includes("concentrat"));
+        const concentrating = actor?.effects?.find(e =>
+            e.statuses?.has("concentration") ||
+            e.flags?.dnd5e?.statusId === "concentration" ||
+            e.name?.toLowerCase()?.includes("concentrat")
+        );
         if (concentrating) {
             lines.push(`- ${conditionDescriptions["concentrating"]}`);
         }

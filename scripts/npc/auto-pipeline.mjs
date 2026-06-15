@@ -203,7 +203,7 @@ async function _flushBatch() {
         if (threshold > 0 && toProcess.length >= threshold) {
             const decision = await _confirmBatch(toProcess);
             if (!decision) {
-                console.log(`${TAG} | GM skipped batch of ${toProcess.length} tokens`);
+                ui.notifications?.info(`ACE: Skipped auto-generation for ${toProcess.length} NPC${toProcess.length !== 1 ? "s" : ""}.`);
                 _processing = false;
                 return;
             }
@@ -260,22 +260,31 @@ async function _flushBatch() {
 }
 
 /**
- * Run queueBioGeneration and resolve once it appears done. The function
- * itself is fire-and-forget (it doesn't return a Promise that resolves
- * on completion), so we settle on a "best-effort wait" — let the bio
- * pipeline start, then move on after a short delay. The pipeline writes
- * to the actor as it goes; if it's still running when we kick off the
- * next token, that's fine — each token's pipeline is independent.
- *
- * For perfect serialization we'd need bio-generator to expose a Promise,
- * which is a deeper refactor. The 350ms gap between iterations + the AI
- * call's own duration give natural spacing.
+ * Run queueBioGeneration and resolve only when the bio pipeline completes
+ * (via the ace-engine.bioComplete hook). This ensures _postReviewCard is
+ * posted AFTER the bio has actually been written, not 200ms after it started.
+ * A 30s safety timeout prevents indefinite hanging if the hook never fires
+ * (e.g., token had bio disabled, was already generated, or pipeline errored).
  */
 async function _processSingle(tokenDoc, queueBioGeneration) {
-    queueBioGeneration(tokenDoc);
-    // Brief await so the smart-setup dialog (auto-accepted) has a moment
-    // to do its work before the next token kicks off.
-    await new Promise(r => setTimeout(r, 200));
+    return new Promise((resolve) => {
+        let settled = false;
+        const settle = () => { if (!settled) { settled = true; resolve(); } };
+
+        const hookId = Hooks.on("ace-engine.bioComplete", (data) => {
+            if (data.tokenDoc?.id !== tokenDoc.id) return;
+            Hooks.off("ace-engine.bioComplete", hookId);
+            settle();
+        });
+
+        // Safety fallback — resolves if bioComplete never fires (bio skipped, etc.)
+        setTimeout(() => {
+            Hooks.off("ace-engine.bioComplete", hookId);
+            settle();
+        }, 30_000);
+
+        queueBioGeneration(tokenDoc);
+    });
 }
 
 // ─── Review/revert chat card ───────────────────────────────────────────────

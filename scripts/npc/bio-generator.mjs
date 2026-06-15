@@ -46,13 +46,12 @@ Hooks.once("ready", async () => {
     try {
         const stuck = game.actors?.filter?.(a => a.getFlag?.(MODULE_ID, "bioInFlight")) ?? [];
         if (!stuck.length) return;
-        for (const actor of stuck) {
-            try {
-                await actor.setFlag(MODULE_ID, "bioInFlight", false);
-                await actor.unsetFlag?.(MODULE_ID, "bioInFlightSince");
-            }
-            catch (_) { /* per-actor failure shouldn't block the sweep */ }
-        }
+        await Promise.all(stuck.map(actor =>
+            actor.update?.({
+                [`flags.${MODULE_ID}.bioInFlight`]: false,
+                [`flags.${MODULE_ID}.-=bioInFlightSince`]: null,
+            }).catch(_ => { /* per-actor failure shouldn't block the sweep */ })
+        ));
         console.log(`${TAG} | Cleared ${stuck.length} stuck bioInFlight flag(s) on world load (recovery from crashed prior session).`);
     } catch (err) {
         console.warn(`${TAG} | bioInFlight sweep failed:`, err);
@@ -359,8 +358,10 @@ export async function queueBioGeneration(tokenDocument) {
     // setFlag commit propagates. Companion `bioInFlightSince` timestamp enables
     // mid-session staleness recovery — see isBioInFlight() above.
     try {
-        await tokenDocument.actor?.setFlag?.(MODULE_ID, "bioInFlight", true);
-        await tokenDocument.actor?.setFlag?.(MODULE_ID, "bioInFlightSince", Date.now());
+        await tokenDocument.actor?.update?.({
+            [`flags.${MODULE_ID}.bioInFlight`]: true,
+            [`flags.${MODULE_ID}.bioInFlightSince`]: Date.now(),
+        });
     } catch (_) { /* non-fatal — flag is advisory */ }
 
     _queue.push(tokenDocument);
@@ -516,10 +517,9 @@ async function _loadCompendiumNames() {
     if (_compendiumNames) return;
     _compendiumNames = new Set();
     try {
-        for (const pack of game.packs) {
-            // Only actor packs (type "Actor") contain creatures
-            if (pack.documentName !== "Actor") continue;
-            const index = await pack.getIndex();
+        const actorPacks = (game.packs ?? []).filter(p => p.documentName === "Actor");
+        const indices = await Promise.all(actorPacks.map(p => p.getIndex()));
+        for (const index of indices) {
             for (const entry of index) {
                 if (entry.name) _compendiumNames.add(entry.name.trim().toLowerCase());
             }
