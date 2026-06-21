@@ -3152,13 +3152,22 @@ Hooks.on("canvasReady", () => {
 });
 
 Hooks.on("createCombat", (combat) => {
-  if (!game.user.isGM || !aceMemory) return;
-  aceMemory.logCombatStart(canvas?.scene?.name ?? "");
-  if (panel?.rendered) panel.refreshSelectPanel();  // show initiative section
+  // Multi-GM safety: createCombat fires on every client. isGM is true for ALL
+  // connected GMs, so two GMs would double-log "combat started" to ACE memory
+  // AND each refresh their panel. Memory write must be activeGM-only; panel
+  // refresh stays local per-GM (each GM's panel is its own state).
+  if (game.users?.activeGM === game.user && aceMemory) {
+    aceMemory.logCombatStart(canvas?.scene?.name ?? "");
+  }
+  if (game.user.isGM && panel?.rendered) panel.refreshSelectPanel();  // show initiative section
 });
 
 Hooks.on("deleteCombat", (combat) => {
-  if (!game.user.isGM || !aceMemory) return;
+  // Multi-GM safety: deleteCombat fires on every client. The memory + faction
+  // reputation writes below must only fire on ONE client or both GMs would
+  // record the kill/survive events to AI memory and double-fire reputation
+  // updates per faction. Gate ALL state mutations on activeGM.
+  if (game.users?.activeGM !== game.user || !aceMemory) return;
   // Gather participant names from the just-deleted combat
   const participants = combat.turns?.map((c) => c.name).filter(Boolean) ?? [];
   aceMemory.logCombatEnd(participants, canvas?.scene?.name ?? "");
@@ -3660,8 +3669,13 @@ Hooks.on("ace.dispositionChange", ({ npcName, fromLabel, toLabel, scene }) => {
 
 // ── Chat message handler: Subtle Roll detection + Crit/Fumble auto-detection ──
 // Single handler prevents subtle rolls from also being processed as crits/fumbles.
+//
+// Multi-GM safety: createChatMessage fires on every client. This handler
+// writes PC career stats + attack hit/miss results to ACE memory and resolves
+// subtle rolls — all state mutations. Two GMs would double-log every roll.
+// activeGM-gated so ONE client owns the writes.
 Hooks.on("createChatMessage", async (message) => {
-  if (!game.user.isGM) return;
+  if (game.users?.activeGM !== game.user) return;
 
   // ── Subtle Roll detection — intercept blind rolls tagged by the player ──
   if (message.flags?.["ace-engine"]?.isSubtleRoll && subtleRolls) {
