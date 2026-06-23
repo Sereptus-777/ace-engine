@@ -33,6 +33,9 @@ import { VaultSearch }         from "./vault-search.mjs";
 import { SceneIntelligence }   from "./scene-intelligence.mjs";
 // Combat — Initiative Reorder (moved from ACE: Envoy, merger Phase 1A)
 import { injectReorderButtons } from "./combat/initiative-reorder.mjs";
+// Combat — Monster trait automation (Heated Body, Spider Climb, Pack Tactics,
+// Death Burst, Regeneration, Legendary Resistance, reactive auras, …)
+import { initMonsterAutomation } from "./combat/monster-automation.mjs";
 import { AttunementPrompt }     from "./attunement-prompt.mjs";
 // NPC Chat — gated activation entry point (moved from ACE: Envoy, merger Phase 3)
 import { activateNpcChat, npcChatState } from "./npc/activate.mjs";
@@ -1139,6 +1142,15 @@ Hooks.once("ready", async () => {
   // migration-completion .then() (line ~1832) safely no-ops on the GM client.
   try { activateNpcChat(); }
   catch (err) { console.warn(`${MODULE_ID} | NPC chat activation (pre-GM-gate) failed:`, err); }
+
+  // ── Monster trait automation — MUST run for ALL users, BEFORE the GM gate ──
+  // The reactive-aura hook (dnd5e.rollDamage) and Legendary-Resistance save
+  // hook fire on the client that rolled, which is often a PLAYER attacking a
+  // monster. Each handler self-gates (GM-only for HP/effect mutations,
+  // activeGM for single-owner death/regen writes), so it's safe to register
+  // everywhere. Idempotent — guarded by an internal _initialized flag.
+  try { initMonsterAutomation(); }
+  catch (err) { console.error(`${MODULE_ID} | Monster automation init failed:`, err); }
 
   // ── Late-joiner lock sync ──────────────────────────────────────
   // Non-GM clients that connect mid-session ask the GM for the current
