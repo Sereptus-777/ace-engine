@@ -392,6 +392,21 @@ async function migrateFromEnvoy() {
     console.log(`${MODULE_ID} | Envoy migration: copied ${settingsMigrated} setting(s)`);
   }
 
+  // ── 1b) Turn the engine's NPC subsystem ON for migrating Envoy users ──
+  // Auto-XP-on-kill, the ☠ Fallen-folder cleanup, and the faction death-ripple
+  // all live behind the `npcChatEnabled` gate (default OFF). A user upgrading
+  // FROM ACE: Envoy had those running; without flipping this they'd silently
+  // vanish after the merge. Only fires when real Envoy data was found
+  // (settingsMigrated > 0), so a fresh install is unaffected. (Fixed 2026-06-23.)
+  if (settingsMigrated > 0) {
+    try {
+      if (game.settings.get(MODULE_ID, "npcChatEnabled") !== true) {
+        await game.settings.set(MODULE_ID, "npcChatEnabled", true);
+        console.log(`${MODULE_ID} | Envoy migration: enabled npcChatEnabled so XP / Fallen-folder / faction-death + NPC chat keep working.`);
+      }
+    } catch (_) { /* non-fatal */ }
+  }
+
   // ── 2) Migrate NPC actor flags ace-envoy.* → ace-engine.* ─────────────
   let flagsMigrated = 0;
   for (const actor of game.actors ?? []) {
