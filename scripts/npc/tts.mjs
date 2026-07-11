@@ -340,6 +340,24 @@ class TTSEngine {
         if (!response.ok) {
             const err = await response.text();
             console.error("TTS | ElevenLabs error:", response.status, err);
+            // A dead/mis-scoped key (401 unauthorized, 403 missing permission)
+            // silently fell back to the robot voice — that cost a two-hour hunt
+            // (2026-07-10). SHOUT it instead: a throttled GM toast pointing at
+            // the exact fix, at most once every 60s so it can't spam.
+            if ((response.status === 401 || response.status === 403) && game.user?.isGM) {
+                const nowMs = performance.now?.() ?? 0;
+                if (nowMs - (TTSEngine._lastKeyToast ?? -1e9) > 60_000) {
+                    TTSEngine._lastKeyToast = nowMs;
+                    const why = response.status === 403
+                        ? "missing the Text-to-Speech permission — create a Full-Access key"
+                        : "invalid or expired";
+                    ui.notifications?.error(
+                        `ACE Engine: your ElevenLabs API key is ${why}. NPCs are using the robot voice. `
+                        + `Fix it in Configure Settings → ACE Engine → Voice & TTS.`,
+                        { permanent: true }
+                    );
+                }
+            }
             return { status: "error" };
         }
         const arrayBuffer = await response.arrayBuffer();
