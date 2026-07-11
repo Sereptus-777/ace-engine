@@ -17,6 +17,23 @@ const MODULE_ID = "ace-engine";
 const QOL_ID    = "ace-qol";
 const TAG       = "ACE: Engine | Bio";
 
+// ─── Flavor-name nameplate (display-only) ────────────────────────────────────
+// The bio generator stores its generated "flavor" name in the actor flag
+// `flavorName` and NEVER overwrites the real name (mechanics read the real name as
+// identity). This hook paints the flavor name onto the token nameplate so players
+// still see the immersive name, while the sheet + mechanics keep the canonical one.
+// Display-only and fully defensive — if anything is off, the real nameplate stands.
+function _paintFlavorNameplate(token) {
+    try {
+        const flavor = token?.actor?.getFlag?.(MODULE_ID, "flavorName");
+        if (flavor && token.nameplate && typeof token.nameplate.text === "string" && token.nameplate.text !== flavor) {
+            token.nameplate.text = flavor;
+        }
+    } catch (_) { /* never let display break a token refresh */ }
+}
+Hooks.on("refreshToken", _paintFlavorNameplate);
+Hooks.on("drawToken",    _paintFlavorNameplate);
+
 // ─── Stuck bioInFlight flag recovery ──────────────────────────────────────
 // Vulnerability identified by Gemini code review (2026-05-31):
 //
@@ -1077,12 +1094,20 @@ ${personalityInstruction}`;
     try {
         const imgPath = tokenDocument.texture?.src || actor.prototypeToken?.texture?.src || actor.img || "";
         if (imgPath && !imgPath.includes("mystery-man") && !imgPath.includes("default-avatar")) {
-            const imgResp = await fetch(imgPath);
+            const imgResp = await fetch(imgPath, { signal: AbortSignal.timeout(10000) });
             if (imgResp.ok) {
                 const blob = await imgResp.blob();
                 if (blob.size > 0 && blob.size < 5_000_000 && blob.type.startsWith("image/")) {
                     const buf = await blob.arrayBuffer();
-                    const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                    // Chunk the byte→char conversion: spreading a whole multi-MB
+                    // buffer into String.fromCharCode blows the call stack
+                    // (RangeError) on any real portrait. 8192 matches tts.mjs.
+                    const bytes = new Uint8Array(buf);
+                    let binary = "";
+                    for (let i = 0; i < bytes.length; i += 8192) {
+                        binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+                    }
+                    const base64 = btoa(binary);
                     tokenImage = { base64, mimeType: blob.type };
                     console.log(`${TAG} | Token art loaded for vision (${(blob.size/1024).toFixed(0)} KB, ${blob.type})`);
                 }
@@ -1646,12 +1671,16 @@ async function _generateBio(tokenDocument) {
         await tokenDocument.setFlag(MODULE_ID, "bioSceneId", canvas.scene?.id || "");
         await tokenDocument.setFlag(MODULE_ID, "bioSceneName", canvas.scene?.name || "");
 
-        // Update token name + make nameplate always visible
+        // FLAVOR NAME — store as a DISPLAY-ONLY flag; NEVER overwrite the real token
+        // name. Mechanics (spell pipeline, features, creature-type detection) read the
+        // name as IDENTITY — renaming "Skeleton Warrior" → "Strix" broke them. We keep
+        // the canonical name, keep the nameplate visible, and store the flavor in a flag
+        // (a refreshToken hook paints it on the nameplate for immersion).
         if (generatedName) {
-            await tokenDocument.update({ name: generatedName, displayName: 50 }); // 50 = ALWAYS
-            // Also set nameRevealed so _maybeRevealName() in ConversationApp won't re-parse
+            await tokenDocument.update({ displayName: 50 }); // 50 = ALWAYS show nameplate (real name kept)
+            await tokenDocument.actor.setFlag(MODULE_ID, "flavorName", generatedName).catch(() => {});
             await tokenDocument.actor.setFlag(MODULE_ID, "nameRevealed", true).catch(() => {});
-            console.log(`${TAG} | Unlinked token named: ${generatedName} (nameplate set to ALWAYS)`);
+            console.log(`${TAG} | Flavor name stored (display-only): "${generatedName}" — real name kept as "${tokenDocument.name}"`);
         }
 
         // Save personality to actor flag (shown in AI Setup dialog)
@@ -1697,37 +1726,24 @@ async function _generateBio(tokenDocument) {
         await actor.setFlag(MODULE_ID, "bioSceneId", canvas.scene?.id || "");
         await actor.setFlag(MODULE_ID, "bioSceneName", canvas.scene?.name || "");
 
-        // ── Rename the linked actor (matches unlinked branch behavior) ──
-        // When the GM checked "Rename NPC" in the faction-setup dialog, an AI-
-        // generated proper name (e.g. "Aldric Thorne" instead of "Death Knight")
-        // was produced and stored in `generatedName`. The unlinked branch above
-        // applies that name to the tokenDocument via `tokenDocument.update`.
-        // The linked branch previously SKIPPED this step — bio got written but
-        // the actor stayed named "Death Knight", which is wrong because the GM
-        // explicitly consented to the rename via the checkbox.
-        //
-        // For linked actors, the rename has to happen on the actor itself (and
-        // optionally the token document, though linked tokens inherit from the
-        // actor by default). We update the actor's name; tokens already on
-        // canvas linked to this actor will reflect the new name automatically.
+        // ── FLAVOR NAME (display-only) — NEVER overwrite the real actor/token name ──
+        // The bio generator produces a flavor name (e.g. "Aldric Thorne" for a Death
+        // Knight). It must NOT replace the real name: the spell pipeline, features, and
+        // creature-type detection read the name as IDENTITY, so renaming broke undead
+        // mechanics — and on a LINKED actor it corrupted EVERY instance. We keep the
+        // canonical name and store the flavor in a flag (a refreshToken hook paints it
+        // on the nameplate for immersion). [2026-06-29 — identity-stability fix.]
         if (generatedName && generatedName !== actor.name) {
             try {
-                const oldName = actor.name;
-                await actor.update({ name: generatedName });
+                await actor.setFlag(MODULE_ID, "flavorName", generatedName);
                 await actor.setFlag(MODULE_ID, "nameRevealed", true);
-                console.log(`${TAG} | Linked actor renamed: "${oldName}" → "${generatedName}"`);
-
-                // If a token document was passed in, also update its name and
-                // make the nameplate always-visible (matches unlinked branch).
+                console.log(`${TAG} | Flavor name stored (display-only): "${generatedName}" — real name kept as "${actor.name}"`);
                 if (tokenDocument && tokenDocument !== actor) {
-                    try {
-                        await tokenDocument.update({ name: generatedName, displayName: 50 });
-                    } catch (tokErr) {
-                        console.warn(`${TAG} | Token nameplate update failed (non-fatal):`, tokErr);
-                    }
+                    try { await tokenDocument.update({ displayName: 50 }); }   // keep nameplate visible
+                    catch (tokErr) { console.warn(`${TAG} | Nameplate visibility update failed (non-fatal):`, tokErr); }
                 }
-            } catch (renameErr) {
-                console.warn(`${TAG} | Linked actor rename failed (non-fatal — bio still saved):`, renameErr);
+            } catch (flavorErr) {
+                console.warn(`${TAG} | Flavor-name flag failed (non-fatal — bio still saved):`, flavorErr);
             }
         }
 
@@ -1908,16 +1924,25 @@ async function _autoLinkToken(tokenDocument, generatedName) {
         autoLinkedAt: new Date().toISOString(),
         autoLinkedFrom: baseName,
         autoLinkedFolder: folderPath,
+        // IDENTITY RULE (Johnny 2026-07-10, final): the AI name is DISPLAY-
+        // ONLY on every path — linked included. The nameplate hook renders
+        // this flag; the sheet/actor/token names stay the creature.
+        flavorName: npcName,
     };
 
     const actorData = {
-        name: npcName,
+        // IDENTITY RULE (Johnny 2026-07-10 17:56, overruling the old opt-in
+        // rename): the REAL name stays the creature ("Hydra") on the sheet,
+        // the actor, and the token — linked or not. Mechanics read identity;
+        // renaming it broke game rules in play. The AI name ("Strix") lives
+        // in the flavorName flag and shows on the nameplate only.
+        name: baseName,
         type: "npc",
         img: syntheticActor.img,
         system: foundry.utils.deepClone(syntheticActor.system),
         prototypeToken: {
             ...foundry.utils.deepClone(syntheticActor.prototypeToken ?? {}),
-            name: npcName,
+            name: baseName,
             actorLink: true,
             disposition: tokenDocument.disposition ?? CONST.TOKEN_DISPOSITIONS.HOSTILE,
             texture: { src: tokenDocument.texture?.src || syntheticActor.prototypeToken?.texture?.src },
@@ -1943,11 +1968,11 @@ async function _autoLinkToken(tokenDocument, generatedName) {
     await tokenDocument.update({
         actorId: newActor.id,
         actorLink: true,
-        name: npcName,
+        name: baseName,   // identity on the token; flavor renders via the nameplate hook
     });
 
-    console.log(`${TAG} | ✅ Auto-linked: ${npcName} → Actor ID ${newActor.id} (folder: "${folderPath}")`);
-    ui.notifications?.info(`ACE: ${npcName} saved as persistent NPC in "${folderPath}".`);
+    console.log(`${TAG} | ✅ Auto-linked: "${npcName}" (${baseName}) → Actor ID ${newActor.id} (folder: "${folderPath}") — sheet name stays "${baseName}"`);
+    ui.notifications?.info(`ACE: ${npcName} (${baseName}) saved as persistent NPC in "${folderPath}".`);
 }
 
 async function _generateItemBios(tokenDocument) {
@@ -3111,4 +3136,82 @@ function _playShimmer(tokenDocument) {
         requestAnimationFrame(pulse);
     }
     requestAnimationFrame(pulse);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Auto-link cleanup — the one-off purge of old auto-linked actors
+//  (Johnny 2026-07-10). The enableAutoLink-default-true era (fixed 1.7.12)
+//  left orphaned linked actors in the sidebar. This lists every actor carrying
+//  the autoLinked flag, pre-checks the SAFE ones (no token on any scene),
+//  flags the live ones, and deletes ONLY what the GM ticks and confirms.
+// ═════════════════════════════════════════════════════════════════════════════
+
+export async function openAutoLinkCleanup() {
+    if (!game.user.isGM) return ui.notifications?.warn("GM only.");
+
+    const candidates = [];
+    for (const actor of game.actors) {
+        const fl = actor.flags?.[MODULE_ID];
+        if (!fl?.autoLinked) continue;
+        // Is a linked token for this actor still placed on any scene?
+        let liveScene = null;
+        for (const scene of game.scenes) {
+            if (scene.tokens.some(t => t.actorId === actor.id)) { liveScene = scene.name; break; }
+        }
+        candidates.push({
+            id: actor.id, name: actor.name,
+            from: fl.autoLinkedFrom ?? "?",
+            at: fl.autoLinkedAt ? fl.autoLinkedAt.slice(0, 10) : "?",
+            liveScene,
+        });
+    }
+
+    if (!candidates.length) {
+        return ui.notifications?.info("ACE: no auto-linked actors found — the sidebar is already clean.");
+    }
+    candidates.sort((a, z) => a.name.localeCompare(z.name));
+
+    const rowsHtml = candidates.map(c => `
+        <label style="display:flex;align-items:center;gap:8px;padding:4px 2px;border-bottom:1px solid #2a2a30;cursor:pointer;">
+            <input type="checkbox" name="ace-al-clean" value="${c.id}" ${c.liveScene ? "" : "checked"}
+                   style="width:16px;height:16px;accent-color:#c9a76b;"/>
+            <span style="flex:1;font-size:15px;">${foundry.utils.escapeHTML(c.name)}
+                <span style="color:#8a7f68;font-size:12px;">(from ${foundry.utils.escapeHTML(c.from)}, ${c.at})</span>
+            </span>
+            ${c.liveScene
+                ? `<span style="color:#e0885c;font-size:12px;font-weight:700;">ON SCENE: ${foundry.utils.escapeHTML(c.liveScene)}</span>`
+                : `<span style="color:#7ec97e;font-size:12px;">no token — safe</span>`}
+        </label>`).join("");
+
+    const content = `
+        <div class="ace-al-cleanup" style="background:#141118;color:#e8dcc3;border:1px solid #c9a76b;border-radius:8px;padding:12px 14px;max-height:60vh;overflow-y:auto;font-size:16px;">
+            <div style="font-weight:700;color:#c9a76b;font-size:17px;"><i class="fas fa-broom"></i> Auto-linked actor cleanup — ${candidates.length} found</div>
+            <div style="font-size:13px;color:#9c8f74;margin:4px 0 8px;">
+                Leftovers from the old auto-link default. Safe ones (no token anywhere) are pre-checked.
+                Ones still standing on a scene are UNCHECKED and marked — deleting those breaks the placed token.
+                Nothing is deleted until you click Delete Selected.
+            </div>
+            ${rowsHtml}
+        </div>`;
+
+    new Dialog({
+        title: "ACE — Auto-Link Cleanup",
+        content,
+        buttons: {
+            del: {
+                icon: '<i class="fas fa-trash"></i>',
+                label: "Delete Selected",
+                callback: async (html) => {
+                    const root = html[0] ?? html;
+                    const ids = [...root.querySelectorAll('input[name="ace-al-clean"]:checked')].map(i => i.value);
+                    if (!ids.length) return ui.notifications?.info("ACE: nothing selected — nothing deleted.");
+                    await Actor.deleteDocuments(ids);
+                    ui.notifications?.info(`ACE: deleted ${ids.length} auto-linked actor${ids.length === 1 ? "" : "s"}.`);
+                    console.log(`${TAG} | auto-link cleanup: deleted ${ids.length} actors:`, ids);
+                },
+            },
+            cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" },
+        },
+        default: "cancel",
+    }, { width: 560 }).render(true);
 }

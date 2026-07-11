@@ -509,13 +509,9 @@ export class AceSettings {
       default: true,
     });
 
-    s("docContextBudget", {
-      name: "Document Context Budget",
-      hint: "How many characters of indexed-document text get attached to each AI query. Higher = more accurate quotes from your books, but slower and more expensive. Set to 0 to disable document injection entirely.",
-      type: Number,
-      default: 4000,
-      range: { min: 0, max: 50000, step: 500 },
-    });
+    // docContextBudget is registered once, in the Search Engine section below
+    // (default 16000). A duplicate registration here (default 4000) was removed
+    // 2026-06-28 — last-registration-wins made this one dead and confusing.
 
     s("enableVisionImages", {
       name: "Vision Image Captioning",
@@ -922,9 +918,9 @@ export class AceSettings {
 
     s("enableAutoLink", {
       name: "Auto-Save NPCs as Persistent Actors",
-      hint: "When enabled, newly dropped tokens are automatically converted to linked actors and filed in a scene-named folder in your Actors sidebar.",
+      hint: "OFF by default — dropped tokens keep their REAL name (the sheet + every mechanic reads it) and only get a display-only flavor name on the nameplate, which dies with the token. Turn ON only if you want every dropped NPC converted into a new persistent linked actor in your Actors sidebar.",
       type: Boolean,
-      default: true,
+      default: false,
     });
 
     s("autoGenerateBio", {

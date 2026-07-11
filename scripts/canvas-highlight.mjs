@@ -144,6 +144,12 @@ export class CanvasHighlight {
 
     // ── Draw based on style ──
     const disc = new PIXI.Graphics();
+    // Provably inert: never intercept pointer/hit-testing, never participate in
+    // anything but its own draw. (The glow has never patched Sequencer or hooks,
+    // so it can't mechanically block an animation's sound — but this guarantees
+    // it stays a pure decoration that nothing else has to step around.)
+    disc.eventMode = "none";
+    disc.interactiveChildren = false;
     if (style === "solid_ring") {
       // Hollow circle outline only — no fill
       disc.lineStyle(4, hexInt, opacity);

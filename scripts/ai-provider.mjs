@@ -53,24 +53,19 @@ export class AiProvider {
     messages = this._applyVisionImages(messages, images);
 
     try {
-      let result;
       const activeProvider = this._providerOverride || this.config.provider;
-      switch (activeProvider) {
-        case "ollama":
-          result = await this._chatOllama(messages); break;
-        case "lmstudio":
-          result = await this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`); break;
-        case "openai":
-          result = await this._chatOpenAICompat(messages, "https://api.openai.com/v1/chat/completions"); break;
-        case "openrouter":
-          result = await this._chatOpenAICompat(messages, "https://openrouter.ai/api/v1/chat/completions"); break;
-        case "anthropic":
-          result = await this._chatAnthropic(messages); break;
-        case "custom":
-          result = await this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`); break;
-        default:
-          throw new Error(`Unknown AI provider: ${activeProvider}`);
-      }
+      const dispatch = () => {
+        switch (activeProvider) {
+          case "ollama":     return this._chatOllama(messages);
+          case "lmstudio":   return this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`);
+          case "openai":     return this._chatOpenAICompat(messages, "https://api.openai.com/v1/chat/completions");
+          case "openrouter": return this._chatOpenAICompat(messages, "https://openrouter.ai/api/v1/chat/completions");
+          case "anthropic":  return this._chatAnthropic(messages);
+          case "custom":     return this._chatOpenAICompat(messages, `${this.config.apiUrl}/v1/chat/completions`);
+          default:           throw new Error(`Unknown AI provider: ${activeProvider}`);
+        }
+      };
+      const result = await this._withRetry(dispatch, activeProvider);
       return this._stripThinking(result);
     } finally {
       this._maxTokensOverride = null;
@@ -80,6 +75,36 @@ export class AiProvider {
       this._apiKeyOverride = null;
       this._systemPromptOverride = null;
     }
+  }
+
+  /**
+   * Run an AI call with retry + exponential backoff on TRANSIENT failures
+   * (rate-limits, overload, 5xx, network blips). Mid-session a quota hiccup
+   * should self-heal, not drop a digest / suggestion / bio on the floor.
+   * Non-transient errors (bad key, unknown provider, 4xx) throw immediately.
+   */
+  async _withRetry(fn, providerLabel, { maxRetries = 2, baseDelayMs = 800 } = {}) {
+    let lastErr;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        if (attempt === maxRetries || !this._isTransientError(err)) throw err;
+        const delay = baseDelayMs * (2 ** attempt) + Math.floor(Math.random() * 250);
+        console.warn(`${MODULE_ID} | AIProvider: ${providerLabel} call failed (${err?.message ?? err}) — retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+    throw lastErr;
+  }
+
+  /** True for errors worth retrying: rate-limit / overload / 5xx / network. */
+  _isTransientError(err) {
+    const status = Number(err?.status ?? err?.code ?? err?.response?.status ?? NaN);
+    if ([429, 500, 502, 503, 504].includes(status)) return true;
+    const msg = String(err?.message ?? err ?? "").toLowerCase();
+    return /\b(429|rate.?limit|too many requests|overloaded|temporarily|unavailable|timeout|timed out|econnreset|etimedout|network|fetch failed|502|503|504)\b/.test(msg);
   }
 
   /**

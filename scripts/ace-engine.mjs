@@ -4,7 +4,8 @@
 // ============================================================
 
 import { AcePanel }          from "./panel.mjs";
-import { isBioInFlight }     from "./npc/bio-generator.mjs";
+import { isBioInFlight, openAutoLinkCleanup } from "./npc/bio-generator.mjs";
+import { setSharedElevenLabsKey } from "./npc/shared-credentials.mjs";
 import { AceSettings }       from "./settings.mjs";
 import { initRemoteCatalog } from "./remote-catalog.mjs";
 import { SceneContext }       from "./scene-context.mjs";
@@ -1019,7 +1020,12 @@ Hooks.once("ready", async () => {
       if (!game.user.isGM) return;
       if (!data.text || !data.voiceId || !data.requestId) return;
       try {
-        const apiKey = game.settings.get(MODULE_ID, "elevenLabsApiKey") || "";
+        // Effective key — the local credentials FILE first, then the client
+        // setting: the exact precedence the GM's own playback uses. Reading
+        // only the raw setting is what silenced every player-proxy voice
+        // while the GM window spoke fine (live-fire 2026-07-10 18:24).
+        const apiKey = (localCredentials?.elevenLabsApiKey || "").trim()
+          || (game.settings.get(MODULE_ID, "elevenLabsApiKey") || "").trim();
         if (!apiKey) {
           game.socket.emit(`module.${MODULE_ID}`, {
             action: "ttsResponse", requestId: data.requestId, error: "GM has no ElevenLabs API key configured."
@@ -1419,7 +1425,10 @@ Hooks.once("ready", async () => {
       if (resp.ok) {
         const cfg = await resp.json();
         const { elevenLabsApiKey, elevenLabsVoiceId, elevenLabsModel } = cfg;
-        if (elevenLabsApiKey  && !elevenLabsApiKey.includes("YOUR_"))  localCredentials.elevenLabsApiKey  = elevenLabsApiKey.trim();
+        if (elevenLabsApiKey  && !elevenLabsApiKey.includes("YOUR_")) {
+          localCredentials.elevenLabsApiKey = elevenLabsApiKey.trim();
+          setSharedElevenLabsKey(localCredentials.elevenLabsApiKey);   // one key, every consumer
+        }
         if (elevenLabsVoiceId && !elevenLabsVoiceId.includes("YOUR_")) localCredentials.elevenLabsVoiceId = elevenLabsVoiceId.trim();
         if (elevenLabsModel)                                            localCredentials.elevenLabsModel   = elevenLabsModel.trim();
         if (Object.keys(localCredentials).length) {
@@ -1536,6 +1545,7 @@ Hooks.once("ready", async () => {
     const localKey = localCredentials?.elevenLabsApiKey || "";
     let settingsKey = "";
     try { settingsKey = (game.settings.get(MODULE_ID, "elevenLabsApiKey") || "").trim(); } catch (_) {}
+    setSharedElevenLabsKey(localKey || settingsKey);   // belt: whichever source won
     if (localKey) {
       console.debug(`${MODULE_ID} | TTS: ElevenLabs key loaded from config.local.json`);
     } else if (settingsKey) {
@@ -2030,6 +2040,12 @@ Hooks.once("ready", async () => {
       // ace-token-art's chooser code path can't easily await.
       // See `isBioInFlight` in npc/bio-generator.mjs.
       isBioInFlight,
+
+      // ── One-off sidebar purge of old auto-linked actors (2026-07-10) ──
+      // Review dialog: safe ones pre-checked, on-scene ones flagged; GM
+      // confirms every deletion.
+      //   game.modules.get("ace-engine").api.cleanupAutoLinked()
+      cleanupAutoLinked: openAutoLinkCleanup,
 
       // ── v0.7.21 Two-Part Bio System — memory manager exposure ──
       // npc-profile-journal.mjs reads this to access the NPC store, write
@@ -3790,6 +3806,11 @@ Hooks.on("createChatMessage", async (message) => {
   // Only acts on d20 attack rolls with a natural 1 or 20 during active combat.
   if (!panel?.rendered)      return;   // panel must be open
   if (!game.combat?.active)  return;   // only during active combat
+
+  // ATTACK rolls ONLY — a natural 1/20 on initiative, a saving throw, an
+  // ability/skill check, or a death save is NOT a crit or fumble. Without this
+  // gate, rolling initiative triggered crit/fumble narration (reported 2026-06-28).
+  if (message.flags?.dnd5e?.roll?.type !== "attack") return;
 
   const type = _detectCritOrFumble(message);
   if (!type) return;

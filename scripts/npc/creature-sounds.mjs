@@ -5,15 +5,13 @@
 // Moved from ace-envoy/src/audio/creature-sounds.js as part of the
 // Envoy → Engine merger.
 //
-// Sound file resolution: tries ace-engine path first, then falls back to
-// ace-envoy path. This keeps creature sounds working during the migration
-// window (sounds still in envoy) AND after envoy is shimmed (sounds copied
-// to engine).
+// Creature vocalization sounds live in ace-engine.
+// (2026-06-28: the legacy ace-envoy fallback path was removed — Envoy is
+// retired and its sounds were already copied here. Engine is self-contained.)
 
 const MODULE_ID = "ace-engine";
 const SOUND_PATHS = [
-    `modules/${MODULE_ID}/sounds/creatures`,    // engine — preferred home
-    `modules/ace-envoy/sounds/creatures`,        // envoy — fallback during migration
+    `modules/${MODULE_ID}/sounds/creatures`,
 ];
 
 // ─── File-list cache ───────────────────────────────────────────────────────

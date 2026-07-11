@@ -1131,25 +1131,10 @@ export async function getVoiceConfig(actor, tokenDoc = null) {
  * Register voice engine settings. Called during init.
  */
 export function registerVoiceEngineSettings() {
-    // Scene region dropdown — registered as a world setting
-    // (Scene-level flags are set via the scene config hook instead)
-    game.settings.register(MODULE_ID, "defaultVoiceRegion", {
-        name:    "Default Voice Region",
-        hint:    "Default regional accent pool for NPCs when no scene-specific region is set. Affects commoners, humans, and races without a fixed accent.",
-        scope:   "world",
-        config:  true,
-        type:    String,
-        choices: {
-            "default":      "Sword Coast / Generic (British)",
-            "barovia":      "Barovia / Ravenloft (Eastern European)",
-            "calimshan":    "Calimshan (Middle Eastern)",
-            "chult":        "Chult (African)",
-            "kara_tur":     "Kara-Tur (East Asian)",
-            "icewind_dale": "Icewind Dale / Nordic (Scandinavian)",
-            "underdark":    "Underdark (Scandinavian/German)",
-        },
-        default: "default",
-    });
+    // defaultVoiceRegion is registered centrally in settings.mjs (its choices
+    // and default match exactly). The duplicate registration that used to live
+    // here (config:true) was removed 2026-06-28 — registering it in two places
+    // made its main-page-vs-panel visibility depend on module load order.
 
     // Hidden: voice library cache
     game.settings.register(MODULE_ID, "voiceLibraryCache", {

@@ -78,8 +78,7 @@ export class SuggestionEngine {
       if (auto) {
         const fingerprint = sceneCtx.slice(0, 500);
         if (fingerprint === this._lastFingerprint) {
-          console.debug(`${MODULE_ID} | Suggestions skipped — scene unchanged`);
-          return [];
+          return [];  // scene unchanged since last auto-cycle — nothing new to suggest (silent)
         }
         this._lastFingerprint = fingerprint;
       }

@@ -10,6 +10,7 @@ const EMBED_MODEL    = "nomic-embed-text";
 const DIMENSIONS     = 768;
 const DEFAULT_URL    = "http://localhost:11434";
 const CHECK_TIMEOUT  = 3000;   // ms to wait when probing Ollama
+const EMBED_TIMEOUT  = 15000;  // ms cap on a single embed() — Ollama can stall on model swap / VRAM pressure
 const BATCH_YIELD    = 10;     // yield to UI every N embeddings
 
 // ── Cosine Similarity ────────────────────────────────────────
@@ -137,18 +138,25 @@ export class EmbeddingEngine {
    * @returns {Promise<Float32Array>}
    */
   async embed(text) {
-    const res = await fetch(`${this._baseUrl}/api/embeddings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this._model, prompt: text }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), EMBED_TIMEOUT);
+    try {
+      const res = await fetch(`${this._baseUrl}/api/embeddings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: this._model, prompt: text }),
+        signal: controller.signal,
+      });
 
-    if (!res.ok) {
-      throw new Error(`Embedding failed: ${res.status} ${res.statusText}`);
+      if (!res.ok) {
+        throw new Error(`Embedding failed: ${res.status} ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      return new Float32Array(data.embedding);
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const data = await res.json();
-    return new Float32Array(data.embedding);
   }
 
   /**

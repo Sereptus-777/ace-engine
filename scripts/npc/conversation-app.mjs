@@ -125,7 +125,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     static DEFAULT_OPTIONS = {
-        window: { title: "ACE: Engine", resizable: true, minimizable: true },
+        window: { title: "ACE: NPC Chat", resizable: true, minimizable: true },
         position: { width: 600, height: 850 },
         classes:  [MODULE_ID],
     };
@@ -1094,33 +1094,29 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         // Set nameRevealed flag BEFORE the network ops so concurrent callers see it immediately
         await this._setFlagSafe("nameRevealed", true);
 
-        // Update the token document name + make nameplate always visible
-        const sceneId = this.tokenDocument.parent?.id || canvas.scene?.id;
-        if (game.user.isGM) {
-            const scene = game.scenes.get(sceneId);
-            const tokenDoc = scene?.tokens?.get(this.tokenDocument.id);
-            if (tokenDoc) await tokenDoc.update({ name, displayName: CONST.TOKEN_DISPLAY_MODES.ALWAYS });
-        } else {
-            // Player can't update tokens directly — ask GM via socket
-            game.socket.emit(`module.${MODULE_ID}`, {
-                action: "renameToken",
-                sceneId,
-                tokenId: this.tokenDocument.id,
-                name
-            });
+        // DISPLAY-ONLY reveal. The chat hard-rename was RETIRED (2026-06-30) — it wrote the
+        // real token.name, which the dnd5e sheet + every ACE pipeline read as identity, which
+        // broke everything downstream. Now we only paint the revealed name on the nameplate/
+        // hover via the flavorName flag; the REAL name is never touched. (Matches the
+        // bio-generator's display-only architecture; this method already bails on linked
+        // tokens above, so it's unlinked-only — the flavor name dies with the token.)
+        try {
+            const revealActor = this.tokenDocument?.actor ?? this.actor;
+            await revealActor?.setFlag?.(MODULE_ID, "flavorName", name);
+            if (game.user.isGM && this.tokenDocument) {
+                const scene = game.scenes.get(this.tokenDocument.parent?.id || canvas.scene?.id);
+                const tokenDoc = scene?.tokens?.get(this.tokenDocument.id);
+                // displayName is nameplate VISIBILITY (a mode constant), NOT the name string — safe.
+                if (tokenDoc) await tokenDoc.update({ displayName: CONST.TOKEN_DISPLAY_MODES.ALWAYS });
+            }
+        } catch (err) {
+            console.warn("ACE: Engine | Display-only name reveal failed:", err);
         }
 
-        // Update the name banner in the portrait area (local + broadcast to spectators)
+        // Update the name banner in the portrait area (display-only DOM label).
         this._updateNameLabel(name);
-        game.socket.emit(`module.${MODULE_ID}`, {
-            action:  "updateNpcName",
-            actorId: this.actor.id,
-            tokenId: this.tokenDocument?.id || null,
-            name,
-            exclude: game.user.id
-        });
 
-        console.log(`ACE: Engine | Token renamed to "${name}"`);
+        console.log(`ACE: Engine | Name revealed (display-only) as "${name}" — real name untouched`);
     }
 
     /** Update the NPC name label shown over the portrait. */

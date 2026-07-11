@@ -1,8 +1,8 @@
 {
   "id": "ace-engine",
-  "title": "ACE \u2014 AI Campaign Engine",
+  "title": "ACE — AI Campaign Engine",
   "description": "A premium AI-powered Game Master companion for Foundry VTT. Supports both D&D 5e 2014 and 2024 rules with automatic edition detection. Features real-time scene awareness, persistent campaign memory, NPC intelligence, dramatic narration with ElevenLabs TTS, encounter generation, proactive story suggestions, plus the full FaceTime-style NPC chat suite (bio generation, voice library, faction memory, conversation UI) merged from ACE: Envoy. System-agnostic with enhanced support for popular TTRPG systems.",
-  "version": "1.7.1",
+  "version": "1.7.15",
   "compatibility": {
     "minimum": "12.0.0",
     "verified": "13",
@@ -21,7 +21,7 @@
         "type": "module"
       },
       {
-        "id": "ace-trapmaster",
+        "id": "ace-artificer",
         "type": "module"
       }
     ]

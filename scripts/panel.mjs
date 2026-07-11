@@ -6437,12 +6437,15 @@ Appropriate loot, XP, and story rewards.
       (_, open, content, close) => {
         // Strip tags from the content to get clean plain text for the clipboard
         const plain = content.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-        const safe  = plain.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+        // SECURITY: never interpolate text into the onclick JS string — a "\'" in
+        // the text could close the string and execute. Store it HTML-escaped
+        // (incl. ") in a data attribute; the STATIC handler reads it via dataset.
+        const clip = this._escapeHtml(plain).replace(/"/g, "&quot;");
         return (
           `<div class="ace-bq-wrap">` +
           `${open}${content}${close}` +
-          `<button class="ace-bq-copy" title="Copy read-aloud text" ` +
-          `onclick="navigator.clipboard.writeText('${safe}').then(()=>{` +
+          `<button class="ace-bq-copy" title="Copy read-aloud text" data-clip="${clip}" ` +
+          `onclick="navigator.clipboard.writeText(this.dataset.clip).then(()=>{` +
           `this.innerHTML='<i class=\\'fas fa-check\\'></i> Copied';` +
           `setTimeout(()=>{this.innerHTML='<i class=\\'fas fa-copy\\'></i> Copy'},1500)})">` +
           `<i class="fas fa-copy"></i> Copy</button>` +
@@ -7132,13 +7135,13 @@ Appropriate loot, XP, and story rewards.
     // ── Read-Aloud ──
     if (data.readAloud) {
       const safeText = this._escapeHtml(data.readAloud);
-      const clipText = data.readAloud.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+      const clip = safeText.replace(/"/g, "&quot;");
       parts.push(`<div class="ace-enc-read-aloud-section">
         <div class="ace-enc-section-label"><i class="fas fa-book-open-reader"></i> Read-Aloud</div>
         <blockquote class="ace-enc-blockquote"><em>${safeText}</em></blockquote>
         <div class="ace-enc-read-aloud-actions">
-          <button class="ace-btn ace-enc-copy-btn"
-                  onclick="navigator.clipboard.writeText('${clipText}').then(()=>{this.innerHTML='<i class=\\'fas fa-check\\'></i> Copied';setTimeout(()=>{this.innerHTML='<i class=\\'fas fa-copy\\'></i> Copy'},1500)})">
+          <button class="ace-btn ace-enc-copy-btn" data-clip="${clip}"
+                  onclick="navigator.clipboard.writeText(this.dataset.clip).then(()=>{this.innerHTML='<i class=\\'fas fa-check\\'></i> Copied';setTimeout(()=>{this.innerHTML='<i class=\\'fas fa-copy\\'></i> Copy'},1500)})">
             <i class="fas fa-copy"></i> Copy
           </button>
           <button class="ace-btn ace-enc-narrate-btn" data-action="narrateEncounter">
@@ -7711,7 +7714,7 @@ MAGNITUDE: [local/regional/major/legendary]`;
       // Show confirmation
       const preview = this.element?.querySelector("#ace-deed-preview");
       if (preview) {
-        preview.innerHTML = `📜 <em>"${deedText}"</em> — <strong>${magnitude.toUpperCase()}</strong> ✓`;
+        preview.innerHTML = `📜 <em>"${this._escapeHtml(deedText)}"</em> — <strong>${magnitude.toUpperCase()}</strong> ✓`;
         preview.style.display = "block";
         setTimeout(() => { preview.style.display = "none"; }, 5000);
       }

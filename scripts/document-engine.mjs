@@ -42,10 +42,21 @@ let _pdfjsLib = null;
  * Lazily load PDF.js from CDN. Cached after first load.
  * @returns {Promise<Object>} The pdfjs-dist library object
  */
+const PDFJS_LOAD_TIMEOUT = 20000;  // ms — a dynamic import() can't be aborted, so we race it
+
 async function _ensurePdfJs() {
   if (_pdfjsLib) return _pdfjsLib;
   try {
-    _pdfjsLib = await import(`${PDFJS_CDN}/pdf.min.mjs`);
+    // On a LAN/airgapped server (or where cdnjs is blocked) the import would
+    // otherwise hang the upload UI forever — race it against a timeout so the
+    // catch below can surface the "text/image uploads still work" message.
+    _pdfjsLib = await Promise.race([
+      import(`${PDFJS_CDN}/pdf.min.mjs`),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error(`PDF.js load timed out after ${PDFJS_LOAD_TIMEOUT / 1000}s`)),
+        PDFJS_LOAD_TIMEOUT,
+      )),
+    ]);
     _pdfjsLib.GlobalWorkerOptions.workerSrc = `${PDFJS_CDN}/pdf.worker.min.mjs`;
     console.debug(`${MODULE_ID} | PDF.js ${PDFJS_CDN_VERSION} loaded from CDN`);
     return _pdfjsLib;

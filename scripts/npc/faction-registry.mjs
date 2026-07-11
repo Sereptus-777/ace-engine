@@ -2509,15 +2509,19 @@ async function showSmartSetupDialog(actorName, creatureBase, recommendations, cr
             </div>
         </label>`).join("");
 
-    // Both checkboxes default to CHECKED — most GMs want renaming + persistent
-    // saving by default, otherwise the bio system produces faction-cared NPCs
-    // that are still all named "Goblin" and don't persist between sessions.
-    // Uncheck for one-shot disposable tokens.
+    // RENAME defaults CHECKED for sentient NPCs — but that only gives the mob a
+    // DISPLAY-ONLY flavor name on the nameplate; the real name is never touched.
+    // AUTO-LINK (persist as a NEW sidebar actor, which DOES rename the token's sheet)
+    // is OPT-IN — it follows the "Auto-Save NPCs as Persistent Actors" setting, OFF by
+    // default, so dropped mobs stay unlinked and keep their real name for the pipeline.
+    // Tick it deliberately for a recurring NPC. [2026-06-30 — was hardcoded "checked",
+    // which silently converted every dropped token into a renamed linked actor.]
     const renameChecked = isNonSentient ? "" : "checked";
     const renameDisabled = isNonSentient ? "disabled" : "";
     const renameNote = isNonSentient ? " (beasts keep species name)" : "";
     const factionHidden = (currentTier === "bio-only") ? "display:none;" : "";
-    const autoLinkChecked = "checked";
+    let autoLinkChecked = "";
+    try { autoLinkChecked = game.settings.get(MODULE_ID, "enableAutoLink") ? "checked" : ""; } catch (_) { autoLinkChecked = ""; }
 
     const content = `
         <div style="font-family:sans-serif;">

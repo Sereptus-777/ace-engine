@@ -12,8 +12,13 @@
 
 const MODULE_ID = "ace-engine";
 
-/** Read the ElevenLabs API key (client-scoped) from engine settings. */
+import { getSharedElevenLabsKey } from "./shared-credentials.mjs";
+
+/** The EFFECTIVE ElevenLabs key: the shared slot (fed by the local
+ *  credentials file at boot) first, then the client-scoped setting. */
 function _getElevenLabsKey() {
+    const shared = getSharedElevenLabsKey();
+    if (shared) return shared;
     try { return game.settings.get(MODULE_ID, "elevenLabsApiKey") || ""; }
     catch (_) { return ""; }
 }

@@ -391,7 +391,8 @@ export function activateAutoPipeline() {
     if (_activated) return;
     if (!game.user.isGM) return;
     _activated = true;
-    Hooks.on("renderChatMessage", _onRenderChatMessage);
+    Hooks.on("renderChatMessage", _onRenderChatMessage);       // V12
+    Hooks.on("renderChatMessageHTML", _onRenderChatMessage);   // V13 (was missing → inert on V13)
     console.log(`${TAG} | Auto-pipeline active (gated by autoGenerateOnDrop setting).`);
 }
 

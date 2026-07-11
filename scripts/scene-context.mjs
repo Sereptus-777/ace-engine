@@ -731,22 +731,39 @@ export class SceneContext {
   }
 
   _gatherTraps() {
-    const trapmaster = game.modules.get("ace-trapmaster")?.active
-      ? game.modules.get("ace-trapmaster").api : null;
-    if (!trapmaster?.getTraps) return "";
-
+    // FIXED 2026-06-25: was pointing at the renamed/ghost module "ace-trapmaster"
+    // and a non-existent .api.getTraps(sceneId) — so it silently gathered nothing.
+    // ace-artificer (the renamed module) places traps as Tiles flagged `isTrap`
+    // (linked to a MeasuredTemplate), and exposes trap DEFINITIONS on
+    // game.aceForge.trapEngine.getTraps(). We scan the live scene for placed-trap
+    // tiles and enrich each from its definition. Fully defensive — any gap → "".
     try {
-      const sceneId = canvas?.scene?.id;
-      if (!sceneId) return "";
-      const traps = trapmaster.getTraps(sceneId);
-      if (!traps?.length) return "";
+      const scene = canvas?.scene;
+      if (!scene) return "";
+      const MOD = "ace-artificer";
 
-      const lines = ["### Traps on Scene"];
-      for (const trap of traps) {
-        lines.push(`- **${trap.name ?? "Trap"}**: ${trap.description ?? "No description"}`);
+      const defs = game.aceForge?.trapEngine?.getTraps?.() ?? [];
+      const defById = new Map(defs.filter(d => d?.id).map(d => [d.id, d]));
+
+      const seen = new Set();
+      const lines = [];
+      for (const tile of (scene.tiles ?? [])) {
+        const f = tile?.flags?.[MOD];
+        if (!f?.isTrap) continue;
+        const tid = f.trapId;
+        if (tid && seen.has(tid)) continue;   // dedupe dual-tile / sibling traps
+        if (tid) seen.add(tid);
+        const def  = tid ? defById.get(tid) : null;
+        const name = f.trapName ?? def?.name ?? "Trap";
+        const desc = def?.description ?? f.description ?? "A concealed trap.";
+        lines.push(`- **${name}**: ${desc}`);
       }
-      return lines.join("\n");
-    } catch (err) { console.debug("ace-engine | SceneContext trap gathering failed:", err); return ""; }
+      if (!lines.length) return "";
+      return ["### Traps on Scene", ...lines].join("\n");
+    } catch (err) {
+      console.debug("ace-engine | SceneContext trap gathering failed:", err);
+      return "";
+    }
   }
 
   // ── System-agnostic data extractors ───────────────────────
