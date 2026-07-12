@@ -2117,8 +2117,12 @@ function _getLootTier(cr) {
     return "elite";
 }
 
-/** Chance of generating any loot at all, by tier. */
-const LOOT_CHANCE = { low: 1.0, mid: 1.0, high: 1.0, elite: 1.0 };
+/** Chance of generating any loot at all, by tier. Johnny 2026-07-11: "things
+ *  shouldn't drop that much" — a random goblin usually has nothing worth taking,
+ *  while a named boss always carries something. Graduated by CR so low-CR mooks
+ *  frequently carry NOTHING (variety + less trinket clutter) and elites always
+ *  do. Tunable if the table wants richer/leaner drops. */
+const LOOT_CHANCE = { low: 0.35, mid: 0.55, high: 0.80, elite: 1.0 };
 
 /**
  * Generate contextual loot for an NPC and add it to their inventory.
