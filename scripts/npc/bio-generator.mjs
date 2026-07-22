@@ -164,9 +164,60 @@ function shouldGenerateLoot(cr) {
     } catch (_) { return false; }
 }
 
-async function generateLoot(tokenDoc) {
-    try { return game.aceQol?.lootEngine?.generateLoot?.(tokenDoc); }
+async function generateLoot(tokenDoc, options = {}) {
+    try { return game.aceQol?.lootEngine?.generateLoot?.(tokenDoc, options); }
     catch (_) { return null; }
+}
+
+/** Combined-loot hard cap (ace-qol `maxTotalLoot` setting, default 3). Option C, 2026-07-14. */
+function _lootMaxTotal() {
+    try { return Number(game.settings.get(QOL_ID, "maxTotalLoot")) || 3; }
+    catch (_) { return 3; }
+}
+
+/**
+ * AI pocket-loot THEN compendium loot, sharing ONE item budget so the two don't
+ * pile up (Johnny 2026-07-14: "goblins ~4 items" → chose Option C: a little
+ * flavor + the occasional real item, capped). We count what the AI flavor-loot
+ * added by diffing the actor's item count around it — `_generateItemBios` runs
+ * before this and adds none — then hand the remainder to the compendium engine.
+ */
+async function _lootThenRealLoot(tokenDocument) {
+    const actor = tokenDocument?.actor;
+    if (!actor) return;
+    const cr   = actor.system?.details?.cr ?? 0;
+    const tier = _getLootTier(cr);
+
+    // Fix #1 (2026-07-14): ONE shared "does this creature carry anything?" roll
+    // gates BOTH systems together — a mook usually has NOTHING (35%), a boss
+    // always does (100%). Previously the graduated chance only gated the flavor
+    // side while the compendium fired every time, so every goblin had real loot;
+    // this matches Johnny's "a random goblin usually has nothing worth taking."
+    if (Math.random() > (LOOT_CHANCE[tier] ?? 1)) {
+        try {
+            const t = tokenDocument.actorLink ? actor : tokenDocument;
+            await t.setFlag?.(MODULE_ID, "lootGenerated", true);
+        } catch (_) { /* non-fatal */ }
+        return;
+    }
+
+    const cap = _lootMaxTotal();
+    if (tier === "high" || tier === "elite") {
+        // Fix #2: high-value creatures lead with their REAL compendium magic so
+        // the rare/legendary drop isn't crowded out by flavor trinkets. Flavor
+        // then fills whatever budget is left (0-1 item on a full boss).
+        const before = actor.items?.size ?? 0;
+        await _generateRealLoot(tokenDocument, 0);          // real first, capped to `cap`
+        const realCount = Math.max(0, (actor.items?.size ?? 0) - before);
+        await _generateLoot(tokenDocument, { forceLoot: true, maxItems: Math.max(0, cap - realCount) });
+    } else {
+        // Mooks lead with flavor (the in-character pocket junk IS the point);
+        // the compendium tops up whatever budget the flavor left.
+        const before = actor.items?.size ?? 0;
+        await _generateLoot(tokenDocument, { forceLoot: true });
+        const aiCount = Math.max(0, (actor.items?.size ?? 0) - before);
+        await _generateRealLoot(tokenDocument, aiCount);
+    }
 }
 
 // ─── GENERATION QUEUE ─────────────────────────────────────────────────────────
@@ -203,8 +254,7 @@ export async function runItemAndLootOnly(tokenDocument) {
     if (!tokenDocument?.actor) return;
     try {
         await _generateItemBios(tokenDocument);
-        await _generateLoot(tokenDocument);
-        await _generateRealLoot(tokenDocument);
+        await _lootThenRealLoot(tokenDocument);
         _playShimmer(tokenDocument);
     } catch (err) {
         console.warn(`${TAG} | Items + loot only generation failed for ${tokenDocument.actor.name}:`, err);
@@ -1415,8 +1465,7 @@ async function _generateBio(tokenDocument) {
         catch (_) {}
         if (alwaysItemsLoot) {
             _generateItemBios(tokenDocument)
-                .then(() => _generateLoot(tokenDocument))
-                .then(() => _generateRealLoot(tokenDocument))
+                .then(() => _lootThenRealLoot(tokenDocument))
                 .then(() => _playShimmer(tokenDocument))
                 .catch(err => console.warn(`${TAG} | Items + loot (faction-only path) failed:`, err));
         }
@@ -1801,8 +1850,7 @@ async function _generateBio(tokenDocument) {
 
     // ── Item bios + loot, then shimmer when fully complete ──────────────
     _generateItemBios(tokenDocument)
-        .then(() => _generateLoot(tokenDocument))
-        .then(() => _generateRealLoot(tokenDocument))
+        .then(() => _lootThenRealLoot(tokenDocument))
         .then(() => _playShimmer(tokenDocument))
         .catch(err =>
             console.warn(`${TAG} | Item bio / loot generation failed for ${actor.name}:`, err)
@@ -2129,9 +2177,11 @@ const LOOT_CHANCE = { low: 0.35, mid: 0.55, high: 0.80, elite: 1.0 };
  * Called after bio + item bio generation completes.
  * @param {TokenDocument} tokenDocument
  */
-async function _generateLoot(tokenDocument) {
+async function _generateLoot(tokenDocument, opts = {}) {
     const actor = tokenDocument.actor;
     if (!actor) return;
+    // Shared budget already full (real-first elite path) — no flavor items/coins.
+    if (opts.maxItems === 0) return;
 
     // Already generated loot? (guard flag)
     const flagTarget = tokenDocument.actorLink ? actor : tokenDocument;
@@ -2191,7 +2241,10 @@ async function _generateLoot(tokenDocument) {
     const cr = actor.system?.details?.cr ?? 0;
     const tier = _getLootTier(cr);
     const chance = LOOT_CHANCE[tier];
-    if (Math.random() > chance) {
+    // opts.forceLoot: the shared roll in _lootThenRealLoot already passed, so
+    // don't roll the chance a second time (that would double-gate and make loot
+    // far rarer than the tier chance intends).
+    if (!opts.forceLoot && Math.random() > chance) {
         console.log(`${TAG} | ${actor.name} has no loot this time (${Math.round(chance * 100)}% chance, missed).`);
         await flagTarget.setFlag(MODULE_ID, "lootGenerated", true).catch(() => {});
         return;
@@ -2417,6 +2470,11 @@ ${tierInstructions[tier]}`;
             console.log(`${TAG} | Loot coin: ${value}`);
             continue;
         }
+
+        // Shared-budget item cap (Option C, 2026-07-14): the real-first elite path
+        // passes opts.maxItems so flavor items don't overflow the budget the
+        // compendium magic already claimed. Coins above are unaffected.
+        if (Number.isFinite(opts?.maxItems) && itemsToCreate.length >= opts.maxItems) continue;
 
         // ── Handle items → create as Foundry loot items ─────────────────
         if (!flavor) flavor = itemName;
@@ -3069,7 +3127,7 @@ ${tierInstructions[tier]}`;
 // After AI flavor loot, add real D&D items from DDB compendiums via ace-qol's
 // LootEngine. Graceful no-op if ace-qol isn't installed.
 
-async function _generateRealLoot(tokenDocument) {
+async function _generateRealLoot(tokenDocument, aiCount = 0) {
     try {
         const actor = tokenDocument.actor;
         if (!actor) return;
@@ -3077,9 +3135,12 @@ async function _generateRealLoot(tokenDocument) {
         const cr = actor.system?.details?.cr ?? 0;
         if (!shouldGenerateLoot(cr)) return;
 
-        const lootData = await generateLoot(tokenDocument);
+        // Shared cap (Option C): only top up to the budget the AI pocket-loot left.
+        // 0 → the compendium engine adds gold only, no items.
+        const budget = Math.max(0, _lootMaxTotal() - (Number(aiCount) || 0));
+        const lootData = await generateLoot(tokenDocument, { maxItems: budget });
         if (lootData && (lootData.gold > 0 || lootData.items?.length > 0)) {
-            console.log(`${TAG} | Real loot added to ${actor.name}: ${lootData.gold} gp + ${lootData.items?.length ?? 0} items`);
+            console.log(`${TAG} | Real loot added to ${actor.name}: ${lootData.gold} gp + ${lootData.items?.length ?? 0} items (budget ${budget}, AI took ${aiCount})`);
         }
     } catch (err) {
         console.warn(`${TAG} | Real loot generation failed for ${tokenDocument.actor?.name}:`, err);
