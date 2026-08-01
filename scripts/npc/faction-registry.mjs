@@ -12,6 +12,8 @@
 // Envoy → Engine merger. Settings/flag namespaces switched to ace-engine.
 // EngineBridge.* calls now reach engine's own api by module id.
 
+import { isAIFailure } from "./ai-failure.mjs";
+
 const MODULE_ID = "ace-engine";
 
 /** Read engine's AI config — replaces envoy's getEnvoyAIConfig. */
@@ -723,7 +725,8 @@ The faction name should feel appropriate for ${creatureBase}s — not generic.${
 
     try {
         const Handler = await _getAIHandler();
-        const response = await Handler.callAI(systemPrompt, [], userMsg, provider, apiKey);
+        const response = await Handler.callAI(systemPrompt, [], userMsg, provider, apiKey, [], { context: "faction-naming" });
+        if (isAIFailure(response)) throw new Error("AI unavailable — using fallback name");
         return _parseFactionIdentity(response);
     } catch (err) {
         console.error(`${TAG} | AI faction generation failed:`, err);
@@ -797,7 +800,8 @@ ${locationContext ? "Use the CANONICAL names, rulers, and details from the scene
 
     try {
         const Handler = await _getAIHandler();
-        const response = await Handler.callAI(systemPrompt, [], userMsg, provider, apiKey);
+        const response = await Handler.callAI(systemPrompt, [], userMsg, provider, apiKey, [], { context: "faction-naming" });
+        if (isAIFailure(response)) throw new Error("AI unavailable — using fallback governance");
         return _parseFactionIdentity(response);
     } catch (err) {
         console.error(`${TAG} | AI governance generation failed:`, err);
@@ -2409,7 +2413,8 @@ ${locationContext}`;
 
     try {
         const Handler = await _getAIHandler();
-        const response = await Handler.callAI(systemPrompt, [], userMsg, provider, apiKey);
+        const response = await Handler.callAI(systemPrompt, [], userMsg, provider, apiKey, [], { context: "faction-naming" });
+        if (isAIFailure(response)) throw new Error("AI unavailable — using fallback recommendations");
         const parsed = _parseRecommendations(response, matching, sceneIntel, worldDigestFactions);
         if (parsed.length === 3) return parsed;
     } catch (err) {

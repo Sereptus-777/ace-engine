@@ -236,6 +236,11 @@ function _registerHooks() {
 
             try {
                 if (!game.settings.get(MODULE_ID, "autoGenerateBio")) continue;
+                // Honor the Token Drop AI Level here too — the drop hook has always
+                // checked it (tier "off" = vanilla), but the scene scan didn't, so
+                // "Off" still generated bios on every reload. Same gate, both paths.
+                // (Root-caused with the Grulgar-ogre naming bug, 2026-07-26.)
+                if ((game.settings.get(MODULE_ID, "tokenDropAI") ?? "full") === "off") continue;
             } catch (_) { continue; }
 
             const _bioDelay = 100 + _idx * 150;

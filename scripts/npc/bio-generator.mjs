@@ -7,6 +7,7 @@
 // Envoy → Engine merger.
 
 import { AIHandler }                                             from "./conversation-engine.mjs";
+import { isAIFailure }                                           from "./ai-failure.mjs";
 import { writeBiography }                                        from "../bio-writer.mjs";
 import { processTokenFaction, buildFactionBioContext,
          resolveCreatureBase }                                   from "./faction-registry.mjs";
@@ -25,7 +26,21 @@ const TAG       = "ACE: Engine | Bio";
 // Display-only and fully defensive — if anything is off, the real nameplate stands.
 function _paintFlavorNameplate(token) {
     try {
-        const flavor = token?.actor?.getFlag?.(MODULE_ID, "flavorName");
+        const doc = token?.document;
+        let flavor;
+        if (doc?.actorLink) {
+            // LINKED token: the actor IS the shared identity, so its flag is correct
+            // (all linked copies are the same named NPC — intended).
+            flavor = token.actor?.getFlag?.(MODULE_ID, "flavorName");
+        } else {
+            // UNLINKED token: use ONLY this token's OWN delta flag — NEVER the base
+            // actor's. Every unlinked sibling of the same base actor inherits the
+            // base flag through token.actor.getFlag, so a generic ogre would wrongly
+            // borrow a NAMED ogre's flavor name off the shared "Ogre" actor. Reading
+            // the delta's own source flags isolates each token. (Root-caused +
+            // fixed 2026-07-26 — the "both ogres became Grulgar Stonearm" bug.)
+            flavor = doc?.delta?._source?.flags?.[MODULE_ID]?.flavorName;
+        }
         if (flavor && token.nameplate && typeof token.nameplate.text === "string" && token.nameplate.text !== flavor) {
             token.nameplate.text = flavor;
         }
@@ -329,7 +344,8 @@ ${coreBio || "(no prior bio recorded — improvise minimally)"}
 ${recentAppearances ? `Recent appearances on other scenes:\n${recentAppearances}\n` : ""}
 Write the 5-10 line scene-context paragraph now. Just the paragraph — no preamble, no title.`;
 
-        const response = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey);
+        const response = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey, [], { context: "scene-notes" });
+        if (isAIFailure(response)) return;   // GM already notified — never persist a failure marker
         const text = String(response ?? "").trim();
         if (!text) {
             console.warn(`${TAG} | Scene-context generator returned empty for ${actor.name}.`);
@@ -985,7 +1001,8 @@ async function _buildPrompt(tokenDocument, factionResult = {}, socialProfile = n
             const plural = mates.length > 1 ? "allies" : "an ally";
             sceneMateContext = `\n\nScene-mates (same creature type already on the scene — they know each other):\n` +
                 mates.map(m => `  • ${m}`).join("\n") +
-                `\nWeave natural relationships with these scene-mates into the biography — they might be siblings, packmates, squad members, rivals, or old friends. Reference them by name if they have one.`;
+                `\nWeave natural relationships with these scene-mates into the biography — they might be siblings, packmates, squad members, rivals, or old friends. Reference them by name if they have one.` +
+                `\nIMPORTANT: these scene-mates are OTHER individuals. This creature is NOT any of them. NEVER give this creature a scene-mate's name — its NAME: line must be a brand-new name that appears nowhere in the lists above.`;
         }
 
         // ── Scene role awareness: what roles are already filled ──────────
@@ -1147,7 +1164,16 @@ ${personalityInstruction}`;
             const imgResp = await fetch(imgPath, { signal: AbortSignal.timeout(10000) });
             if (imgResp.ok) {
                 const blob = await imgResp.blob();
-                if (blob.size > 0 && blob.size < 5_000_000 && blob.type.startsWith("image/")) {
+                // Only formats the vision APIs actually accept. `image/*` was
+                // far too permissive: Foundry ships a lot of SVG token art, and
+                // "image/svg+xml" sails through a startsWith("image/") test and
+                // is then rejected by OpenAI/Azure with a bare 400 — which
+                // surfaced as an unexplained bio-generation failure on token
+                // drop. Anything not on this list is simply not sent; the bio
+                // still generates, just without portrait-based gender matching.
+                const VISION_MIME_OK = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"];
+                const mime = String(blob.type || "").toLowerCase();
+                if (blob.size > 0 && blob.size < 5_000_000 && VISION_MIME_OK.includes(mime)) {
                     const buf = await blob.arrayBuffer();
                     // Chunk the byte→char conversion: spreading a whole multi-MB
                     // buffer into String.fromCharCode blows the call stack
@@ -1160,6 +1186,8 @@ ${personalityInstruction}`;
                     const base64 = btoa(binary);
                     tokenImage = { base64, mimeType: blob.type };
                     console.log(`${TAG} | Token art loaded for vision (${(blob.size/1024).toFixed(0)} KB, ${blob.type})`);
+                } else {
+                    console.log(`${TAG} | Token art NOT sent to vision (${(blob.size/1024).toFixed(0)} KB, ${blob.type || "unknown type"}) — unsupported format or too large. Bio still generates, just without portrait matching.`);
                 }
             }
         }
@@ -1519,7 +1547,7 @@ async function _generateBio(tokenDocument) {
 
     //── Build prompt and call AI ─────────────────────────────────────────
     const { systemPrompt, userMsg, tokenImage } = await _buildPrompt(tokenDocument, factionResult, socialProfile, canonBio);
-    const images = tokenImage ? [tokenImage] : [];
+    let images = tokenImage ? [tokenImage] : [];
 
     // ── Vision capability check ─────────────────────────────────────────
     // If we have a portrait but the model can't see images, the bio prompt's
@@ -1533,13 +1561,19 @@ async function _generateBio(tokenDocument) {
             const canSee = await isVisionCapable(provider, modelName, { apiUrl, queryOllamaShow: provider === "ollama" });
             if (!canSee) {
                 warnVisionUnavailable(provider, modelName);
-                console.warn(`${TAG} | Vision NOT available on ${provider}:${modelName} — portrait passed but will be ignored. Bio gender will be random.`);
+                // DROP the image rather than send it anyway. Previously this
+                // only warned and still attached the portrait, so a text-only
+                // model got a multimodal payload and answered with a 400 —
+                // failing the whole bio instead of merely losing the portrait.
+                images = [];
+                console.warn(`${TAG} | Vision NOT available on ${provider}:${modelName} — portrait dropped from the request. Bio still generates; gender won't be portrait-matched.`);
             }
         } catch (e) { console.debug("ACE: Engine | vision-capability check failed:", e); }
     }
 
-    const response = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey, images);
+    const response = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey, images, { context: "bio-generator" });
 
+    if (isAIFailure(response)) return;   // GM already notified — never persist a failure marker
     if (!response || !response.trim()) {
         console.warn(`${TAG} | AI returned no usable bio for ${actor.name}.`);
         return;
@@ -1566,6 +1600,29 @@ async function _generateBio(tokenDocument) {
     //     first ~300 chars (some AI responses lead with a one-sentence intro
     //     then drop the NAME: line on its own line below).
     //   • Allows leading whitespace, markdown code fences, or blank lines.
+    // ── Taken names on this scene — REAL names AND flavor nameplates ──────
+    // The old dedup only compared real token names ("Ogre" vs "Ogre (1)"), so a
+    // generated name could still collide with a neighbour's FLAVOR name — that is
+    // exactly how two ogres both ended up as "Grulgar Stonearm" (root-caused
+    // 2026-07-26). Collect every name any creature on the scene is wearing:
+    // real token names, base actor names, and flavor nameplates (the token's own
+    // AND its base actor's). Used by BOTH naming paths below.
+    const takenNames = new Set();
+    try {
+        for (const t of canvas.scene?.tokens ?? []) {
+            if (t.id === tokenDocument.id) continue;
+            for (const n of [
+                t.name,
+                t.actor?.name,
+                t.actor?.getFlag?.(MODULE_ID, "flavorName"),
+                game.actors.get(t.actorId)?.getFlag?.(MODULE_ID, "flavorName"),
+            ]) {
+                const clean = (n || "").trim().toLowerCase();
+                if (clean) takenNames.add(clean);
+            }
+        }
+    } catch (err) { console.warn(`${TAG} | Name dedup scene scan failed:`, err); }
+
     const nameMatch = bioText.slice(0, 400).match(/(?:^|\n)\s*(?:```\w*\s*)?NAME:\s*(.+?)(?:\r?\n|$)/i);
     if (nameMatch) {
         const name = tokenDocument.actor?.name || "";
@@ -1577,19 +1634,15 @@ async function _generateBio(tokenDocument) {
                 .replace(/\*+/g, "")             // strip markdown bold
                 .trim();
 
-            // ── Hard dedup: reject if name already exists on scene ──
-            const sceneNames = new Set();
-            try {
-                for (const t of canvas.scene?.tokens ?? []) {
-                    if (t.id !== tokenDocument.id) sceneNames.add((t.name || "").trim().toLowerCase());
-                }
-            } catch (err) { console.warn(`${TAG} | Name dedup scene scan failed:`, err); }
-
-            if (sceneNames.has(candidate.toLowerCase())) {
-                // Name collision — append a distinguishing suffix
+            if (takenNames.has(candidate.toLowerCase())) {
+                // Name collision — append a distinguishing suffix that is itself
+                // FREE (a 15-goblin scene can collide repeatedly; random retry
+                // could land on an already-taken suffix). Numbered fallback if
+                // all seven are burned.
                 const suffixes = ["the Bold", "the Elder", "the Younger", "the Scarred", "the Silent", "the Red", "the Pale"];
-                const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
-                candidate = `${candidate} ${suffix}`;
+                const free = suffixes.find(s => !takenNames.has(`${candidate} ${s}`.toLowerCase()));
+                candidate = free ? `${candidate} ${free}`
+                    : `${candidate} ${2 + suffixes.filter(s => takenNames.has(`${candidate} ${s}`.toLowerCase())).length}`;
                 console.warn(`${TAG} | Duplicate name detected — renamed to "${candidate}"`);
             }
 
@@ -1633,6 +1686,10 @@ async function _generateBio(tokenDocument) {
                     if (REJECT.has(lower)) return false;
                     if (lower === genericBase) return false;
                     if (genericBase && (lower.startsWith(genericBase + " ") || genericBase.includes(lower))) return false;
+                    // Never adopt a name ANY scene creature already wears (real OR
+                    // flavor) — the proper-noun scan otherwise plucks a scene-mate's
+                    // name straight out of the bio text (the Grulgar bug, 2026-07-26).
+                    if (takenNames.has(lower)) return false;
                     return true;
                 };
 
@@ -2093,8 +2150,9 @@ ${itemList}`;
 
     // ── Call AI ──────────────────────────────────────────────────────────
     const { provider, apiKey } = getEnvoyAIConfig();
-    const response = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey);
+    const response = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey, [], { context: "item-descriptions" });
 
+    if (isAIFailure(response)) return;   // GM already notified — never persist a failure marker
     if (!response) {
         console.warn(`${TAG} | AI returned no item bios for ${actor.name}.`);
         return;
@@ -2381,8 +2439,9 @@ ${tierInstructions[tier]}`;
 
     // ── Call AI ──────────────────────────────────────────────────────────
     const { provider, apiKey } = getEnvoyAIConfig();
-    const response = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey);
+    const response = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey, [], { context: "loot-generation" });
 
+    if (isAIFailure(response)) return;   // GM already notified — don't set lootGenerated, allow retry
     if (!response) {
         console.warn(`${TAG} | AI returned no loot for ${npcName}.`);
         // Do NOT set lootGenerated flag — allow retry on next token placement

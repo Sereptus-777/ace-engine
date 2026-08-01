@@ -7,12 +7,15 @@
 // merger. Settings + flag namespaces translated ace-envoy.* → ace-engine.*.
 // ──────────────────────────────────────────────────────────────────────────────
 
+import { getSharedElevenLabsKey } from "./shared-credentials.mjs";
+
 const MODULE_ID = "ace-engine";
 
-/** Read the ElevenLabs API key (client-scoped) from engine settings. */
+/** The EFFECTIVE ElevenLabs key. Was reading ONLY the setting, so a key that
+ *  lived in config.local.json left the voice list empty while playback worked
+ *  — one of the split-brain paths the shared accessor exists to kill. */
 function getElevenLabsKey() {
-    try { return game.settings.get(MODULE_ID, "elevenLabsApiKey") || ""; }
-    catch (_) { return ""; }
+    return getSharedElevenLabsKey();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

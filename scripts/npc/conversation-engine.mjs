@@ -9,6 +9,13 @@
 import { getFactionContext }                 from "./faction-memory.mjs";
 import { buildFactionConversationContext }   from "./faction-registry.mjs";
 import { SocialProfileEngine }               from "./social-profile.mjs";
+import { surfaceAIFailure, AI_FAILED_REPLY } from "./ai-failure.mjs";
+import { trimHistoryToBudget, getMaxResponseTokens } from "../context-budget.mjs";
+
+// Features that emit a LIST rather than one reply — an entry per item, per
+// loot pile. One shared cap truncates these mid-list, so they get headroom.
+// (Before 2026-07-24 this stack sent no cap at all and nothing was ever cut.)
+const LONG_FORM_CONTEXTS = new Set(["item-descriptions", "loot-generation"]);
 
 const MODULE_ID = "ace-engine";
 
@@ -752,11 +759,44 @@ RULES:
      * pre-v1.6.11 behavior).
      */
     static async callAI(systemPrompt, history, input, provider, apiKey, images = [], opts = {}) {
+        // Honour the GM's Max Context Tokens setting. NPC chat previously had
+        // no size budget at all — only a 20-message cap — so a long roleplay
+        // scene could quietly balloon the request. Generators pass an empty
+        // history, so this is a no-op for them.
+        // Which FEATURE is calling. Everything funnels through callAI — NPC
+        // chat, bio generation, faction naming, memory summaries — so a
+        // hard-coded "npc-chat" label made a bio failure look like a chat
+        // failure and sent a real debugging session down the wrong path.
+        const ctxLabel = opts.context || "npc-chat";
+
+        // Output ceiling. Honours the GM's Max Response Tokens slider — which
+        // until now this entire stack ignored, so the slider was a dial that
+        // moved nothing for NPC chat, bios, loot or summaries.
+        const maxTokens = Number(opts.maxTokens) > 0
+            ? Number(opts.maxTokens)
+            : (LONG_FORM_CONTEXTS.has(ctxLabel)
+                ? Math.max(getMaxResponseTokens(), 3000)
+                : getMaxResponseTokens());
+        const budgetedHistory = trimHistoryToBudget(history);
         const messages = [
             { role: "system", content: systemPrompt },
-            ...history,
+            ...budgetedHistory,
             { role: "user", content: input }
         ];
+
+        // Prompt-size + shape diagnostics. The NPC stack never logged this, so
+        // an over-long or malformed request was invisible — you just got a bare
+        // 400 with nothing to go on. `bad` catches the shapes providers reject
+        // outright: a null/undefined/empty content, or a role they don't accept.
+        try {
+            const chars = messages.reduce((n, m) => n + (typeof m?.content === "string" ? m.content.length : 0), 0);
+            const bad = messages
+                .map((m, i) => ({ i, role: m?.role, type: typeof m?.content,
+                                  len: typeof m?.content === "string" ? m.content.length : -1 }))
+                .filter(m => !["system", "user", "assistant"].includes(m.role) || m.type !== "string" || m.len === 0);
+            console.debug(`${MODULE_ID} | NPC prompt: ${messages.length} msgs, ~${chars.toLocaleString()} chars (~${Math.round(chars / 3.5).toLocaleString()} tokens), system ${String(systemPrompt ?? "").length.toLocaleString()}`);
+            if (bad.length) console.warn(`${MODULE_ID} | NPC prompt has ${bad.length} message(s) a provider will reject:`, bad);
+        } catch (_) { /* diagnostics must never block a call */ }
 
         // Effective config — prefer the per-call overrides, fall back to main.
         const aiCfg = getEnvoyAIConfig();
@@ -767,8 +807,7 @@ RULES:
         // ── Anthropic (different API format) ─────────────────────────────
         if (provider === "anthropic") {
             if (!useApiKey) {
-                ui.notifications.error("ACE: Engine — Anthropic is selected but no API key is set. Check module settings.");
-                return "*speaks, but no words come — the magic is unset*";
+                return surfaceAIFailure({ provider: "anthropic", rawBody: "no api key set", context: ctxLabel });
             }
             try {
                 // Always use Anthropic's URL — don't inherit apiUrl which may be set to another provider
@@ -802,31 +841,32 @@ RULES:
                     },
                     body: JSON.stringify({
                         model: useModel || "claude-sonnet-4-20250514",
-                        max_tokens: 1024,
+                        max_tokens: maxTokens,
                         system: sysMsg,
                         messages: nonSys,
                         temperature: 0.7,
                     }),
                 });
+                if (!response.ok) {
+                    const rawBody = await response.text().catch(() => "");
+                    return surfaceAIFailure({ provider: "anthropic", status: response.status, rawBody, context: ctxLabel });
+                }
                 const data = await response.json();
                 if (data.error) {
-                    console.error("AI Handler | Anthropic Error:", data.error.message);
-                    return `*${data.error.message}*`;
+                    return surfaceAIFailure({ provider: "anthropic", status: response.status, rawBody: data.error.message || JSON.stringify(data.error), context: ctxLabel });
                 }
                 const text = data.content?.[0]?.text || "";
                 console.debug("AI Handler | Anthropic Response:", text);
                 return text || "My thoughts are scattered...";
             } catch (err) {
-                console.error("AI Handler | Anthropic Fetch Error:", err);
-                return "My thoughts are scattered...";
+                return surfaceAIFailure({ provider: "anthropic", error: err, context: ctxLabel });
             }
         }
 
         // ── OpenAI / OpenRouter / LM Studio / Custom (OpenAI-compatible) ─
         if (["openai", "openrouter", "lm-studio", "lmstudio", "custom"].includes(provider)) {
             if (!useApiKey && provider === "openai") {
-                ui.notifications.error("ACE: Engine — OpenAI is selected but no API key is set. Check module settings.");
-                return "*speaks, but no words come — the magic is unset*";
+                return surfaceAIFailure({ provider: "openai", rawBody: "no api key set", context: ctxLabel });
             }
             try {
                 // Inject images into messages for OpenAI vision format
@@ -850,19 +890,29 @@ RULES:
                     method: "POST",
                     signal: AbortSignal.timeout(AI_FETCH_TIMEOUT),
                     headers,
-                    body: JSON.stringify({ model: useModel || "gpt-4o", messages: oaiMessages, temperature: 0.7 })
+                    // Fallback model must be VALID FOR THIS PROVIDER. A bare
+                    // "gpt-4o" is not a model OpenRouter recognises — it wants
+                    // the full vendor/model slug — so the old shared default
+                    // guaranteed a 400 for any OpenRouter user whose model
+                    // setting was ever blank.
+                    body: JSON.stringify({
+                        model: useModel || (provider === "openrouter" ? "openai/gpt-4o-mini" : "gpt-4o-mini"),
+                        messages: oaiMessages, temperature: 0.7, max_tokens: maxTokens,
+                    })
                 });
+                if (!response.ok) {
+                    const rawBody = await response.text().catch(() => "");
+                    return surfaceAIFailure({ provider, status: response.status, rawBody, context: ctxLabel });
+                }
                 const data = await response.json();
                 if (data.error) {
-                    console.error(`AI Handler | ${provider} Error:`, data.error.message);
-                    return `*${data.error.message}*`;
+                    return surfaceAIFailure({ provider, status: response.status, rawBody: data.error.message || JSON.stringify(data.error), context: ctxLabel });
                 }
                 const text = data.choices?.[0]?.message?.content;
                 console.debug(`AI Handler | ${provider} Response:`, text);
                 return text || "My thoughts are scattered...";
             } catch (err) {
-                console.error(`AI Handler | ${provider} Fetch Error:`, err);
-                return "My thoughts are scattered...";
+                return surfaceAIFailure({ provider, error: err, context: ctxLabel });
             }
         }
 

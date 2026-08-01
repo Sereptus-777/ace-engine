@@ -14,13 +14,11 @@ const MODULE_ID = "ace-engine";
 
 import { getSharedElevenLabsKey } from "./shared-credentials.mjs";
 
-/** The EFFECTIVE ElevenLabs key: the shared slot (fed by the local
- *  credentials file at boot) first, then the client-scoped setting. */
+/** The EFFECTIVE ElevenLabs key. All precedence logic (file over setting,
+ *  read live so a mid-session paste takes effect) lives in the one shared
+ *  accessor — this is just a local alias so call sites stay readable. */
 function _getElevenLabsKey() {
-    const shared = getSharedElevenLabsKey();
-    if (shared) return shared;
-    try { return game.settings.get(MODULE_ID, "elevenLabsApiKey") || ""; }
-    catch (_) { return ""; }
+    return getSharedElevenLabsKey();
 }
 
 /** Resolve the narrator voice ID — used for atmospheric *emote* segments.
@@ -414,12 +412,13 @@ class TTSEngine {
         const mode = _ttsMode();
 
         if (mode === "browser") {
+            // Console note only, once per session. Playing without an ElevenLabs
+            // key is a perfectly valid free setup — not a fault — so it does NOT
+            // earn a toast. The AI Setup screen already shows which voice is
+            // active for anyone who wants to know.
             if (!this._browserTTSNotified) {
                 this._browserTTSNotified = true;
-                console.log("TTS | Using free browser voices. Add an ElevenLabs key in module settings for premium AI voices.");
-                if (game.user?.isGM) {
-                    ui.notifications?.info("ACE Engine is using free browser voices. Add an ElevenLabs API key in settings for premium AI voices.", { permanent: false });
-                }
+                console.log("TTS | No ElevenLabs key — using the free browser voice. Add a key in ACE Engine → AI Setup for premium voices.");
             }
             await this._speakBrowser(text, pitch);
             return "ok";

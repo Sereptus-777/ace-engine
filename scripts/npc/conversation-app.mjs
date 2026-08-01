@@ -12,6 +12,7 @@ import { ttsEngine }                                 from "./tts.mjs";
 import { getVoiceConfig, getDynamicVoiceSettings }   from "./voice-engine.mjs";
 import { getCreatureSoundFolder, getVoicePitch }     from "./creature-sounds.mjs";
 import { npcChatState }                              from "./activate.mjs";
+import { isAIFailure }                               from "./ai-failure.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -843,6 +844,21 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
         try {
             const response = await AIHandler.getResponse(this.actor, text, this.history, { speakerActor: this.speakingAs });
+
+            // Hard AI failure (bad/no key, out of credit, provider down, timeout).
+            // The GM already received a plain-English toast from surfaceAIFailure.
+            // Show a silent, in-window beat and STOP — never push a broken turn to
+            // history, never broadcast to other clients, never post to public chat,
+            // and never speak an error line. (finally{} clears the thinking dots.)
+            if (isAIFailure(response)) {
+                const beat = game.user.isGM
+                    ? "⚠ No response — the AI provider is unavailable. Check ACE Engine → AI Setup."
+                    : "⚠ No response right now — please try again in a moment.";
+                this.renderMessage("system", beat);
+                this._setInputLocked(false);
+                return;
+            }
+
             console.log("ACE: Engine | Response:", response);
 
             // Track whether this was the first exchange (for name reveal)

@@ -854,7 +854,7 @@ export function registerUiHooks() {
                     const { ttsEngine } = await import("./tts.mjs");
                     const result = await ttsEngine.speak(phrase, vid);
                     if (result === "invalid") ui.notifications.error("Voice ID not found on ElevenLabs.");
-                    else if (result === "nokey") ui.notifications.error("No ElevenLabs API key in Settings.");
+                    else if (result === "nokey") ui.notifications.warn("No ElevenLabs key — add one in ACE Engine → AI Setup to preview premium voices.");
                 } catch (e) {
                     console.error(`${TAG} | Voice test:`, e);
                 } finally {

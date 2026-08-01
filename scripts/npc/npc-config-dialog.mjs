@@ -180,7 +180,7 @@ export class AIConfigDialog extends HandlebarsApplicationMixin(ApplicationV2) {
             try {
                 const result = await ttsEngine.speak(testText, voiceId);
                 if (result === "invalid") ui.notifications.error("Voice ID not found on ElevenLabs — check the ID.");
-                else if (result === "nokey") ui.notifications.error("No ElevenLabs API key set.");
+                else if (result === "nokey") ui.notifications.warn("No ElevenLabs key — add one in ACE Engine → AI Setup to preview premium voices.");
             } catch (e) {
                 ui.notifications.error("Test failed — check console.");
                 console.error(`${TAG} | Voice test error:`, e);

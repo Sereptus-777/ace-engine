@@ -444,9 +444,9 @@ export class AceSettings {
 
     s("maxContextTokens", {
       name: "Max Context Tokens",
-      hint: "Upper limit on how much conversation history + scene context + reference data is packaged with each AI request. Higher = better long-game memory but slower and more expensive. Default 4000 is a balanced middle ground. Lower it if you hit rate limits or context errors.",
+      hint: "How much conversation history rides along with each AI request. Higher = the AI remembers more of a long conversation, but each message costs a little more and takes slightly longer. 7000 matches ACE's long-standing behaviour; raise it for better memory, lower it if you hit rate limits or context errors.",
       type: Number,
-      default: 4000,
+      default: 7000,
       range: { min: 500, max: 16000, step: 500 },
     });
 

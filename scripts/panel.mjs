@@ -4,6 +4,7 @@
 // ============================================================
 
 import { MODULE_ID, localCredentials } from "./ace-engine.mjs";
+import { getSharedElevenLabsKeyInfo } from "./npc/shared-credentials.mjs";
 import { CanvasHighlight } from "./canvas-highlight.mjs";
 import { filterProfanity, buildProfanityPrompt } from "./profanity-filter.mjs";
 import { writeBiography, appendToBiography } from "./bio-writer.mjs";
@@ -5086,19 +5087,10 @@ Appropriate loot, XP, and story rewards.
    * Returns { key, source } or { key: "", source: "none" }.
    */
   _getElevenLabsKey() {
-    // 1. config.local.json (baked-in credentials)
-    const localKey = localCredentials?.elevenLabsApiKey || "";
-    if (localKey) return { key: localKey, source: "config.local.json" };
-
-    // 2. Foundry Module Settings
-    try {
-      const settingsKey = (game.settings.get(MODULE_ID, "elevenLabsApiKey") || "").trim();
-      if (settingsKey) return { key: settingsKey, source: "Module Settings" };
-    } catch (e) {
-      console.warn(`${MODULE_ID} | TTS: could not read ElevenLabs key from settings —`, e.message);
-    }
-
-    return { key: "", source: "none" };
+    // Precedence (file over setting) and live reads live in the ONE shared
+    // accessor — see npc/shared-credentials.mjs. This used to be a fourth
+    // hand-rolled copy of that logic.
+    return getSharedElevenLabsKeyInfo();
   }
 
   /**
@@ -5161,18 +5153,15 @@ Appropriate loot, XP, and story rewards.
         console.log(`${MODULE_ID} | TTS: ElevenLabs (${source}), gender=${gender}`);
         await this._speakElevenLabs(clean, elevenKey, gender, broadcast);
       } else {
-        // One-time warning per session so the user knows why they're hearing the robot voice
+        // Console note only, once per session. No key is a valid free setup,
+        // not an error, so it gets no toast — a nag the GM can't act on (or
+        // has already chosen to ignore) is just noise every single session.
         if (!this._browserTtsWarned) {
           this._browserTtsWarned = true;
-          console.warn(
-            `${MODULE_ID} | TTS: No ElevenLabs API key configured.\n` +
-            `  → Go to Foundry Settings → Module Settings → ACE → "ElevenLabs API Key"\n` +
-            `  → Or create modules/${MODULE_ID}/config.local.json with your key.\n` +
-            `  → Using browser TTS as fallback.`
-          );
-          ui.notifications?.info(
-            "ACE: Using browser voice — add your ElevenLabs API key in Module Settings for premium TTS.",
-            { permanent: false }
+          console.log(
+            `${MODULE_ID} | TTS: no ElevenLabs key — using the free browser voice.\n` +
+            `  → Add one in ACE Engine → AI Setup for premium voices,\n` +
+            `  → or create modules/${MODULE_ID}/config.local.json with your key.`
           );
         }
         await this._speakBrowser(clean, gender, broadcast);
@@ -5180,7 +5169,12 @@ Appropriate loot, XP, and story rewards.
     } catch (err) {
       console.error(`${MODULE_ID} | TTS error (outer):`, err);
       try { await this._speakBrowser(clean, gender, false); } catch (_) {}
-      ui.notifications?.warn("ACE: TTS failed — check console. Trying browser voice as fallback.");
+      // GM-only, and phrased as what actually happened rather than "check
+      // console" — the browser voice is already speaking, so this is a
+      // downgrade notice, not a failure the player needs to see.
+      if (game.user?.isGM) {
+        ui.notifications?.warn("ACE: premium voice unavailable — using the browser voice instead.");
+      }
     }
   }
 

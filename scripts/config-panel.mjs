@@ -31,13 +31,80 @@ const PROVIDER_DEFAULTS = {
     custom:     { apiUrl: "http://localhost:8080",        modelName: "default" },
 };
 
+// ─── Provider guidance (plain English) ────────────────────────────────────
+// One short "what is this, and should I pick it" blurb per provider, written
+// for a GM who has never touched an API key. No jargon, no model-speak.
+//
+// The two browser notes are load-bearing, not filler: OpenAI refuses direct
+// calls from a browser (so it silently fails inside Foundry no matter how
+// good the key is), and Ollama needs OLLAMA_ORIGINS set or Foundry can't
+// reach it. Both of those have burned real setup time; surfacing them at the
+// moment of choosing is the whole point of this screen.
+const PROVIDER_GUIDE = {
+    openrouter: {
+        badge: "Recommended", tone: "good", needsKey: true,
+        keyLabel: "Get an OpenRouter key", keyUrl: "https://openrouter.ai/keys",
+        cost: "Well under $1 for a four-hour session on the recommended cheap model — about $1–2 a month if you play weekly. $10 of credit lasts most tables for months.",
+        lines: [
+            "One key reaches almost every model — GPT, Claude, Gemini, and dozens of cheap open ones.",
+            "Works properly inside Foundry's browser window.",
+            "Pay as you go — top up once and forget about it.",
+        ],
+    },
+    ollama: {
+        badge: "Free — runs on your PC", tone: "good", needsKey: false,
+        keyLabel: "Download Ollama (free)", keyUrl: "https://ollama.com/download",
+        cost: "Nothing, ever. It runs on your own graphics card — you pay only the electricity.",
+        lines: [
+            "Completely free — the model runs on your own computer. No key, no bills, no internet needed.",
+            "Needs a reasonably strong graphics card, and quality depends on which model you download.",
+            "Ollama must be started with OLLAMA_ORIGINS set to * or Foundry cannot reach it.",
+        ],
+    },
+    anthropic: {
+        badge: "Best writing quality", tone: "good", needsKey: true,
+        keyLabel: "Get an Anthropic key", keyUrl: "https://console.anthropic.com/settings/keys",
+        cost: "Roughly $1–3 a session, so about $10 a month for a weekly game. Best writing, biggest bill.",
+        lines: [
+            "Claude — the strongest, most in-character NPC writing of the bunch.",
+            "Noticeably pricier per message than the cheap models on OpenRouter.",
+        ],
+    },
+    openai: {
+        badge: "Usually blocked in Foundry", tone: "warn", needsKey: true,
+        keyLabel: "Get an OpenAI key", keyUrl: "https://platform.openai.com/api-keys",
+        cost: "Similar to OpenRouter for the same models — but read the warning above before spending anything.",
+        lines: [
+            "OpenAI refuses direct calls from a browser, so this often fails inside Foundry no matter how good your key is.",
+            "To use GPT models, choose OpenRouter instead — same models, and it works here.",
+        ],
+    },
+    lmstudio: {
+        badge: "Free — runs on your PC", tone: "good", needsKey: false,
+        keyLabel: "Download LM Studio (free)", keyUrl: "https://lmstudio.ai/",
+        cost: "Nothing, ever. It runs on your own graphics card — you pay only the electricity.",
+        lines: [
+            "Free local models with a friendly desktop app — no key and no bills.",
+            "Start the LM Studio server before playing, and leave it running.",
+        ],
+    },
+    custom: {
+        badge: "Advanced", tone: "neutral", needsKey: false,
+        keyLabel: "", keyUrl: "",
+        cost: "Whatever your own server charges you.",
+        lines: [
+            "Any server that speaks the OpenAI format. Set its exact address under Advanced settings below.",
+        ],
+    },
+};
+
 // ─── Tab → Setting Key Map ────────────────────────────────────────────────
 // Single source of truth for which setting belongs in which tab.
 
 const TABS = [
     {
-        id: "ai", label: "AI Provider", icon: "fa-solid fa-microchip",
-        intro: "Connect to OpenAI, Anthropic, Ollama, or any compatible model. All AI fields are edited here — the main settings page just shows what's currently active and a Test Connection button.",
+        id: "ai", label: "AI Setup", icon: "fa-solid fa-microchip",
+        intro: "Four steps to get ACE talking. Pick a provider, paste its key, choose a model, then press Test — if the test comes back green, you're done.",
         keys: ["aiProvider", "modelName", "chatModel", "digestModel", "apiKey", "apiUrl", "chatApiKey", "digestApiKey", "gameSystem", "systemPrompt", "maxContextTokens", "maxResponseTokens"],
     },
     {
@@ -193,7 +260,14 @@ export class AceConfigPanel extends ApplicationV2 {
             paneHtml = this._renderSearchResults(q);
         } else {
             const activeTab = TABS.find(t => t.id === this._activeTab) || TABS[0];
-            const settingsHtml = this._buildSettingsHTML(activeTab);
+            // The AI tab is a purpose-built guided flow (_buildAiSetup), which
+            // renders its own deprecation banners, Test button and Refresh
+            // button inline — so the standalone banner/action blocks that used
+            // to sit here are NOT emitted for it (duplicate data-action nodes
+            // would break the querySelector-based wiring).
+            const settingsHtml = activeTab.id === "ai"
+                ? this._buildAiSetup()
+                : this._buildSettingsHTML(activeTab);
             paneHtml = `
                 <div class="ace-cfg-pane" data-tab="${activeTab.id}">
                     <header class="ace-cfg-pane-header">
@@ -201,8 +275,6 @@ export class AceConfigPanel extends ApplicationV2 {
                         <h2>${this._esc(activeTab.label)}</h2>
                     </header>
                     ${activeTab.intro ? `<p class="ace-cfg-intro">${this._esc(activeTab.intro)}</p>` : ""}
-                    ${activeTab.id === "ai" ? this._buildDeprecationBanners() : ""}
-                    ${activeTab.id === "ai" ? this._buildAiTabActions() : ""}
                     <div class="ace-cfg-settings">${settingsHtml}</div>
                 </div>
             `;
@@ -308,7 +380,15 @@ export class AceConfigPanel extends ApplicationV2 {
         `;
     }
 
-    _buildSettingsHTML(tab) {
+    /**
+     * @param {object} tab            object with a `keys` array
+     * @param {object} [opts]
+     * @param {boolean} [opts.plainLabels]  suppress the big "featured" headline
+     *        treatment. The guided AI Setup passes this because its numbered
+     *        step titles already carry the visual weight — without it you get
+     *        two stacked gold headings saying nearly the same thing.
+     */
+    _buildSettingsHTML(tab, opts = {}) {
         const rows = [];
         // Four "headline" AI keys get the large-label treatment — provider
         // pick + the three model-tier dropdowns. Each renders as a big
@@ -342,7 +422,7 @@ export class AceConfigPanel extends ApplicationV2 {
             const extras = key === "digestModel"
                 ? `<div class="ace-cfg-extras" data-digest-warning style="grid-column:1 / -1; display:none;"></div>`
                 : "";
-            const featured = FEATURED_LABELS[key];
+            const featured = opts.plainLabels ? null : FEATURED_LABELS[key];
             const featuredClass = featured ? " ace-cfg-row--featured" : "";
             // Featured rows: big phrase + regular-font subtitle on same line.
             // Non-featured rows: standard meta.name rendering.
@@ -519,17 +599,99 @@ export class AceConfigPanel extends ApplicationV2 {
     // ─── AI Tab: Test Connection / Refresh Models actions ────────────────
     // Plain buttons (NOT brass-textured) at the top of the AI tab so users
     // can diagnose connection issues before scrolling through settings.
-    _buildAiTabActions() {
+    // ─── Guided AI Setup ─────────────────────────────────────────────────
+    //
+    // Replaces the AI tab's flat field list with a numbered, plain-English
+    // flow: pick a provider → paste a key → pick a model → prove it works.
+    //
+    // Every row is still built by _buildSettingsHTML, so each input keeps its
+    // data-setting-key attribute. That is deliberate: the save loop, the
+    // per-provider key vault, the model-catalog sync and the deprecation
+    // banners all key off those attributes and keep working untouched. Only
+    // the LAYOUT changes here — no settings were dropped in the rebuild.
+
+    /** Settings that stay available but shouldn't crowd the main flow. */
+    static ADVANCED_AI_KEYS = [
+        "apiUrl", "chatModel", "digestModel", "chatApiKey", "digestApiKey",
+        "gameSystem", "systemPrompt", "maxContextTokens", "maxResponseTokens",
+    ];
+
+    _buildAiSetup() {
+        const provider = (() => {
+            try { return game.settings.get(MODULE_ID, "aiProvider") || "ollama"; }
+            catch (_) { return "ollama"; }
+        })();
+        const guide = PROVIDER_GUIDE[provider] ?? PROVIDER_GUIDE.custom;
+
+        const step = (n, title, blurb, body, extraClass = "", attrs = "") => `
+            <section class="ace-ai-step ${extraClass}" ${attrs}>
+                <header class="ace-ai-step-head">
+                    <span class="ace-ai-stepnum">${n}</span>
+                    <h3>${this._esc(title)}</h3>
+                </header>
+                ${blurb ? `<p class="ace-ai-step-blurb">${this._esc(blurb)}</p>` : ""}
+                <div class="ace-ai-step-body">${body}</div>
+            </section>
+        `;
+
         return `
-            <div class="ace-cfg-ai-actions">
-                <button type="button" class="ace-cfg-plainbtn" data-action="testConnection">
-                    <i class="fa-solid fa-plug"></i> Test Connection
-                </button>
-                <button type="button" class="ace-cfg-plainbtn" data-action="refreshModels">
-                    <i class="fa-solid fa-rotate"></i> Refresh Model List
-                </button>
-                <div class="ace-cfg-test-result" data-test-result></div>
+            <div class="ace-ai-setup">
+
+                ${step(1, "Choose your AI provider",
+                    "This is the service that writes your NPC dialogue and narration.",
+                    this._buildSettingsHTML({ keys: ["aiProvider"] }, { plainLabels: true })
+                    + `<div class="ace-ai-note" data-provider-note>${this._buildProviderNote(provider)}</div>`)}
+
+                ${step(2, "Pick a model",
+                    "Not sure? Leave the default — it's the cheap, fast, sensible choice for this provider.",
+                    this._buildDeprecationBanners()
+                    + this._buildSettingsHTML({ keys: ["modelName"] }, { plainLabels: true })
+                    + `<button type="button" class="ace-cfg-plainbtn" data-action="refreshModels">
+                           <i class="fa-solid fa-rotate"></i> Refresh Model List
+                       </button>`)}
+
+                ${step(3, "Paste your API key",
+                    "This is where your key goes. It's stored with your world and only ever visible to the GM.",
+                    this._buildSettingsHTML({ keys: ["apiKey"] }, { plainLabels: true }),
+                    guide.needsKey ? "" : "ace-ai-step--hidden",
+                    "data-key-step")}
+
+                ${step(4, "Test it",
+                    "Sends one real request. If this comes back green, NPC chat will work.",
+                    `<button type="button" class="ace-cfg-plainbtn ace-ai-testbtn" data-action="testConnection">
+                         <i class="fa-solid fa-plug"></i> Test Connection
+                     </button>
+                     <div class="ace-cfg-test-result" data-test-result></div>`)}
+
+                <details class="ace-ai-advanced">
+                    <summary>Advanced settings<span class="ace-ai-advanced-sub"> — endpoint, per-task models, prompt, token limits</span></summary>
+                    <div class="ace-ai-advanced-body">${this._buildSettingsHTML({ keys: AceConfigPanel.ADVANCED_AI_KEYS }, { plainLabels: true })}</div>
+                </details>
+
             </div>
+        `;
+    }
+
+    /** The plain-English card under the provider picker. Swapped live on change. */
+    _buildProviderNote(provider) {
+        const g = PROVIDER_GUIDE[provider] ?? PROVIDER_GUIDE.custom;
+        const bullets = g.lines.map(l => `<li>${this._esc(l)}</li>`).join("");
+        const link = g.keyUrl
+            ? `<a class="ace-ai-note-link" href="${this._esc(g.keyUrl)}" target="_blank" rel="noopener">
+                   <i class="fa-solid fa-arrow-up-right-from-square"></i> ${this._esc(g.keyLabel)}
+               </a>`
+            : "";
+        const cost = g.cost
+            ? `<p class="ace-ai-cost">
+                   <i class="fa-solid fa-coins"></i>
+                   <span><strong>What it costs:</strong> ${this._esc(g.cost)}</span>
+               </p>`
+            : "";
+        return `
+            <span class="ace-ai-badge ace-ai-badge--${this._esc(g.tone)}">${this._esc(g.badge)}</span>
+            <ul class="ace-ai-note-list">${bullets}</ul>
+            ${cost}
+            ${link}
         `;
     }
 
@@ -605,6 +767,16 @@ export class AceConfigPanel extends ApplicationV2 {
         if (providerSelect) {
             providerSelect.addEventListener("change", async () => {
                 const newProvider = providerSelect.value;
+
+                // ── Guided-setup chrome: swap the plain-English note, and show
+                // or hide the whole "paste your key" step. Done BEFORE the
+                // defaults bail-out so the guidance always tracks the picker.
+                const guide = PROVIDER_GUIDE[newProvider] ?? PROVIDER_GUIDE.custom;
+                const noteEl = content.querySelector("[data-provider-note]");
+                if (noteEl) noteEl.innerHTML = this._buildProviderNote(newProvider);
+                const keyStep = content.querySelector("[data-key-step]");
+                if (keyStep) keyStep.classList.toggle("ace-ai-step--hidden", !guide.needsKey);
+
                 const defaults = PROVIDER_DEFAULTS[newProvider];
                 if (!defaults) return;
 

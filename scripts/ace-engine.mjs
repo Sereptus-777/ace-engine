@@ -5,7 +5,7 @@
 
 import { AcePanel }          from "./panel.mjs";
 import { isBioInFlight, openAutoLinkCleanup } from "./npc/bio-generator.mjs";
-import { setSharedElevenLabsKey } from "./npc/shared-credentials.mjs";
+import { setSharedElevenLabsKey, getSharedElevenLabsKey, getSharedElevenLabsKeyInfo } from "./npc/shared-credentials.mjs";
 import { AceSettings }       from "./settings.mjs";
 import { initRemoteCatalog } from "./remote-catalog.mjs";
 import { SceneContext }       from "./scene-context.mjs";
@@ -638,8 +638,9 @@ function _playNarrationAudio(base64, volume = 0.8) {
 // Used by _handleSubtleBroadcast to generate audio when panel is closed.
 
 function _getElevenLabsKeyStandalone() {
-  try { return game.settings.get(MODULE_ID, "elevenLabsApiKey") || ""; }
-  catch (_) { return ""; }
+  // Was reading ONLY the setting, so a key living in config.local.json made
+  // this path silent while the panel spoke fine. One shared accessor now.
+  return getSharedElevenLabsKey();
 }
 
 async function _generateElevenLabsAudio(text, apiKey) {
@@ -1020,12 +1021,11 @@ Hooks.once("ready", async () => {
       if (!game.user.isGM) return;
       if (!data.text || !data.voiceId || !data.requestId) return;
       try {
-        // Effective key — the local credentials FILE first, then the client
-        // setting: the exact precedence the GM's own playback uses. Reading
-        // only the raw setting is what silenced every player-proxy voice
-        // while the GM window spoke fine (live-fire 2026-07-10 18:24).
-        const apiKey = (localCredentials?.elevenLabsApiKey || "").trim()
-          || (game.settings.get(MODULE_ID, "elevenLabsApiKey") || "").trim();
+        // Effective key — file first, then the setting. That precedence now
+        // lives in the ONE shared accessor; reading only the raw setting here
+        // is what silenced every player-proxy voice while the GM window spoke
+        // fine (live-fire 2026-07-10 18:24).
+        const apiKey = getSharedElevenLabsKey();
         if (!apiKey) {
           game.socket.emit(`module.${MODULE_ID}`, {
             action: "ttsResponse", requestId: data.requestId, error: "GM has no ElevenLabs API key configured."
@@ -1542,18 +1542,21 @@ Hooks.once("ready", async () => {
 
   // ── TTS availability diagnostic ────────────────────────────
   {
-    const localKey = localCredentials?.elevenLabsApiKey || "";
-    let settingsKey = "";
-    try { settingsKey = (game.settings.get(MODULE_ID, "elevenLabsApiKey") || "").trim(); } catch (_) {}
-    setSharedElevenLabsKey(localKey || settingsKey);   // belt: whichever source won
-    if (localKey) {
+    // Diagnostic only. There is deliberately NO boot-time key copy stamped
+    // here any more: the shared accessor resolves file-vs-setting live on
+    // every call, so freezing a snapshot at startup would silently ignore a
+    // key pasted into AI Setup mid-session.
+    const { key: effectiveKey, source: keySource } = getSharedElevenLabsKeyInfo();
+    if (keySource === "config.local.json") {
       console.debug(`${MODULE_ID} | TTS: ElevenLabs key loaded from config.local.json`);
-    } else if (settingsKey) {
+    } else if (effectiveKey) {
       console.log(`${MODULE_ID} | TTS: ElevenLabs key found in Module Settings`);
     } else {
-      console.warn(
-        `${MODULE_ID} | TTS: No ElevenLabs API key — narration will use browser voice (Microsoft David / best available).\n` +
-        `  -> Fix: Foundry Settings -> Module Settings -> ACE -> "ElevenLabs API Key"\n` +
+      // console.log, not console.warn: running without an ElevenLabs key is a
+      // supported free configuration, not a problem to be flagged at boot.
+      console.log(
+        `${MODULE_ID} | TTS: no ElevenLabs key — narration will use the free browser voice.\n` +
+        `  -> Optional: add one in ACE Engine -> AI Setup for premium voices.\n` +
         `  -> Set it once — it's stored per-browser and works across all worlds.`
       );
     }
@@ -4310,8 +4313,10 @@ async function _aceRollSave(btn) {
     const actor = t.actor ?? t;
     try {
       if (game.system.id === "dnd5e") {
-        // dnd5e posts its own roll card with pass/fail decoration
-        await actor.rollAbilitySave(ability, { targetValue: dc });
+        // dnd5e posts its own roll card with pass/fail decoration.
+        // fastForward — ACE owns every pause; dnd5e's save-config dialog must
+        // never appear (suite-wide dialog sweep, 2026-07-27).
+        await actor.rollAbilitySave(ability, { targetValue: dc, fastForward: true });
       } else if (game.system.id === "pf2e") {
         const pf2e = { str: "fortitude", dex: "reflex", con: "fortitude", int: "will", wis: "will", cha: "will" };
         await actor.saves?.[pf2e[ability] || "reflex"]?.roll({ dc: { value: dc } });

@@ -6,6 +6,7 @@
 
 import { MODULE_ID } from "./ace-engine.mjs";
 import { AceSettings } from "./settings.mjs";
+import { getContextBudgetChars } from "./context-budget.mjs";
 
 export class AiProvider {
   constructor() {
@@ -199,7 +200,7 @@ When suggesting these features, be natural — weave them into your advice. For 
    * @param {number} budgetChars — max total characters (~3.5 chars per token)
    * @returns {Array} trimmed history
    */
-  _trimHistory(history, budgetChars = 24000) {
+  _trimHistory(history, budgetChars = getContextBudgetChars()) {
     if (!history.length) return history;
     let total = history.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : 200), 0);
     if (total <= budgetChars) return history;

@@ -9,6 +9,7 @@
 
 import { AIHandler }       from "./conversation-engine.mjs";
 import { logFactionEvent } from "./faction-memory.mjs";
+import { isAIFailure }     from "./ai-failure.mjs";
 
 const MODULE_ID       = "ace-engine";
 const JOURNAL_PREFIX  = "[AI Memory]";
@@ -158,8 +159,8 @@ ${transcript}
 
 FINAL REMINDER: If you fabricate ANY detail not in the transcript, you fail. A short transcript means a short summary. NONE deeds is correct most of the time.`;
 
-        const rawResponse = await AIHandler.callAI("You are a campaign chronicler.", [], summaryPrompt, provider, apiKey);
-        if (!rawResponse || rawResponse.includes("magic is unset")) return;
+        const rawResponse = await AIHandler.callAI("You are a campaign chronicler.", [], summaryPrompt, provider, apiKey, [], { context: "session-summary" });
+        if (!rawResponse || isAIFailure(rawResponse) || rawResponse.includes("magic is unset")) return;
 
         // ── Parse response: separate diary from deeds ────────────────
         let summary = rawResponse;
