@@ -10,6 +10,7 @@ import { getFactionContext }                 from "./faction-memory.mjs";
 import { buildFactionConversationContext }   from "./faction-registry.mjs";
 import { SocialProfileEngine }               from "./social-profile.mjs";
 import { surfaceAIFailure, AI_FAILED_REPLY } from "./ai-failure.mjs";
+import { resolveIdentity, buildIdentityPrompt }  from "./npc-identity.mjs";
 import { trimHistoryToBudget, getMaxResponseTokens } from "../context-budget.mjs";
 
 // Features that emit a LIST rather than one reply — an entry per item, per
@@ -215,6 +216,14 @@ export class AIHandler {
         const hpMax        = actor.system?.attributes?.hp?.max    ?? 1;
         const creatureType = (actor.system?.details?.type?.value  || "").toLowerCase();
 
+        // ── WHO vs WHAT (2026-08-06) ──────────────────────────────────────
+        // The prompt used to carry only `actor.name`, so a cambion called
+        // Lilith Vex had no sanctioned way to mention her own kind and the
+        // model substituted it for her name. Resolve both facts up front and
+        // hand them over separately. `token` is the on-canvas token when there
+        // is one — its name is what the players are actually looking at.
+        const identity = resolveIdentity(actor, token?.document ?? null);
+
         // ── NPC State Checks ─────────────────────────────────────────────
         const isUnconscious = this.hasCondition(actor, ["unconscious", "incapacitated", "stunned"]);
         const hasDeadCondition = this.hasCondition(actor, ["dead"]);
@@ -393,7 +402,7 @@ export class AIHandler {
         const profanityPrompt = AIHandler._getProfanityPrompt(sceneName);
 
         const systemPrompt = `
-You are ${actor.name}.
+${buildIdentityPrompt(actor, token?.document ?? null)}
 
 ALIGNMENT: ${alignment}
 ${alignmentNote}
@@ -450,10 +459,14 @@ SPEECH STYLE:
 ${speechStyle}
 
 RULES:
-- Speak ONLY as ${actor.name}. Use first person ("I", "my") ONLY inside spoken dialogue.
+- Speak ONLY as ${identity.name}. Use first person ("I", "my") ONLY inside spoken dialogue.
 - ALL physical actions, body language, gestures, and emotes MUST be wrapped in *asterisks* and written in THIRD person. NEVER use first person for actions — only for spoken words.
+- In those *asterisk* parts, call yourself ${identity.isNamed ? `"${identity.shortName}"` : `"${identity.selfReference}"`}${identity.isNamed && identity.species ? ` — NOT "the ${identity.species}". You have a name; use it.` : "."}
 - WRONG: "What's in it for me?" I ask gruffly, my hand drifting to my quiver.
-- RIGHT: *The bandit eyes the newcomer, hand drifting to the quiver on his back.* "What's in it for me? Why would I join a group like yours?"
+${identity.isNamed
+  ? `- WRONG: *The ${identity.species || "creature"} eyes the newcomer.* "What's in it for me?"   ← you are not a nameless ${identity.species || "creature"}; you are ${identity.name}.
+- RIGHT: *${identity.shortName} eyes the newcomer, hand drifting to the quiver on ${identity.shortName === identity.name ? "their" : "their"} back.* "What's in it for me? Why would I join a group like yours?"`
+  : `- RIGHT: *${identity.selfReference.charAt(0).toUpperCase() + identity.selfReference.slice(1)} eyes the newcomer, hand drifting to the quiver on their back.* "What's in it for me? Why would I join a group like yours?"`}
 - NEVER describe, narrate, or control the player character's actions, thoughts, feelings, or body language. You may ONLY write what YOUR character says and does. The player decides what their character does — you do NOT.
 - Keep responses to 2-3 sentences.
 - Do NOT mention you are an AI.
