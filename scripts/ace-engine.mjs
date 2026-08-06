@@ -1438,6 +1438,33 @@ Hooks.once("ready", async () => {
     }
   } catch (_) { /* No config.local.json — perfectly fine, use Settings */ }
 
+  // ── VOICE CREDENTIAL CHECK, AT BOOT (2026-08-06) ───────────────────────
+  // Tell the GM the key is missing BEFORE a player talks to an NPC and hears
+  // a robot. Previously the only signal was a console.warn at the moment of
+  // speech, so the discovery path was always "mid-session, in front of the
+  // table" — which is how this survived eleven rounds of fixing the voice
+  // path instead of the credential.
+  //
+  // Only nags when the GM actually WANTS ElevenLabs; if they deliberately
+  // chose browser TTS, silence is correct.
+  try {
+    if (game.user?.isGM) {
+      const { key, source } = getSharedElevenLabsKeyInfo();
+      let wantsEleven = true;
+      try { wantsEleven = game.settings.get(MODULE_ID, "voiceProvider") !== "browser"; } catch (_) {}
+      if (wantsEleven && !key) {
+        console.warn(`${MODULE_ID} | ElevenLabs key MISSING — checked config.local.json, then Module Settings. NPC voices will use robotic browser TTS.`);
+        ui.notifications?.warn(
+          "ACE: no ElevenLabs key found — NPC voices will be robotic browser TTS. "
+        + "Put your key in modules/ace-engine/config.local.json so it survives browser clears.",
+          { permanent: true }
+        );
+      } else if (key) {
+        console.log(`${MODULE_ID} | ElevenLabs key loaded from ${source}.`);
+      }
+    }
+  } catch (err) { console.warn(`${MODULE_ID} | Voice credential check failed (non-fatal):`, err); }
+
   // ── Provider/URL/Model consistency repair ──────────────────
   // Detects the bug where Provider was changed on the main settings page
   // but URL + Model didn't follow (because they're hidden there). Auto-fixes

@@ -61,11 +61,36 @@ function _gmAvailable() {
  * key, so the player hears ElevenLabs paid for by the GM's account
  * instead of the OS's built-in voice.
  */
+/**
+ * ⚠️ SILENT DOWNGRADE — the reason this bug survived eleven "fixes" (2026-08-06).
+ *
+ * When the key went missing, the ONLY signal was a console.warn nobody reads.
+ * Johnny found out because a player heard a robot voice mid-scene, and every
+ * investigation started at the voice path instead of at the credential. A
+ * fallback that costs the user something must ANNOUNCE ITSELF.
+ *
+ * Fires once per session so it can't spam a conversation, and only for the GM
+ * — a player can do nothing about a missing key on the GM's machine.
+ */
+let _warnedNoKey = false;
+function _warnBrowserFallback() {
+    if (_warnedNoKey || !game.user?.isGM) return;
+    _warnedNoKey = true;
+    console.warn(`${MODULE_ID} | No ElevenLabs key found (checked config.local.json, then Module Settings) — NPC speech has fallen back to robotic browser TTS.`);
+    ui.notifications?.warn(
+        "ACE: no ElevenLabs key found — NPC voices are using robotic browser TTS. "
+      + "Paste your key into modules/ace-engine/config.local.json so it survives browser clears.",
+        { permanent: true }
+    );
+}
+
 function _ttsMode() {
     if (_userPickedBrowser()) return "browser";
     const hasLocalKey = !!_getElevenLabsKey();
     if (hasLocalKey) return "local";
     if (!game.user.isGM && _gmAvailable()) return "proxy";
+    // Reaching here as the GM means the key is genuinely missing — say so.
+    _warnBrowserFallback();
     return "browser";
 }
 

@@ -544,10 +544,19 @@ export class AceSettings {
     s("tokenArtRecentChoices",  { scope: "world", config: false, type: Object,  default: {} });
 
     // ── ElevenLabs Narration (client-scoped) ────────────────
+    // ⚠️ CLIENT SCOPE = BROWSER LOCAL STORAGE, AND NOTHING ELSE (2026-08-06).
+    // This is deliberate — world-scoped settings are sent to every connected
+    // client, so a world-scoped key would be readable by any player from the
+    // console. But it means this box is the ONLY copy, it is per-world (not
+    // "all worlds" as the hint used to claim), and it dies with browser
+    // storage — taking NPC voices down to robotic browser TTS silently.
+    // That is the bug Johnny chased eleven times. The durable answer is
+    // modules/ace-engine/config.local.json, which lives on the server, wins
+    // over this setting, and is gitignored. The hint now says so.
     s("elevenLabsApiKey", {
       scope: "client",
       name: "ElevenLabs API Key",
-      hint: "API key from elevenlabs.io. Set once — works across all worlds in this browser.",
+      hint: "API key from elevenlabs.io. ⚠️ Stored in THIS browser only, for THIS world — clearing browser data erases it and NPC voices drop to robotic browser TTS. To set it permanently, put it in modules/ace-engine/config.local.json instead; that file lives on the server, survives cache clears, and overrides this box.",
       type: String,
       default: "",
     });
