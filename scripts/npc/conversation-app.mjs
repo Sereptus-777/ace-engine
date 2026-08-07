@@ -141,6 +141,24 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         return this.tokenDocument?.name || this.actor.name;
     }
 
+    /**
+     * "Ogre (1) — speaking with Chud", shown in the window title bar AND on the
+     * label under the portrait, identically on EVERY client.
+     *
+     * Johnny 2026-08-06: with several conversations open, or a spectator
+     * watching someone else's, "ACE: NPC Chat" over a picture of an ogre says
+     * nothing about whose scene this is. Naming both parties makes each window
+     * self-describing at a glance.
+     */
+    get conversationTitle() {
+        const npc = this.npcName;
+        const who = this.speakingAs?.name
+                 ?? this._playerName
+                 ?? game.user.character?.name
+                 ?? null;
+        return who && who !== npc ? `${npc} — speaking with ${who}` : npc;
+    }
+
     /** The PC actor speaking in this conversation (resolved once at creation). */
     get speakingAs() {
         // If a speaker was explicitly set at conversation creation, use it
@@ -248,6 +266,9 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
         this._thinkingIndicator.style.display = "none";
 
+        // Name BOTH parties, on every client — frame title and portrait label.
+        this._applyConversationTitle();
+
         // Only register event listeners once (prevents stacking on re-render)
         if (!isReRender) {
             // ⚠️ EVERY ENTRY POINT IS WRAPPED (2026-08-06). handleSend is async,
@@ -268,6 +289,11 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             this._micBtn.addEventListener("click",    guard("Microphone", () => this.handleMic()));
             this._sendGuard = guard("Send", () => this.handleSend());
             this._initMicPicker();
+            // Measure AFTER the browser has laid the row out, and again once
+            // webfonts land — a fallback font measures narrower than the real
+            // one, which is how a "fitted" row still clips a letter.
+            requestAnimationFrame(() => this._fitWidthToControls());
+            try { document.fonts?.ready?.then(() => this._fitWidthToControls()); } catch (_) {}
             // Use `keydown` (not the deprecated `keypress`) and stop ALL
             // keyboard events from propagating to Foundry's global keybinding
             // system. Without `stopPropagation`, Backspace inside the chat
@@ -618,6 +644,75 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         // Spectators are handled separately by _setUILocked which hides pause entirely.
         // Return cursor to input when unlocking
         if (!locked && this._inputField) this._inputField.focus();
+    }
+
+    /**
+     * Widen the window until the control row fits on one line.
+     *
+     * Johnny 2026-08-06: "Make sure the buttons themselves are always visible
+     * with the full text in there, and that is actually the push that expands
+     * the pop-up size. Don't try to guess what pop-up size it should be."
+     *
+     * So nothing here is a guessed number. It MEASURES the row the browser has
+     * actually laid out — every button at its natural width, plus the gaps and
+     * the padding around them — and grows the window to that if it is short.
+     * Change a label, add a button, use a wider font: the window follows,
+     * because the measurement is of the real thing rather than an estimate of
+     * it. The window is never SHRUNK here; a GM who has widened it keeps their
+     * size.
+     */
+    /** Push conversationTitle into the window frame and the portrait label. */
+    _applyConversationTitle() {
+        try {
+            const title = this.conversationTitle;
+            if (this._nameLabel) this._nameLabel.textContent = title;
+            // The ApplicationV2 frame keeps its own title node; update the live
+            // DOM as well as the option, or the header keeps the old string
+            // until the next full re-render.
+            if (this.options?.window) this.options.window.title = title;
+            const h = this.element?.querySelector?.(".window-title");
+            if (h) h.textContent = title;
+        } catch (err) {
+            console.warn(`${MODULE_ID} | Could not set the conversation title (non-fatal):`, err);
+        }
+    }
+
+    _fitWidthToControls() {
+        try {
+            const el  = this.element;
+            const row = el?.querySelector?.(".ace-engine-btn-row");
+            if (!row) return;
+
+            // Buttons at their natural width — the picker is allowed to
+            // collapse, so exclude it from the demand.
+            let needed = 0;
+            const style = getComputedStyle(row);
+            const gap = parseFloat(style.columnGap || style.gap || "0") || 0;
+            const kids = [...row.children];
+            for (const k of kids) {
+                if (k.classList.contains("ace-engine-mic-picker")) { needed += 80; continue; }
+                needed += Math.ceil(k.getBoundingClientRect().width) || 0;
+            }
+            needed += gap * Math.max(0, kids.length - 1);
+
+            // Padding on the controls bar + the window frame either side.
+            const controls = el.querySelector(".ace-engine-controls");
+            if (controls) {
+                const cs = getComputedStyle(controls);
+                needed += (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+            }
+            const frame = el.getBoundingClientRect().width - (row.getBoundingClientRect().width || 0);
+            needed += Math.max(0, Math.ceil(frame));
+
+            const current = this.position?.width ?? el.getBoundingClientRect().width;
+            if (needed > current + 1) {
+                const target = Math.min(needed, Math.round(window.innerWidth * 0.9));
+                this.setPosition({ width: target });
+                console.log(`${MODULE_ID} | Conversation window widened to ${target}px so the controls fit on one line.`);
+            }
+        } catch (err) {
+            console.warn(`${MODULE_ID} | Could not size the window to its controls (non-fatal):`, err);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1425,9 +1520,21 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         console.log(`ACE: Engine | Name revealed (display-only) as "${name}" — real name untouched`);
     }
 
-    /** Update the NPC name label shown over the portrait. */
+    /**
+     * Update the NPC name label shown over the portrait.
+     * Keeps the "— speaking with <PC>" half: a mid-conversation name reveal used
+     * to replace the whole label with the bare new name, silently dropping who
+     * the NPC was talking to. (2026-08-06)
+     */
     _updateNameLabel(name) {
-        if (this._nameLabel && name) this._nameLabel.textContent = name;
+        if (!this._nameLabel || !name) return;
+        const who = this.speakingAs?.name ?? this._playerName ?? game.user.character?.name ?? null;
+        this._nameLabel.textContent = (who && who !== name) ? `${name} — speaking with ${who}` : name;
+        try {
+            if (this.options?.window) this.options.window.title = this._nameLabel.textContent;
+            const h = this.element?.querySelector?.(".window-title");
+            if (h) h.textContent = this._nameLabel.textContent;
+        } catch (_) { /* label already updated — frame is cosmetic */ }
     }
 
     async _summarizeSession() {

@@ -9366,17 +9366,31 @@ li.ace-toolbar-btn:hover {
 }
 
 /* ── Controls Bar (Input Area) ───────────────────────────────── */
-/* Row layout: picker stretches, buttons keep their size. */
+/* ── THE BUTTON ROW — ONE definition, and the buttons win ─────────────────
+   Johnny 2026-08-06: "Make sure the buttons themselves are always visible with
+   the full text in there, and that is actually the push that expands the pop-up
+   size." So: buttons never shrink and never wrap their text; the picker gives
+   up space first; and if the row still does not fit, the WINDOW grows to meet
+   it (see _fitWidthToControls in conversation-app.mjs). No guessed width. */
 .ace-engine-btn-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;            /* three labelled pills + a picker: wrap, never crush */
+  flex-wrap: nowrap;          /* one line — the window widens instead of stacking */
   gap: 8px;
+  width: 100%;
 }
-.ace-engine-btn-row > button { flex: 0 0 auto; }
-/* The picker yields space to the buttons — a squeezed dropdown is still usable,
-   a squeezed button label is not. */
-.ace-engine-mic-picker { flex: 1 1 140px; min-width: 110px; }
+/* Buttons keep their natural size, always. */
+.ace-engine-btn-row > button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+/* The picker is the only flexible thing here — a narrow dropdown is still
+   perfectly usable, a clipped button label is not. */
+.ace-engine-mic-picker {
+  flex: 1 1 120px;
+  min-width: 80px;
+  overflow: hidden;
+}
 
 .ace-engine-controls {
   display: flex !important;
@@ -9388,12 +9402,11 @@ li.ace-toolbar-btn:hover {
   flex-shrink: 0;
 }
 
-.ace-engine-btn-row {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
-  align-items: center;
-}
+/* (The original .ace-engine-btn-row block lived here and silently overrode the
+   one above it — same specificity, later in the file, so it won. That is why
+   the labelled pills overlapped and spilled out of the window: they were being
+   laid out by a rule I did not know was there. One row definition only, kept
+   with the others above. 2026-08-06) */
 
 /* Input field — near-black, gold focus ring (textarea for word-wrap) */
 #ace-engine-input {
@@ -9428,14 +9441,11 @@ li.ace-toolbar-btn:hover {
 
 /* ── Send Button — Gold ──────────────────────────────────────── */
 #ace-engine-send {
-  width: 44px;
-  height: 38px;
   background: linear-gradient(to bottom, #d4af37 0%, #b8922a 50%, #96760a 100%);
   border: 1px solid #d4af37;
   color: #0a0a0c;
   font-weight: 700;
   text-shadow: 0 1px 0 rgba(255, 245, 180, 0.4);
-  border-radius: var(--ace-radius-sm);
   cursor: pointer;
   transition: all 0.2s ease;
   font-size: 16px;
@@ -9571,8 +9581,6 @@ li.ace-toolbar-btn:hover {
    NPC chat; typing is the fallback. Now the largest control in the row, with
    three unmistakable states: idle, warming up, listening. */
 #ace-engine-voice {
-  width: 60px;
-  height: 52px;
   font-size: 22px !important;
   display: flex;
   align-items: center;
@@ -9580,7 +9588,6 @@ li.ace-toolbar-btn:hover {
   background: linear-gradient(to bottom, #1e1e22 0%, #141416 100%);
   border: 1px solid var(--ace-border-light);
   color: var(--ace-text-secondary);
-  border-radius: var(--ace-radius-sm);
   cursor: pointer;
   transition: all 0.2s ease;
   font-size: 16px;
@@ -9642,12 +9649,9 @@ li.ace-toolbar-btn:hover {
 
 /* Pause / Resume — BIG button, matches mic size, red when active */
 #ace-engine-pause {
-  width: 44px;
-  height: 42px;
   background: rgba(220, 40, 40, 0.12);
   border: 2px solid rgba(220, 60, 60, 0.5);
   color: #e04050;
-  border-radius: 50%;
   cursor: pointer;
   transition: all 0.25s ease;
   font-size: 18px;
