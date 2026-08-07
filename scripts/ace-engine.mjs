@@ -1900,6 +1900,16 @@ Hooks.once("ready", async () => {
 
   const api = {
     openPanel,
+    /**
+     * Show what the creature-sound scorer makes of every clip you have.
+     * Added 2026-08-06 after a bulk-downloaded giant pack turned out to be half
+     * doors, cymbals and footsteps — invisible from inside Foundry until now.
+     *   game.modules.get("ace-engine").api.auditCreatureSounds()
+     */
+    auditCreatureSounds: async (folders) => {
+      const cs = await import("./npc/creature-sounds.mjs");
+      return cs.auditCreatureSounds(folders);
+    },
     getPanel:        () => panel,
     getSceneContext: () => sceneCtx.gather(),
     ask:             (prompt) => aiProvider.chat(prompt, sceneCtx.gather()),

@@ -46,6 +46,20 @@ function _userPickedBrowser() {
     catch (_) { return false; }
 }
 
+/**
+ * The words that identify THIS creature, for creature-sound scoring.
+ * "Ogre (1)" -> ["ogre"], so an ogre prefers ogre-roar over a generic one.
+ * Numbers and duplicate markers are stripped; short words are dropped because
+ * two-letter fragments match everything.
+ */
+function _soundAffinities(actorName) {
+    return String(actorName ?? "")
+        .toLowerCase()
+        .replace(/\([^)]*\)/g, " ")
+        .split(/[^a-z]+/)
+        .filter(w => w.length >= 3);
+}
+
 /** Is there an active GM session we can proxy ElevenLabs requests to? */
 function _gmAvailable() {
     return !!game.users?.some?.(u => u.isGM && u.active);
@@ -618,7 +632,7 @@ class TTSEngine {
                             const { cleaned, hadSounds } = _csStripSoundEffects(dialogueText);
                             if (hadSounds) {
                                 console.log(`TTS | Stripped sound words: "${dialogueText}" → "${cleaned}"`);
-                                await _csPlayCreatureSound(creatureSoundFolder, voicePitch);
+                                await _csPlayCreatureSound(creatureSoundFolder, voicePitch, _soundAffinities(actorName));
                                 if (this._stopRequested) break;
                             }
                             dialogueText = cleaned;
@@ -642,7 +656,7 @@ class TTSEngine {
                     } else {
                         if (creatureSoundFolder && _csIsSoundEmote && _csIsSoundEmote(seg.text)) {
                             console.log(`TTS | Sound emote → creature clip: "${seg.text}"`);
-                            await _csPlayCreatureSound(creatureSoundFolder, voicePitch);
+                            await _csPlayCreatureSound(creatureSoundFolder, voicePitch, _soundAffinities(actorName));
                             continue;
                         }
 

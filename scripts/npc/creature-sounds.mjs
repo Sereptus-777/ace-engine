@@ -19,8 +19,84 @@ const SOUND_PATHS = [
 const _fileCache = new Map();
 const CACHE_TTL  = 120_000;          // 2 minutes
 
-/** Filename patterns that are NOT creature vocalizations — safety-net filter */
-const EXCLUDE_RE = /(?:walking|footstep|step|ambien|loop|light.saber|electric|cartoon|robotic|sci.fi|singing|chirp)/i;
+// ═══════════════════════════════════════════════════════════════════════════
+//  PICKING THE RIGHT CLIP — scoring, not a blacklist (2026-08-06)
+//
+//  Johnny bulk-downloaded a giant pack, and roughly half of it is not a voice:
+//  stomping_ground, medium_thud, cymbal_bass, closing_large_metal_door,
+//  frontdoorclose, placing_the_dumbells_on_the_floor, battle_mech_walks,
+//  ivan_rockanov. The old blacklist caught "footstep" and "loop" and let every
+//  one of those through, so a random pick made an ogre answer with a door.
+//
+//  A blacklist can only ever exclude what somebody thought of. Scoring flips
+//  it: every file is rated on how much it looks like a creature vocalisation,
+//  and on how well it matches THIS creature, then the best tier is chosen from
+//  at random. New junk scores low automatically; a well-named clip wins without
+//  anyone maintaining a list. No AI call — this is filename maths, instant and
+//  free, run over a cached listing.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Words that mean "a creature made this noise with its body". */
+const VOICE_WORDS = [
+    "roar", "growl", "snarl", "grunt", "howl", "screech", "shriek", "scream",
+    "hiss", "bellow", "moan", "groan", "wail", "squeal", "chitter", "yelp",
+    "bark", "cry", "gurgle", "rasp", "breath", "pant", "chatter", "croak",
+    "warble", "trill", "purr", "snort", "huff", "grumble", "murmur",
+    "vocal", "voice", "call", "sound", "creature", "monster", "beast",
+];
+
+/** Words that mean "this is NOT a mouth noise", however it is named. */
+const NOT_VOICE_WORDS = [
+    // movement + impacts
+    "footstep", "foot_step", "step", "stepping", "walk", "walking", "run",
+    "running", "stomp", "stomping", "thud", "thump", "impact", "land",
+    // objects, rooms, machinery
+    "door", "gate", "chest", "metal", "wood", "stone_drag", "chain",
+    "machine", "mech", "robot", "engine", "motor", "servo", "electric",
+    "dumbell", "dumbbell", "floor", "furniture", "glass", "crate",
+    // music + production
+    "cymbal", "drum", "kick", "snare", "bass_", "loop", "beat", "music",
+    "melody", "chord", "synth", "moombahton", "trap_", "riser", "sting",
+    // ambience + misc
+    "ambien", "wind", "rain", "fire_crackle", "water", "cartoon", "sci_fi",
+    "scifi", "light_saber", "lightsaber", "singing", "song", "speech",
+    "dialogue", "narration", "silence", "test", "untitled",
+];
+
+/**
+ * Rate one filename for this creature. Higher is better; NEGATIVE means never
+ * play it.
+ *
+ * @param {string} file   full path or bare filename
+ * @param {string[]} affinities  lowercase words identifying the creature —
+ *        its species, its name, its folder. "ogre" beats "giant" beats nothing.
+ */
+export function scoreCreatureSound(file, affinities = []) {
+    const base = String(file).split("/").pop().toLowerCase()
+        .replace(/\.[^.]+$/, "")
+        .replace(/^fs[_-]?\d+[_-]?/, "")   // strip freesound id prefixes
+        .replace(/[^a-z0-9]+/g, "_");
+
+    // A disqualifier is absolute — a "giant_footsteps" clip is a footstep no
+    // matter how many other words look promising.
+    for (const bad of NOT_VOICE_WORDS) {
+        if (base.includes(bad)) return -1;
+    }
+
+    let score = 0;
+    for (const good of VOICE_WORDS) {
+        if (base.includes(good)) { score += 10; break; }   // one hit is enough
+    }
+    // Creature affinity: the more specific the match, the better. "ogre-roar"
+    // must beat "giant-roar", which must beat "big-monster-roar".
+    affinities.forEach((word, i) => {
+        if (word && word.length >= 3 && base.includes(word)) {
+            score += 20 - Math.min(i * 4, 12);            // earlier = more specific
+        }
+    });
+    return score;
+}
+
 
 /**
  * Resolve the FilePicker class the way the rest of ace-engine does.
@@ -63,11 +139,10 @@ async function _getFiles(folder) {
         try {
             const result = await FP.browse("data", path);
             const all = result.files || [];
-            const files = all.filter(f => {
-                if (!/\.(mp3|wav|ogg|flac|webm)$/i.test(f)) return false;
-                const name = f.split("/").pop();
-                return !EXCLUDE_RE.test(name);
-            });
+            // Keep every audio file — scoring picks the winner at play time, so
+            // a clip is judged against the creature asking for it rather than
+            // against a fixed list.
+            const files = all.filter(f => /\.(mp3|wav|ogg|flac|webm)$/i.test(f));
             if (files.length) {
                 _fileCache.set(cacheKey, { files, ts: now });
                 return files;
@@ -75,8 +150,8 @@ async function _getFiles(folder) {
             // Folder exists but yielded nothing — say WHICH of the two it was,
             // because "no files" and "every file filtered out" need different
             // fixes and used to look identical.
-            console.warn(`${TAG} | "${path}" holds ${all.length} entr${all.length === 1 ? "y" : "ies"} but 0 usable creature sounds` +
-                (all.length ? " — wrong extension, or the name matched the exclude filter (walking/footstep/loop/ambient/…)." : " — the folder is empty."));
+            console.warn(`${TAG} | "${path}" holds ${all.length} entr${all.length === 1 ? "y" : "ies"} but no audio files` +
+                (all.length ? " — accepted extensions are .mp3 .wav .ogg .flac .webm." : " — the folder is empty."));
         } catch (err) {
             lastErr = err;
         }
@@ -326,37 +401,54 @@ const MAX_CREATURE_SFX_SECONDS = 2.5;
  * @param {number} pitch   playbackRate multiplier (0.7 = deep, 1.0 = normal)
  * @returns {Promise<boolean>} true if a sound was played
  */
-export async function playCreatureSound(folder, pitch = 1.0) {
+export async function playCreatureSound(folder, pitch = 1.0, affinities = []) {
     // Accepts a single folder or an ordered candidate list. Falls through to the
-    // next candidate when one is empty, so a partly-stocked library still makes
-    // noise instead of the creature going mute.
+    // next candidate when one has nothing PLAYABLE — a folder full of footstep
+    // clips is as useless as an empty one, so "has files" is not the test.
     const candidates = Array.isArray(folder) ? folder.filter(Boolean) : [folder].filter(Boolean);
-    let files = [];
+    const affin = (Array.isArray(affinities) ? affinities : [affinities])
+        .filter(Boolean).map(a => String(a).toLowerCase());
+
+    let ranked = [];
     let used = null;
+    let sawFiles = 0;
     for (const c of candidates) {
-        files = await _getFiles(c);
-        if (files.length) { used = c; break; }
+        const files = await _getFiles(c);
+        sawFiles += files.length;
+        // Score every file for THIS creature, drop the disqualified.
+        const scored = files
+            .map(f => ({ f, score: scoreCreatureSound(f, [...affin, c]) }))
+            .filter(x => x.score >= 0)
+            .sort((a, b) => b.score - a.score);
+        if (scored.length) { ranked = scored; used = c; break; }
     }
-    if (!files.length) {
-        console.warn(`${TAG} | No creature sounds available for ${candidates.map(c => `"${c}"`).join(" → ") || "(no folder)"}. ` +
-            `Drop .mp3/.wav/.ogg files into modules/${MODULE_ID}/sounds/creatures/<folder>/ and they are picked up within 2 minutes.`);
+
+    if (!ranked.length) {
+        console.warn(`${TAG} | No usable creature VOICE in ${candidates.map(c => `"${c}"`).join(" → ") || "(no folder)"}` +
+            (sawFiles ? ` — ${sawFiles} audio file(s) were found but every one scored as a non-voice (footsteps, impacts, doors, music). ` +
+                        `Run game.modules.get("${MODULE_ID}").api.auditCreatureSounds() to see the scores.`
+                      : ` — drop .mp3/.wav/.ogg clips into modules/${MODULE_ID}/sounds/creatures/<folder>/.`));
         return false;
     }
     folder = used;
 
-    // Pick random, avoiding immediate repeat
+    // Play from the BEST tier only. Everything sharing the top score is fair
+    // game, so a well-stocked folder still varies instead of repeating one clip.
+    const top = ranked[0].score;
+    const best = ranked.filter(x => x.score === top).map(x => x.f);
+
     let src;
     const last = _lastPlayed.get(folder);
-    if (files.length === 1) {
-        src = files[0];
+    if (best.length === 1) {
+        src = best[0];
     } else {
         do {
-            src = files[Math.floor(Math.random() * files.length)];
-        } while (src === last && files.length > 1);
+            src = best[Math.floor(Math.random() * best.length)];
+        } while (src === last && best.length > 1);
     }
     _lastPlayed.set(folder, src);
 
-    console.log(`ACE: Engine | Creature sound: ${src} (pitch ${pitch})`);
+    console.log(`${TAG} | Creature sound: ${src.split("/").pop()} (score ${top}, chosen from ${best.length} of ${ranked.length} usable, pitch ${pitch})`);
 
     // Broadcast to other clients — send file path + pitch + duration cap
     try {
@@ -382,4 +474,44 @@ export async function playCreatureSound(folder, pitch = 1.0) {
     }
 
     return true;
+}
+
+
+/**
+ * Print what the scorer thinks of every clip you have, folder by folder.
+ *
+ * Built because Johnny bulk-downloaded a giant pack where half the files were
+ * doors, cymbals and footsteps — and there was no way to see that from inside
+ * Foundry. Run it after adding sounds; anything marked REJECTED will never play
+ * and can be deleted.
+ *
+ *   game.modules.get("ace-engine").api.auditCreatureSounds()
+ */
+export async function auditCreatureSounds(folders = null) {
+    const list = folders ?? [
+        "beast", "construct", "dragon", "elemental", "fiend", "flying",
+        "generic", "giant", "goblinoid", "insect", "monster", "ooze",
+        "serpent", "swarm", "undead",
+    ];
+    const summary = [];
+    for (const folder of list) {
+        const files = await _getFiles(folder);
+        if (!files.length) { summary.push({ folder, total: 0, usable: 0, rejected: 0 }); continue; }
+        const rows = files.map(f => ({
+            file: f.split("/").pop(),
+            score: scoreCreatureSound(f, [folder]),
+        })).sort((a, b) => b.score - a.score);
+        const usable = rows.filter(r => r.score >= 0);
+        console.groupCollapsed(`${TAG} | ${folder} — ${usable.length} usable / ${rows.length} files`);
+        console.table(rows.map(r => ({
+            file: r.file,
+            verdict: r.score < 0 ? "REJECTED (not a voice)" : r.score >= 20 ? "BEST MATCH" : "usable",
+            score: r.score,
+        })));
+        console.groupEnd();
+        summary.push({ folder, total: rows.length, usable: usable.length, rejected: rows.length - usable.length });
+    }
+    console.log(`${TAG} | Creature sound audit — folders with NO usable voice will fall back to monster/generic:`);
+    console.table(summary);
+    return summary;
 }
