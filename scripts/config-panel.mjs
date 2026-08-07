@@ -129,8 +129,15 @@ const TABS = [
     },
     {
         id: "memory", label: "Memory & World", icon: "fa-solid fa-book",
-        intro: "Story notes, fame & reputation, subtle rolls, survival tracker, narrative time.",
-        keys: ["enableStoryNotes", "enableFameSystem", "enableNarrativeTime", "syncSimpleCalendar", "enableReputation", "enableDispositionTags", "enableSubtleRolls", "subtleRollSkills", "subtleRollAutoDetect", "subtleNarrationLength", "enableCritFumble", "enableSurvivalTracker"],
+        intro: "Story notes, fame & reputation, subtle rolls, survival tracker, narrative time — and the world backup system.",
+        // ⚠️ THE TWO BACKUP KEYS WERE REGISTERED BUT SURFACED NOWHERE (2026-08-07).
+        // Both were authored with a user-facing name and hint ("Backups — Enable
+        // Triple-Backup System", "Backups — External Mirror Instructions"), and
+        // neither appeared on Foundry's settings page (this module hides
+        // everything there by design) NOR in this panel. So the GM had no way to
+        // see whether their world was being backed up, or to turn it off. For
+        // the subsystem Johnny cares most about, being invisible is its own bug.
+        keys: ["enableStoryNotes", "enableFameSystem", "enableNarrativeTime", "syncSimpleCalendar", "enableReputation", "enableDispositionTags", "enableSubtleRolls", "subtleRollSkills", "subtleRollAutoDetect", "subtleNarrationLength", "enableCritFumble", "enableSurvivalTracker", "memorySyncEnabled", "memorySyncExternalPath"],
     },
     {
         id: "docs", label: "Document Library", icon: "fa-solid fa-scroll",

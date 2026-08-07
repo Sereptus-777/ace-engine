@@ -414,13 +414,17 @@ async function _doWrite() {
 /**
  * Is the triple-backup system switched on?
  *
- * ⚠️ THE TOGGLE WAS DECORATIVE (fixed 2026-08-06). `memorySyncEnabled` is shown
- * to the GM as "Backups — Enable Triple-Backup System", and NOTHING read it.
- * Every writer called requestSync() unconditionally, so turning it OFF did not
- * stop backups and turning it ON granted nothing. On a setting about BACKUPS
- * that is the worst kind of lie: a GM who switches it off believes their world
- * has stopped being copied, and one who switches it on believes they have just
- * protected it. Found by auditing which registered settings are never read.
+ * ⚠️ THE TOGGLE WAS DECORATIVE, AND INVISIBLE (2026-08-06/07).
+ * `memorySyncEnabled` is registered with a user-facing name — "Backups — Enable
+ * Triple-Backup System" — and NOTHING read it. Every writer called requestSync()
+ * unconditionally, so the switch did nothing in either direction.
+ *
+ * Correction to my own first note on this: I wrote that it "is shown to the GM".
+ * It was not. This module hides every setting from Foundry's own page by design
+ * (config defaults to VISIBLE_IN_MAIN_CONFIG.has(key)), and it was absent from
+ * the ACE config panel too — so it was registered, named, hinted, unread AND
+ * unreachable. For the subsystem Johnny cares most about, invisible is its own
+ * bug. Both backup keys now appear on the Memory & World tab.
  *
  * Defaults to ON when unreadable — losing backups is far worse than an extra
  * write, so the failure direction is deliberate.
