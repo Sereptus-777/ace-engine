@@ -1,0 +1,22 @@
+ACE Engine — Creature SFX provenance
+====================================
+
+All sound files in these creature folders that are prefixed with "fs_"
+were sourced from Freesound (https://freesound.org) and are licensed
+under Creative Commons 0 (CC0 1.0 / Public Domain Dedication).
+
+CC0 means:
+  - No rights reserved. Free for commercial use.
+  - No attribution required.
+  - Safe to redistribute as part of a paid module.
+
+Filenames encode the Freesound sound ID:  fs_<id>_<name>.mp3
+Full provenance (id, original name, author, duration) is in:
+  creature-sound-manifest.csv
+
+Files were fetched as Freesound "HQ MP3" quality via the Freesound API,
+filtered to license:"Creative Commons 0".
+
+Note: any files in these folders WITHOUT the "fs_" prefix pre-existed and
+were not added by this process — verify their licensing separately before
+shipping.

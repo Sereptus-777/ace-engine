@@ -1,0 +1,62 @@
+CREATURE SOUND SCAN — what a player ACTUALLY HEARS
+
+The engine plays only the first 2.5 seconds of any clip, so that is
+what was measured. A long file that opens with room tone plays as nothing,
+however loud it gets later.
+
+671 files scanned — 657 work, 14 do not.
+NOTHING HAS BEEN DELETED. This is a list.
+==============================================================================
+
+PER FOLDER
+  beast         64 usable /  66
+  construct     27 usable /  27
+  dragon        27 usable /  29
+  elemental     66 usable /  67
+  fiend         27 usable /  27
+  flying        40 usable /  42
+  generic       29 usable /  29
+  giant         31 usable /  31
+  goblinoid     37 usable /  37
+  insect        43 usable /  46
+  monster       44 usable /  44
+  ooze          76 usable /  76
+  serpent       51 usable /  51
+  swarm         28 usable /  29
+  undead        67 usable /  70
+
+==============================================================================
+
+── STARTS TOO LATE  (1)  →  TRIM THE FRONT — these are good clips, just late
+
+   flying/fs_838963_condor_scream.mp3
+        sound begins at 2.5s — nothing in the first 2.5s. Trim the front and it is fine.
+
+── TOO QUIET  (13)  →  delete, or normalise
+
+   beast/fs_389614_growl_5.mp3
+        first 2.5s peaks at -37.8 dB — lost under speech
+   beast/fs_389616_growl_3.mp3
+        first 2.5s peaks at -44.6 dB — lost under speech
+   dragon/fs_389614_growl_5.mp3
+        first 2.5s peaks at -37.8 dB — lost under speech
+   dragon/fs_389616_growl_3.mp3
+        first 2.5s peaks at -44.6 dB — lost under speech
+   elemental/intro-wind.mp3
+        first 2.5s peaks at -36.6 dB — lost under speech
+   flying/fs_389633_wing_flap_2_wav.mp3
+        first 2.5s peaks at -35.7 dB — lost under speech
+   insect/fs_711919_animal_crossing_animals_chittering.mp3
+        first 2.5s peaks at -35.3 dB — lost under speech
+   insect/fs_824923_cicadas_close.mp3
+        first 2.5s peaks at -41.6 dB — lost under speech
+   insect/fs_824924_cicadas_w_breeze.mp3
+        first 2.5s peaks at -41.1 dB — lost under speech
+   swarm/fs_564499_buzzing_insect_wav.mp3
+        first 2.5s peaks at -35.4 dB — lost under speech
+   undead/fs_204965_scary_moan2_wav.mp3
+        first 2.5s peaks at -38.8 dB — lost under speech
+   undead/fs_763923_creahmn_crowd_of_zombies_groaning_increa.mp3
+        first 2.5s peaks at -40.6 dB — lost under speech
+   undead/fs_764032_creahmn_crowd_of_zombies_groaning_increa.mp3
+        first 2.5s peaks at -36.9 dB — lost under speech

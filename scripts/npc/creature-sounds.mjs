@@ -61,6 +61,17 @@ const NOT_VOICE_WORDS = [
     "ambien", "wind", "rain", "fire_crackle", "water", "cartoon", "sci_fi",
     "scifi", "light_saber", "lightsaber", "singing", "song", "speech",
     "dialogue", "narration", "silence", "test", "untitled",
+    // ⚠️ NEVER AT SOMEONE'S TABLE. A bulk sound download drags in things nobody
+    // inspected; "ghost_sex_moaning_1.mp3" was sitting in the undead TOP TIER,
+    // one roll away from playing in front of a family group. Scored -1 on the
+    // name alone, so no amount of good luck is required. (2026-08-06)
+    "sex", "porn", "orgasm", "erotic", "nsfw", "moaning_woman", "moaning_man",
+    // ⚠️ BRANDED AUDIO IS A LICENSING PROBLEM ON A PAID MODULE. A file named
+    // for a commercial game is very likely ripped from it. Refusing to PLAY it
+    // is not a licence — the file still has to be deleted — but it stops a rip
+    // reaching a customer while the library is being cleaned up.
+    "animal_crossing", "zelda", "mario", "skyrim", "minecraft", "pokemon",
+    "witcher", "warcraft", "diablo", "elden_ring", "dark_souls", "fortnite",
 ];
 
 /**

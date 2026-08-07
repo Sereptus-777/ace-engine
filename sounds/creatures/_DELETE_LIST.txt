@@ -1,0 +1,13 @@
+beast/fs_389614_growl_5.mp3
+beast/fs_389616_growl_3.mp3
+dragon/fs_389614_growl_5.mp3
+dragon/fs_389616_growl_3.mp3
+elemental/intro-wind.mp3
+flying/fs_389633_wing_flap_2_wav.mp3
+insect/fs_711919_animal_crossing_animals_chittering.mp3
+insect/fs_824923_cicadas_close.mp3
+insect/fs_824924_cicadas_w_breeze.mp3
+swarm/fs_564499_buzzing_insect_wav.mp3
+undead/fs_204965_scary_moan2_wav.mp3
+undead/fs_763923_creahmn_crowd_of_zombies_groaning_increa.mp3
+undead/fs_764032_creahmn_crowd_of_zombies_groaning_increa.mp3

@@ -1,0 +1,417 @@
+WHAT WILL ACTUALLY BE HEARD
+
+Only the highest-scoring clips in a folder ever play. This lists them.
+Audit THESE by ear — the rest never reach a player, whatever they sound like.
+==============================================================================
+
+── BEAST  —  65 usable of 66
+   PLAYS (score 30) — 6 clip(s):
+      ♪  aggressive-beast-roar.mp3
+      ♪  beast-long-roar.mp3
+      ♪  beast-roar-echo.mp3
+      ♪  fs_342204_beast_snarling.mp3
+      ♪  mythical-beast-growl.mp3
+      ♪  wild-beast-roar.mp3
+   held in reserve (59) — only used if a creature name matches them:
+          10  angry-monster-growl.mp3
+          10  angry-monster-scream.mp3
+          10  big-lion-growl.mp3
+          10  calm-growl.mp3
+          10  creature-breath.wav
+          10  creature-breathing.mp3
+          10  creature-cry-hurt.mp3
+          10  creature-growl.wav
+         … and 51 more
+   rejected by name (1) — never play, safe to delete
+
+── CONSTRUCT  —  7 usable of 27
+   PLAYS (score 0) — 7 clip(s):
+      ♪  cave-in.mp3
+      ♪  fs_222521_cracking_earthquake_cracking_soil_cracki.mp3
+      ♪  fs_388552_bmb1_wav.mp3
+      ♪  fs_418790_antique_coffee_grinder_with_beans.mp3
+      ♪  fs_83882_gearwinedsnd_wav.mp3
+      ♪  rock-slide.mp3
+      ♪  rockslide-small.mp3
+   rejected by name (20) — never play, safe to delete
+
+── DRAGON  —  29 usable of 29
+   PLAYS (score 30) — 17 clip(s):
+      ♪  angry-dragon-growl.mp3
+      ♪  big-dragon-roar.mp3
+      ♪  dragon-roar-fire.mp3
+      ♪  fs_203105_dragon_roar.mp3
+      ♪  fs_315813_dragon_roar_slow_2_aiff.mp3
+      ♪  fs_315814_dragon_roar_mild_2_aiff.mp3
+      ♪  fs_315816_dragon_roar_slow_1_aiff.mp3
+      ♪  fs_315817_dragon_roar_mild_12_aiff.mp3
+      ♪  fs_315819_dragon_roar_mild_14_aiff.mp3
+      ♪  fs_315820_dragon_roar_mild_13_aiff.mp3
+      ♪  fs_315821_dragon_roar_mild_16_aiff.mp3
+      ♪  fs_315822_dragon_roar_mild_15_aiff.mp3
+      ♪  fs_320345_dino_hiss_dragon_roar.mp3
+      ♪  fs_442964_dragon_roar.mp3
+      ♪  fs_532155_mighty_dragon_roaring.mp3
+      ♪  fs_546391_dragon_roar_wav.mp3
+      ♪  fs_85568_dragon_roar_wav.mp3
+   held in reserve (12) — only used if a creature name matches them:
+          10  dinosaur-roar.mp3
+          10  fs_389610_growl_1.mp3
+          10  fs_389614_growl_5.mp3
+          10  fs_389615_growl_4.mp3
+          10  fs_389616_growl_3.mp3
+          10  fs_389617_growl_2.mp3
+          10  fs_389637_growl_8_wav.mp3
+          10  fs_389639_growl_6.mp3
+         … and 4 more
+
+── ELEMENTAL  —  44 usable of 67
+   PLAYS (score 10) — 8 clip(s):
+      ♪  fs_51098_sounds_for_earthquakes_closet_shaking_wa.mp3
+      ♪  fs_51099_sounds_for_earthquakes_closet_shaking_2_.mp3
+      ♪  fs_51109_sounds_for_earthquakes_paper_wav.mp3
+      ♪  fs_51110_sounds_for_earthquakes_plastic_wav.mp3
+      ♪  fs_51111_sounds_for_earthquakes_plastic_2_wav.mp3
+      ♪  fs_51112_sounds_for_earthquakes_plastic_3_wav.mp3
+      ♪  fs_51113_sounds_for_earthquakes_random_stuff_shak.mp3
+      ♪  fs_51120_sounds_for_earthquakes_textile_wav.mp3
+   held in reserve (36) — only used if a creature name matches them:
+           0  aggressive-fire-flame.mp3
+           0  avalanche.mp3
+           0  big-fire-burning.mp3
+           0  big-fire-flame.mp3
+           0  campfire-burning-crackles.mp3
+           0  cave-in.mp3
+           0  fire-burning.mp3
+           0  fire-explosion.mp3
+         … and 28 more
+   rejected by name (23) — never play, safe to delete
+
+── FIEND  —  27 usable of 27
+   PLAYS (score 10) — 19 clip(s):
+      ♪  demon-breathing.mp3
+      ♪  fs_221520_mocking_demon_laugh_growl_mp3.mp3
+      ♪  fs_362671_demon_ghost_growling_1_amplified_wav.mp3
+      ♪  fs_362672_demon_ghost_growling_1_wav.mp3
+      ♪  fs_414498_demon_monster_awoken.mp3
+      ♪  fs_415182_the_grudge_growl.mp3
+      ♪  fs_444445_demon_growl_for_halloween_spooky_creepy_.mp3
+      ♪  fs_580771_demon_growl_wav.mp3
+      ♪  fs_583402_edsscreamr_mp3.mp3
+      ♪  fs_617683_edscreamr2_mp3.mp3
+      ♪  fs_671187_monster_3.mp3
+      ♪  fs_671188_monster_2.mp3
+      ♪  fs_671189_monster_1.mp3
+      ♪  fs_671191_monster_5.mp3
+      ♪  fs_823848_dsgnvocl_dark_demonic_low_voice_horror_r.mp3
+      ♪  fs_823849_dsgnvocl_dark_demonic_low_voice_horror_r.mp3
+      ♪  fs_823850_dsgnvocl_dark_demonic_low_voice_horror_r.mp3
+      ♪  fs_823851_dsgnvocl_dark_demonic_low_voice_horror_r.mp3
+      ♪  terrifying-breath.mp3
+   held in reserve (8) — only used if a creature name matches them:
+           0  evil-laugh.mp3
+           0  fs_543970_mostunfortunateforyou_wav.mp3
+           0  fs_543971_getoffthemap_wav.mp3
+           0  fs_543973_comeatmebro_wav.mp3
+           0  fs_543974_thereisnoescape_wav.mp3
+           0  fs_543975_thatwasdumb_wav.mp3
+           0  haunting-laugh.wav
+           0  laugh.ogg
+
+── FLYING  —  41 usable of 42
+   PLAYS (score 10) — 15 clip(s):
+      ♪  bald-eagle-call.mp3
+      ♪  eagle-cry.mp3
+      ♪  fs_111244_phoenixscreech1_wav.mp3
+      ♪  fs_436571_corellas_screech_multiple.mp3
+      ♪  fs_436572_corella_screech_x2.mp3
+      ♪  fs_573771_screech_owl_wav.mp3
+      ♪  fs_593487_umbrella_that_sounds_like_bat_wings_wav.mp3
+      ♪  fs_838963_condor_scream.mp3
+      ♪  hawk-call-squawk.mp3
+      ♪  hawk-call.mp3
+      ♪  hawk-screech-valley.mp3
+      ♪  hawk-screeching.mp3
+      ♪  pterodactyl-screech.mp3
+      ♪  screaming-hawk-2.mp3
+      ♪  screaming-hawk.mp3
+   held in reserve (26) — only used if a creature name matches them:
+           0  bald-eagle-2.mp3
+           0  bats-cave.mp3
+           0  cockatoo-squawk.mp3
+           0  eaglet-bird-2.mp3
+           0  eaglet-bird.mp3
+           0  flock-wild-geese.mp3
+           0  fs_19295_wing_flaps_layered_wav.mp3
+           0  fs_244976_wing_flap_flag_flapping_4a.mp3
+         … and 18 more
+   rejected by name (1) — never play, safe to delete
+
+── GENERIC  —  25 usable of 29
+   PLAYS (score 10) — 25 clip(s):
+      ♪  fs_188026_monster_growl_01.mp3
+      ♪  fs_366672_monster_growl_with_reverb_wav.mp3
+      ♪  fs_432195_monster_growl.mp3
+      ♪  fs_432196_monster_growl_confused.mp3
+      ♪  fs_686721_monster_growl_02_m4a.mp3
+      ♪  fs_722984_monster_growl.mp3
+      ♪  fs_722985_monster_growl_2.mp3
+      ♪  fs_77632_growl1_wav.mp3
+      ♪  fs_77634_growl3_wav.mp3
+      ♪  fs_77635_growl4_wav.mp3
+      ♪  fs_803018_creature_monster_alien_vocal_fx_46_wav.mp3
+      ♪  fs_803019_creature_monster_alien_vocal_fx_47_wav.mp3
+      ♪  fs_803020_creature_monster_alien_vocal_fx_48_wav.mp3
+      ♪  fs_803021_creature_monster_alien_vocal_fx_49_wav.mp3
+      ♪  fs_803022_creature_monster_alien_vocal_fx_5_wav.mp3
+      ♪  fs_803023_creature_monster_alien_vocal_fx_50_wav.mp3
+      ♪  fs_803024_creature_monster_alien_vocal_fx_51_wav.mp3
+      ♪  fs_803025_creature_monster_alien_vocal_fx_52_wav.mp3
+      ♪  fs_803026_creature_monster_alien_vocal_fx_53_wav.mp3
+      ♪  fs_803028_creature_monster_alien_vocal_fx_55_wav.mp3
+      ♪  fs_803030_creature_monster_alien_vocal_fx_57_wav.mp3
+      ♪  fs_803031_creature_monster_alien_vocal_fx_58_wav.mp3
+      ♪  fs_803032_creature_monster_alien_vocal_fx_59_wav.mp3
+      ♪  fs_803033_creature_monster_alien_vocal_fx_6_wav.mp3
+      ♪  fs_815482_monster_growl.mp3
+   rejected by name (4) — never play, safe to delete
+
+── GIANT  —  8 usable of 31
+   PLAYS (score 30) — 2 clip(s):
+      ♪  giant-monster-roar.mp3
+      ♪  giant-roar.mp3
+   held in reserve (6) — only used if a creature name matches them:
+          10  big-monster-roar.mp3
+          10  ettin-roar.wav
+          10  fs_315772_dragon_roar_big_angry_aiff.mp3
+          10  fs_466830_dragon_snarl_roar_attack.mp3
+          10  fs_837799_sea_creature_roar.mp3
+           0  fs_564596_ivan_rockanov_wav.mp3
+   rejected by name (23) — never play, safe to delete
+
+── GOBLINOID  —  36 usable of 37
+   PLAYS (score 10) — 16 clip(s):
+      ♪  fs_391223_orc_growl_with_raw_recording_wav.mp3
+      ♪  fs_482338_goblin_creature_1_1.mp3
+      ♪  fs_482343_goblin_creature_1_4.mp3
+      ♪  fs_482344_goblin_creature_1_3.mp3
+      ♪  fs_482345_goblin_creature_1_2.mp3
+      ♪  fs_482346_goblin_creature_1_7.mp3
+      ♪  fs_482347_goblin_creature_1_6.mp3
+      ♪  fs_482357_goblin_creature_1_9.mp3
+      ♪  fs_482358_goblin_creature_1_8.mp3
+      ♪  fs_482363_slimy_creature_1_1.mp3
+      ♪  fs_753942_rodents_eastern_gray_squirrel_bark_and_c.mp3
+      ♪  fs_763329_alien_high_pitch_small_chattering.mp3
+      ♪  fs_796878_rodents_mouse_house_mouse_chatter_close_.mp3
+      ♪  fs_828647_fowl_silver_pheasant_chatter_and_squeal_.mp3
+      ♪  fs_852386_rodents_eastern_gray_squirrel_chatter_cl.mp3
+      ♪  warcry.mp3
+   held in reserve (20) — only used if a creature name matches them:
+           0  come-here.mp3
+           0  fs_202096_goblin_cackle_wav.mp3
+           0  fs_205751_imp_laugh.mp3
+           0  fs_402072_you_shall_not_pass_said_by_an_orc.mp3
+           0  fs_482340_angry_goblin_1_2.mp3
+           0  fs_482341_angry_goblin_1_1.mp3
+           0  fs_554043_chipmunk_rodent_rat_squirrel_angry_or_ch.mp3
+           0  fs_616813_imp_giggle_4_ogg.mp3
+         … and 12 more
+   rejected by name (1) — never play, safe to delete
+
+── INSECT  —  44 usable of 46
+   PLAYS (score 30) — 2 clip(s):
+      ♪  fs_417299_insect_chittering_wav.mp3
+      ♪  fs_800277_insect_animal_growl_chitter.mp3
+   held in reserve (42) — only used if a creature name matches them:
+          20  fs_125638_insects_noise_001_wav.mp3
+          20  fs_125640_insects_noise_003_wav.mp3
+          20  fs_125641_insects_noise_004_wav.mp3
+          20  fs_125642_insects_noise_005_wav.mp3
+          20  fs_125643_insects_noise_006_wav.mp3
+          20  fs_125644_insects_noise_007_wav.mp3
+          20  fs_125645_insects_noise_008_wav.mp3
+          20  fs_125646_insects_noise_009_wav.mp3
+         … and 34 more
+   rejected by name (2) — never play, safe to delete
+
+── MONSTER  —  40 usable of 44
+   PLAYS (score 30) — 22 clip(s):
+      ♪  fs_132866_monster_long_roar_1_wav.mp3
+      ♪  fs_132867_monster_long_roar_2_wav.mp3
+      ♪  fs_132871_monster_low_roar_wav.mp3
+      ♪  fs_132874_monster_short_roar_wav.mp3
+      ♪  fs_188026_monster_growl_01.mp3
+      ♪  fs_261147_monster_roar_in_distance_mp3.mp3
+      ♪  fs_366672_monster_growl_with_reverb_wav.mp3
+      ♪  fs_432195_monster_growl.mp3
+      ♪  fs_432196_monster_growl_confused.mp3
+      ♪  fs_442198_monster_snarls_ogg.mp3
+      ♪  fs_443131_monster_snarls_2.mp3
+      ♪  fs_443403_monster_snarls_3.mp3
+      ♪  fs_443404_monster_snarls_4.mp3
+      ♪  fs_443405_monster_snarl_5_ogg.mp3
+      ♪  fs_467287_space_monster_roar_mp3.mp3
+      ♪  fs_487513_monster_roar.mp3
+      ♪  fs_489901_scary_monster_roar_2.mp3
+      ♪  fs_686721_monster_growl_02_m4a.mp3
+      ♪  fs_722984_monster_growl.mp3
+      ♪  fs_722985_monster_growl_2.mp3
+      ♪  fs_726877_giant_insect_monster_roaring_sound.mp3
+      ♪  fs_815482_monster_growl.mp3
+   held in reserve (18) — only used if a creature name matches them:
+          10  fs_240311_nemean_roar_wav.mp3
+          10  fs_261150_roar_wav.mp3
+          10  fs_345731_deep_roar_burp_wav.mp3
+          10  fs_345735_deep_roar_echo_2_wav.mp3
+          10  fs_345736_npx_deep_roar_echo_1_wav.mp3
+          10  fs_354182_creature_roar.mp3
+          10  fs_366837_growl_and_roar.mp3
+          10  fs_413826_chicken_scream_roar.mp3
+         … and 10 more
+   rejected by name (4) — never play, safe to delete
+
+── OOZE  —  69 usable of 76
+   PLAYS (score 10) — 2 clip(s):
+      ♪  creepy-creature.mp3
+      ♪  zombie-breath-goo.mp3
+   held in reserve (67) — only used if a creature name matches them:
+           0  blood-squirt.mp3
+           0  bubbles.mp3
+           0  bubbling.mp3
+           0  fishtank-bubbles.mp3
+           0  fs_134710_squishy_splat_wav.mp3
+           0  fs_147017_splat.mp3
+           0  fs_200288_gretzos2_wav.mp3
+           0  fs_433824_slime_4_wav.mp3
+         … and 59 more
+   rejected by name (7) — never play, safe to delete
+
+── SERPENT  —  44 usable of 51
+   PLAYS (score 10) — 26 clip(s):
+      ♪  alligator-hiss.mp3
+      ♪  angry-hiss.mp3
+      ♪  fs_241562_hiss_wav.mp3
+      ♪  fs_269111_hissing.mp3
+      ♪  fs_320345_dino_hiss_dragon_roar.mp3
+      ♪  fs_343927_hiss2_wav.mp3
+      ♪  fs_343928_hiss3_wav.mp3
+      ♪  fs_406089_hissing_sound_wav.mp3
+      ♪  fs_423454_snarling_snake.mp3
+      ♪  fs_494751_happy_and_sad_flower_creatures_mp3.mp3
+      ♪  fs_516697_beast_basilisk_zombie_horde_wav.mp3
+      ♪  fs_553374_snake_hiss.mp3
+      ♪  fs_560773_siseo_hiss.mp3
+      ♪  fs_578482_hisss_3_m4a.mp3
+      ♪  fs_578483_hisss_m4a.mp3
+      ♪  fs_578484_hisss_2_m4a.mp3
+      ♪  fs_673425_monster_hiss.mp3
+      ♪  fs_678971_snake_tongue_hiss_wav.mp3
+      ♪  fs_706977_angry_snake_hissing_owi_wav.mp3
+      ♪  fs_719670_small_animal_growls.mp3
+      ♪  fs_725181_cat_hissing.mp3
+      ♪  fs_733253_monster.mp3
+      ♪  fs_758900_insects_madagascar_hissing_cockroach_sho.mp3
+      ♪  fs_760813_outdated_monster_sound_effect_4.mp3
+      ♪  fs_760827_universal_studios_monster_sound_6_hiss.mp3
+      ♪  monster-hiss.mp3
+   held in reserve (18) — only used if a creature name matches them:
+           0  fs_249706_3_egg_shaker_rolls.mp3
+           0  fs_387215_rattles_wav.mp3
+           0  fs_448035_cascavel_wav.mp3
+           0  fs_481824_r09_55_struggle_in_dirt_wav.mp3
+           0  fs_491419_elliot_hughes_bird_chirps_wav.mp3
+           0  fs_514235_sivaloganathan_virginie_2019_2020_rattle.mp3
+           0  fs_559759_edited_3_rattlesnake_wav.mp3
+           0  fs_578799_rattle_4.mp3
+         … and 10 more
+   rejected by name (7) — never play, safe to delete
+
+── SWARM  —  26 usable of 29
+   PLAYS (score 20) — 5 clip(s):
+      ♪  bee-buzz-swarm.mp3
+      ♪  big-bee-swarm.mp3
+      ♪  fly-buzzing-swarm.mp3
+      ♪  mosquito-swarm.mp3
+      ♪  swarm.mp3
+   held in reserve (21) — only used if a creature name matches them:
+           0  annoying-mosquito.mp3
+           0  crickets-wild.mp3
+           0  flickering-insect.mp3
+           0  flies-buzzing.mp3
+           0  fs_390733_buzzing_insect_short_mp3.mp3
+           0  fs_435589_wasp_buzzing_building_nest_sceliphron.mp3
+           0  fs_531235_shitflies_wav.mp3
+           0  fs_564499_buzzing_insect_wav.mp3
+         … and 13 more
+   rejected by name (3) — never play, safe to delete
+
+── UNDEAD  —  65 usable of 70
+   PLAYS (score 10) — 51 clip(s):
+      ♪  death-sound.mp3
+      ♪  death-voice.mp3
+      ♪  enemy-death-voice.mp3
+      ♪  female-scream-horror.mp3
+      ♪  frightening-zombie-roar.mp3
+      ♪  fs_204820_zombie_growl_02.mp3
+      ♪  fs_204821_zombie_growl_01.mp3
+      ♪  fs_204962_creepymoan_wav.mp3
+      ♪  fs_204963_scary_breath_wav.mp3
+      ♪  fs_204965_scary_moan2_wav.mp3
+      ♪  fs_204966_creepy_moan_wav.mp3
+      ♪  fs_267179_scary_ghost_wolf_howling_wav.mp3
+      ♪  fs_329518_ghost_moan_2_wav.mp3
+      ♪  fs_329519_ghost_moan_1_wav.mp3
+      ♪  fs_377737_female_groaning_creepy.mp3
+      ♪  fs_442123_zombie_moans_ogg.mp3
+      ♪  fs_473525_groan_mp3.mp3
+      ♪  fs_495687_moaning_ghost.mp3
+      ♪  fs_555413_zombie_growl_4_wav.mp3
+      ♪  fs_555414_zombie_growl_3_wav.mp3
+      ♪  fs_555415_zombie_growl_2_wav.mp3
+      ♪  fs_555416_zombie_growl_1_wav.mp3
+      ♪  fs_555417_zombie_growl_5_wav.mp3
+      ♪  fs_643741_ghostly_moan_mp3.mp3
+      ♪  fs_733926_ghost_sex_moaning_1.mp3
+      ♪  fs_754438_zombie_groan_0.mp3
+      ♪  fs_754439_zombie_groan_1.mp3
+      ♪  fs_754440_zombie_groan_2.mp3
+      ♪  fs_754441_zombie_groan_3.mp3
+      ♪  fs_763805_creahmn_crowd_of_zombies_groaning_shanev.mp3
+      ♪  fs_763806_creahmn_crowd_of_zombies_groaning_increa.mp3
+      ♪  fs_763922_creahmn_crowd_of_zombies_groaning_shanev.mp3
+      ♪  fs_763923_creahmn_crowd_of_zombies_groaning_increa.mp3
+      ♪  fs_764031_creahmn_crowd_of_zombies_groaning_shanev.mp3
+      ♪  fs_764032_creahmn_crowd_of_zombies_groaning_increa.mp3
+      ♪  fs_764140_creahmn_crowd_of_zombies_groaning_shanev.mp3
+      ♪  fs_764141_creahmn_crowd_of_zombies_groaning_increa.mp3
+      ♪  fs_764249_creahmn_crowd_of_zombies_groaning_shanev.mp3
+      ♪  fs_764250_creahmn_crowd_of_zombies_groaning_increa.mp3
+      ♪  fs_804461_zombie_growl_2.mp3
+      ♪  groan.mp3
+      ♪  hell-sound.mp3
+      ♪  moaning.mp3
+      ♪  psycho-scream.mp3
+      ♪  scary-scream.mp3
+      ♪  zombie-breath-fx.mp3
+      ♪  zombie-breath.mp3
+      ♪  zombie-growl-deep.mp3
+      ♪  zombie-growl-fx.mp3
+      ♪  zombie-growl.mp3
+      ♪  zombie-moan.mp3
+   held in reserve (14) — only used if a creature name matches them:
+           0  death-enemy.mp3
+           0  fs_202102_rattling_bones_wav.mp3
+           0  fs_210829_ghost_tease_wav.mp3
+           0  fs_445981_tibetan_zombie_monk.mp3
+           0  fs_473526_bones_mp3.mp3
+           0  fs_642872_coffin1_ogg.mp3
+           0  fs_642873_coffin2_ogg.mp3
+           0  fs_642949_coffin3_ogg.mp3
+         … and 6 more
+   rejected by name (5) — never play, safe to delete
+
+==============================================================================
+671 files · 570 pass the name filter · 223 are in a top tier
+
+So there are roughly 223 clips to actually listen to, not 671.
