@@ -117,6 +117,10 @@ export function activateNpcChat() {
         // can ask the GM to choose. Neither existed until 2026-08-06, so a
         // roar only ever played on the machine that picked it.
         import("./creature-sounds.mjs").then(({ wireCreatureSoundSocket }) => wireCreatureSoundSocket()),
+        // Five NPC socket messages had no receiver at all — most importantly
+        // ollamaRequest, which left players on a local-AI world unable to get
+        // any NPC reply. Audited 2026-08-06.
+        import("./npc-socket-router.mjs").then(({ wireNpcSocketRouter }) => wireNpcSocketRouter()),
     ]).catch(err => console.error(`${TAG} | NPC chat dynamic module load failed (core hooks remain active):`, err));
 }
 
