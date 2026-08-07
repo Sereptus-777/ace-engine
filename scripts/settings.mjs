@@ -560,6 +560,18 @@ export class AceSettings {
     // VIRTUAL channel carrying no audio (measured peak 2 of 128), so the
     // recogniser listened to silence and looked broken. Anyone with Voicemeeter,
     // OBS or NVIDIA Broadcast can hit the same thing.
+    // ── Speaking-portrait listing, same pattern as the sounds (2026-08-07) ──
+    // The old probe created an <img> per candidate and let it 404, which put
+    // three red errors in every player's console every time a conversation
+    // opened. Foundry forbids players from listing files, so they cannot check
+    // first — the GM publishes the folder's contents here and everyone reads it.
+    s("speakingWebpIndex", {
+      scope: "world",
+      config: false,
+      type: Object,
+      default: {},
+    });
+
     // ── The creature-sound index, resolved ONCE and shared (2026-08-07) ──
     // Foundry forbids players from listing files at all:
     //   "You do not have permission to browse the host file system!"

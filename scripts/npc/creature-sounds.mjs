@@ -195,6 +195,41 @@ async function _getFiles(folder) {
 }
 
 /**
+ * Publish the speaking-portrait (.webp) folder listing.
+ *
+ * Same problem as the sounds, same cure. The conversation window used to probe
+ * for "<name>.webp" by creating an <img> and seeing whether it errored — which
+ * printed a red 404 per candidate, three per conversation, in every player's
+ * console. Players cannot list files to check first, so the GM publishes the
+ * folder contents once and every client reads it.
+ */
+export async function rebuildSpeakingWebpIndex() {
+    if (!game.user?.isGM) return null;
+    let folder = "NPCs/webps";
+    try { folder = (game.settings.get(MODULE_ID, "npcWebpFolder") || folder); } catch (_) {}
+    folder = String(folder).replace(/^\/+|\/+$/g, "");
+
+    const FP = _filePicker();
+    if (!FP?.browse) return null;
+    try {
+        const res = await FP.browse("data", folder);
+        // Store bare lowercase stems — the lookup is by creature name.
+        const stems = (res.files || [])
+            .filter(f => /\.webp$/i.test(f))
+            .map(f => decodeURIComponent(f.split("/").pop()).replace(/\.webp$/i, "").toLowerCase());
+        const idx = { folder, stems, _builtAt: Date.now() };
+        await game.settings.set(MODULE_ID, "speakingWebpIndex", idx);
+        console.log(`${TAG} | Speaking-portrait index published: ${stems.length} .webp file(s) in "${folder}".`);
+        return idx;
+    } catch (err) {
+        // An absent folder is normal — most tables have no speaking portraits.
+        console.log(`${TAG} | No speaking-portrait folder at "${folder}" (that is fine — the feature is optional).`);
+        try { await game.settings.set(MODULE_ID, "speakingWebpIndex", { folder, stems: [], _builtAt: Date.now() }); } catch (_) {}
+        return null;
+    }
+}
+
+/**
  * Publish one folder's listing to world data so players can read it.
  * GM-only — only a GM may write a world setting. Skips the write when the
  * listing has not changed, so this costs nothing on the common path.

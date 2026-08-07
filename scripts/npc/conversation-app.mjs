@@ -1415,6 +1415,32 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             candidates.push(`${folder}/${encodeURIComponent(name)}.webp`);
         }
 
+        // ── CONSULT THE INDEX FIRST — no probing, no 404s (2026-08-07) ──────
+        // The probe below creates an <img> per candidate and lets it fail, which
+        // printed three red 404s in every player's console on every conversation
+        // open. When the GM has published the folder listing we can just LOOK,
+        // and nobody sees an error for a file that was never expected to exist.
+        let _indexed = null;
+        try {
+            const wi = game.settings.get(MODULE_ID, "speakingWebpIndex");
+            if (wi?.stems?.length) {
+                const stems = new Set(wi.stems);
+                for (const name of [tokenName, actorName, subtype, type]) {
+                    const n = String(name || "").trim().toLowerCase();
+                    if (n && stems.has(n)) {
+                        _indexed = `${wi.folder || folder}/${encodeURIComponent(name)}.webp`;
+                        break;
+                    }
+                }
+                // The index exists and holds no match — that is a definitive NO.
+                // Probing anyway would only manufacture 404s.
+                this._speakingWebpSrc = _indexed;
+                if (_indexed) console.log(`ACE: Engine | Conversation | Speaking WebP (from index): ${decodeURIComponent(_indexed)}`);
+                else console.log(`ACE: Engine | Conversation | No speaking WebP for ${tokenName || actorName} (checked the index — nothing probed).`);
+                candidates.length = 0;   // skip the probe entirely
+            }
+        } catch (_) { /* no index yet — fall through to the old probe */ }
+
         if (candidates.length) {
             try {
                 this._speakingWebpSrc = await Promise.any(
