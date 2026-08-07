@@ -112,6 +112,11 @@ export function activateNpcChat() {
         // "Thalgar Stonehide". Feature-detected — logs and no-ops if this
         // Foundry build doesn't expose the directory matcher.
         import("./npc-sidebar-search.mjs").then(({ installNpcSidebarSearch }) => installNpcSidebarSearch()),
+        // Creature sounds need a socket listener on EVERY client: one to play
+        // what another client chose, one so a player (who cannot list files)
+        // can ask the GM to choose. Neither existed until 2026-08-06, so a
+        // roar only ever played on the machine that picked it.
+        import("./creature-sounds.mjs").then(({ wireCreatureSoundSocket }) => wireCreatureSoundSocket()),
     ]).catch(err => console.error(`${TAG} | NPC chat dynamic module load failed (core hooks remain active):`, err));
 }
 

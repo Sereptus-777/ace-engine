@@ -412,7 +412,77 @@ const MAX_CREATURE_SFX_SECONDS = 2.5;
  * @param {number} pitch   playbackRate multiplier (0.7 = deep, 1.0 = normal)
  * @returns {Promise<boolean>} true if a sound was played
  */
+/**
+ * PLAY A BROADCAST CLIP. Registered on every client, once.
+ *
+ * ⚠️ THIS LISTENER DID NOT EXIST (found 2026-08-06 from Johnny's console).
+ * playCreatureSound has always emitted `action: "playCreatureSound"` to the
+ * other clients — and nothing anywhere was listening for it. The broadcast went
+ * into the void, so a creature roar only ever played on the machine that chose
+ * the file. Every player at the table heard silence while the GM heard a roar.
+ */
+let _csSocketWired = false;
+export function wireCreatureSoundSocket() {
+    if (_csSocketWired || !game?.socket) return;
+    _csSocketWired = true;
+
+    game.socket.on(`module.${MODULE_ID}`, async (data) => {
+        try {
+            // Someone chose a clip — play it here too.
+            if (data?.action === "playCreatureSound" && data.src) {
+                if (data.exclude && data.exclude === game.user.id) return;
+                const { ttsEngine } = await import("./tts.mjs");
+                const buf = await (await fetch(data.src)).arrayBuffer();
+                await ttsEngine.playBuffer(buf, data.pitch ?? 1.0,
+                                           data.maxDuration ?? MAX_CREATURE_SFX_SECONDS);
+                return;
+            }
+
+            // A PLAYER cannot list files (FilePicker.browse is GM-only), so it
+            // asks us to choose. Mirrors the ttsRequest proxy already used for
+            // ElevenLabs. GM only, and only for a real user.
+            if (data?.action === "creatureSoundRequest") {
+                // Only the ACTIVE GM answers. With two GMs connected, both would
+                // pick a clip and both would broadcast — the table hears the
+                // roar twice, slightly out of sync. game.users.activeGM is the
+                // same single-owner gate the rest of the engine uses for writes.
+                if (game.users?.activeGM !== game.user) return;
+                if (!game.users.get(data.userId)) return;   // ignore a stale sender
+                await playCreatureSound(data.folder, data.pitch ?? 1.0, data.affinities ?? []);
+            }
+        } catch (err) {
+            console.warn(`${TAG} | creature-sound socket handler failed:`, err);
+        }
+    });
+    console.log(`${TAG} | Creature sound socket wired (broadcast receive + player proxy).`);
+}
+
 export async function playCreatureSound(folder, pitch = 1.0, affinities = []) {
+    // ── PLAYERS CANNOT BROWSE FILES — ask the GM to pick (2026-08-06) ──────
+    // FilePicker.browse is GM-only, so _getFiles returns [] on a player client
+    // and every creature was mute for exactly the people the sound is FOR.
+    // Johnny caught it on a client login: "No usable creature VOICE in giant"
+    // while the giant folder holds 31 working clips.
+    if (!game.user?.isGM) {
+        try {
+            game.socket.emit(`module.${MODULE_ID}`, {
+                action:  "creatureSoundRequest",
+                userId:  game.user.id,
+                folder,
+                pitch,
+                affinities,
+            });
+            console.log(`${TAG} | Creature sound: asked the GM to choose (players cannot list files).`);
+            return true;
+        } catch (err) {
+            console.warn(`${TAG} | Could not ask the GM for a creature sound:`, err);
+            return false;
+        }
+    }
+    return _playCreatureSoundAsGM(folder, pitch, affinities);
+}
+
+async function _playCreatureSoundAsGM(folder, pitch = 1.0, affinities = []) {
     // Accepts a single folder or an ordered candidate list. Falls through to the
     // next candidate when one has nothing PLAYABLE — a folder full of footstep
     // clips is as useless as an empty one, so "has files" is not the test.
@@ -468,6 +538,8 @@ export async function playCreatureSound(folder, pitch = 1.0, affinities = []) {
             src,
             pitch,
             maxDuration: MAX_CREATURE_SFX_SECONDS,
+            // When we are choosing ON BEHALF of a player, everyone needs it —
+            // including the player who asked. `exclude` only ever means "not me".
             exclude: game.user.id,
         });
     } catch (e) {
