@@ -1,0 +1,14 @@
+GENERIC CREATURE SOUNDS — the catch-all bucket.
+
+Anything dropped here plays for a creature whose own family folder is empty.
+Keep clips SHORT (under 2.5s — longer ones are cut off) and dry (no music,
+no reverb tails, no ambience).
+
+Accepted: .mp3  .wav  .ogg  .flac  .webm
+
+⚠️ FILENAMES MATTER. Anything containing walking, footstep, step, ambien,
+loop, electric, cartoon, robotic, sci-fi, singing or chirp is IGNORED on
+purpose — those are not vocalisations. Name clips for the noise itself:
+   roar-01.mp3   growl-deep.wav   snarl-short.ogg   grunt-heavy.mp3
+
+New files are picked up within 2 minutes (or reload).

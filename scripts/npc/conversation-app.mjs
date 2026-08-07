@@ -10,7 +10,7 @@ import { AIHandler }                                 from "./conversation-engine
 import { summarizeAndSaveSession }                   from "./memory.mjs";
 import { ttsEngine }                                 from "./tts.mjs";
 import { getVoiceConfig, getDynamicVoiceSettings }   from "./voice-engine.mjs";
-import { getCreatureSoundFolder, getVoicePitch }     from "./creature-sounds.mjs";
+import { getCreatureSoundCandidates, getVoicePitch } from "./creature-sounds.mjs";
 import { npcChatState }                              from "./activate.mjs";
 import { isAIFailure }                               from "./ai-failure.mjs";
 
@@ -543,7 +543,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         }
         let voiceId = this._voiceId;
         console.log(`ACE: Engine | Puppet speaking with voice: ${voiceId}`);
-        const soundFolder = getCreatureSoundFolder(this.actor);
+        const soundFolder = getCreatureSoundCandidates(this.actor);
         const voicePitch  = getVoicePitch(this.actor);
         try {
             const result = await ttsEngine.speakResponse(text, voiceId, this.actor.name, soundFolder, voicePitch, this._getLiveVoiceSettings());
@@ -1062,7 +1062,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                     this._voiceSettings = config.voiceSettings || {};
                 }
                 let voiceId = this._voiceId;
-                const soundFolder = getCreatureSoundFolder(this.actor);
+                const soundFolder = getCreatureSoundCandidates(this.actor);
                 const voicePitch  = getVoicePitch(this.actor);
 
                 this._setInputLocked(true);
@@ -1185,7 +1185,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 this._voiceSettings = config.voiceSettings || {};
             }
             let voiceId = this._voiceId;
-            const soundFolder = getCreatureSoundFolder(this.actor);
+            const soundFolder = getCreatureSoundCandidates(this.actor);
             const voicePitch  = getVoicePitch(this.actor);
 
             // Strip AI tags before sending to TTS — emotes (*action*) are left

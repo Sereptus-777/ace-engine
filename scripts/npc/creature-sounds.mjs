@@ -10,6 +10,7 @@
 // retired and its sounds were already copied here. Engine is self-contained.)
 
 const MODULE_ID = "ace-engine";
+const TAG = "ACE: Engine";
 const SOUND_PATHS = [
     `modules/${MODULE_ID}/sounds/creatures`,
 ];
@@ -21,18 +22,48 @@ const CACHE_TTL  = 120_000;          // 2 minutes
 /** Filename patterns that are NOT creature vocalizations — safety-net filter */
 const EXCLUDE_RE = /(?:walking|footstep|step|ambien|loop|light.saber|electric|cartoon|robotic|sci.fi|singing|chirp)/i;
 
+/**
+ * Resolve the FilePicker class the way the rest of ace-engine does.
+ *
+ * ⚠️ THIS FILE USED THE BARE `FilePicker` GLOBAL (fixed 2026-08-06). In V13 the
+ * class moved to foundry.applications.apps.FilePicker.implementation and the
+ * bare global is deprecated. If it is absent, `FilePicker.browse(...)` throws a
+ * ReferenceError — which landed in a `catch (_) {}` that treated it as "this
+ * folder does not exist" and returned an empty list. The result: "No creature
+ * sounds found in giant" while four perfectly good roars sat in that folder,
+ * with nothing anywhere explaining why.
+ *
+ * That is the identical failure shape as the wall-collision bug earlier the
+ * same day: an API that does not exist, thrown into a silent catch, quietly
+ * disabling a whole feature. Resolve it properly, and never swallow the reason.
+ */
+function _filePicker() {
+    return foundry?.applications?.apps?.FilePicker?.implementation
+        ?? globalThis.FilePicker
+        ?? null;
+}
+
 async function _getFiles(folder) {
-    if (!game.user?.isGM) return [];  // FilePicker.browse is GM-only; players get an empty list
+    if (!folder) return [];
+    if (!game.user?.isGM) return [];  // browse is GM-only; players get an empty list
     const now = Date.now();
     const cacheKey = folder;
     const cached = _fileCache.get(cacheKey);
     if (cached && (now - cached.ts) < CACHE_TTL) return cached.files;
 
-    // Try each base path until we find one with files
+    const FP = _filePicker();
+    if (!FP?.browse) {
+        console.error(`${TAG} | No FilePicker implementation available — creature sounds cannot be listed. This is a Foundry API problem, not a missing-files problem.`);
+        return [];
+    }
+
+    let lastErr = null;
     for (const base of SOUND_PATHS) {
+        const path = `${base}/${folder}`;
         try {
-            const result = await FilePicker.browse("data", `${base}/${folder}`);
-            const files  = (result.files || []).filter(f => {
+            const result = await FP.browse("data", path);
+            const all = result.files || [];
+            const files = all.filter(f => {
                 if (!/\.(mp3|wav|ogg|flac|webm)$/i.test(f)) return false;
                 const name = f.split("/").pop();
                 return !EXCLUDE_RE.test(name);
@@ -41,12 +72,40 @@ async function _getFiles(folder) {
                 _fileCache.set(cacheKey, { files, ts: now });
                 return files;
             }
-        } catch (_) {
-            // Path doesn't exist at this base — try the next
+            // Folder exists but yielded nothing — say WHICH of the two it was,
+            // because "no files" and "every file filtered out" need different
+            // fixes and used to look identical.
+            console.warn(`${TAG} | "${path}" holds ${all.length} entr${all.length === 1 ? "y" : "ies"} but 0 usable creature sounds` +
+                (all.length ? " — wrong extension, or the name matched the exclude filter (walking/footstep/loop/ambient/…)." : " — the folder is empty."));
+        } catch (err) {
+            lastErr = err;
         }
     }
-    console.warn(`ACE: Engine | Could not find creature sounds for "${folder}" in any known path`);
+    if (lastErr) {
+        console.warn(`${TAG} | Could not browse creature sounds for "${folder}":`, lastErr?.message ?? lastErr);
+    }
     return [];
+}
+
+/**
+ * The folders to try for one creature, most specific first.
+ *
+ * Johnny 2026-08-06: "Why is it looking under Giant? It should be looking at a
+ * lot of other areas." An ogre IS giant-family, so "giant" is the right first
+ * guess — the buckets are deliberately per-family so one set of roars serves
+ * ogres, trolls and ettins rather than needing a folder per statblock. What was
+ * missing is what happens when that bucket is EMPTY: the creature simply went
+ * silent. Now it falls through to a generic bucket, so a half-populated library
+ * still makes noise.
+ */
+export function getCreatureSoundCandidates(actor) {
+    const primary = getCreatureSoundFolder(actor);
+    const out = [];
+    if (primary) out.push(primary);
+    for (const generic of ["monster", "generic", "beast"]) {
+        if (!out.includes(generic)) out.push(generic);
+    }
+    return out;
 }
 
 // ─── Creature-type → sound-folder mapping ──────────────────────────────────
@@ -268,11 +327,22 @@ const MAX_CREATURE_SFX_SECONDS = 2.5;
  * @returns {Promise<boolean>} true if a sound was played
  */
 export async function playCreatureSound(folder, pitch = 1.0) {
-    const files = await _getFiles(folder);
+    // Accepts a single folder or an ordered candidate list. Falls through to the
+    // next candidate when one is empty, so a partly-stocked library still makes
+    // noise instead of the creature going mute.
+    const candidates = Array.isArray(folder) ? folder.filter(Boolean) : [folder].filter(Boolean);
+    let files = [];
+    let used = null;
+    for (const c of candidates) {
+        files = await _getFiles(c);
+        if (files.length) { used = c; break; }
+    }
     if (!files.length) {
-        console.warn(`ACE: Engine | No creature sounds found in "${folder}"`);
+        console.warn(`${TAG} | No creature sounds available for ${candidates.map(c => `"${c}"`).join(" → ") || "(no folder)"}. ` +
+            `Drop .mp3/.wav/.ogg files into modules/${MODULE_ID}/sounds/creatures/<folder>/ and they are picked up within 2 minutes.`);
         return false;
     }
+    folder = used;
 
     // Pick random, avoiding immediate repeat
     let src;
