@@ -250,8 +250,23 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
         // Only register event listeners once (prevents stacking on re-render)
         if (!isReRender) {
-            this._sendBtn.addEventListener("click",   () => this.handleSend());
-            this._micBtn.addEventListener("click",    () => this.handleMic());
+            // ⚠️ EVERY ENTRY POINT IS WRAPPED (2026-08-06). handleSend is async,
+            // and `() => this.handleSend()` discards the promise — so anything it
+            // throws became an unhandled rejection: no toast, no context, and in
+            // Foundry's console easy to miss entirely. The player just saw their
+            // message appear and nothing happen. Name the source and the error.
+            const guard = (label, fn) => async (...a) => {
+                try { await fn(...a); }
+                catch (err) {
+                    console.error(`${MODULE_ID} | ${label} failed:`, err);
+                    ui.notifications?.error(`ACE: ${label} failed — ${err?.message ?? err}. See the console (F12).`);
+                    this.setThinking(false);
+                    this._setInputLocked(false);
+                }
+            };
+            this._sendBtn.addEventListener("click",   guard("Send", () => this.handleSend()));
+            this._micBtn.addEventListener("click",    guard("Microphone", () => this.handleMic()));
+            this._sendGuard = guard("Send", () => this.handleSend());
             this._initMicPicker();
             // Use `keydown` (not the deprecated `keypress`) and stop ALL
             // keyboard events from propagating to Foundry's global keybinding
@@ -273,7 +288,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                     // — stop the mic FIRST so a late result cannot repopulate
                     // the box after the message has gone. (2026-08-06)
                     if (this._recognition) { this._stopMic({ send: true }); return; }
-                    this.handleSend();
+                    this._sendGuard();
                 }
                 // Escape abandons a dictation without sending it.
                 if (ev.key === "Escape" && this._recognition) {
