@@ -411,7 +411,27 @@ async function _doWrite() {
 }
 
 /** Public — request a debounced mirror write. Safe to call constantly. */
+/**
+ * Is the triple-backup system switched on?
+ *
+ * ⚠️ THE TOGGLE WAS DECORATIVE (fixed 2026-08-06). `memorySyncEnabled` is shown
+ * to the GM as "Backups — Enable Triple-Backup System", and NOTHING read it.
+ * Every writer called requestSync() unconditionally, so turning it OFF did not
+ * stop backups and turning it ON granted nothing. On a setting about BACKUPS
+ * that is the worst kind of lie: a GM who switches it off believes their world
+ * has stopped being copied, and one who switches it on believes they have just
+ * protected it. Found by auditing which registered settings are never read.
+ *
+ * Defaults to ON when unreadable — losing backups is far worse than an extra
+ * write, so the failure direction is deliberate.
+ */
+function _syncEnabled() {
+  try { return game.settings.get(MODULE_ID, "memorySyncEnabled") !== false; }
+  catch (_) { return true; }
+}
+
 export function requestSync() {
+  if (!_syncEnabled()) return;
   if (_writeDebounceHandle) clearTimeout(_writeDebounceHandle);
   _writeDebounceHandle = setTimeout(_doWrite, WRITE_DEBOUNCE_MS);
 }
@@ -470,11 +490,22 @@ export async function takeSnapshotNow(label = "") {
 
 /** Public — take a session snapshot. Hooks Save Session call this. */
 export async function takeSessionSnapshot(label = "") {
+  // Automatic, so it obeys the toggle. (takeSnapshotNow deliberately does NOT —
+  // an explicit "snapshot now" is the user asking, and refusing that because a
+  // background setting is off would be its own surprise.)
+  if (!_syncEnabled()) {
+    console.log(`${TAG} | Session snapshot skipped — triple-backup is switched off in settings.`);
+    return null;
+  }
   return _takeSnapshot("session", { label });
 }
 
 /** Public — explicit shutdown-time call. Fires only if conditions met. */
 export async function maybeTakeShutdownSnapshot() {
+  if (!_syncEnabled()) {
+    console.log(`${TAG} | Shutdown snapshot skipped — triple-backup is switched off in settings.`);
+    return null;
+  }
   await _loadState();
   const last = _state.lastSnapshotTime || 0;
   const ageMs = Date.now() - last;
