@@ -9366,6 +9366,14 @@ li.ace-toolbar-btn:hover {
 }
 
 /* ── Controls Bar (Input Area) ───────────────────────────────── */
+/* Row layout: picker stretches, buttons keep their size. */
+.ace-engine-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ace-engine-btn-row > button { flex: 0 0 auto; }
+
 .ace-engine-controls {
   display: flex !important;
   flex-direction: column;
@@ -9435,6 +9443,58 @@ li.ace-toolbar-btn:hover {
 }
 
 /* ── Mic / Voice Button ──────────────────────────────────────── */
+/* ── MICROPHONE PICKER + LIVE LEVEL BAR (2026-08-06) ──────────────────────
+   Sits immediately LEFT of the mic button, where a player meets the problem.
+   Johnny's default input was a silent Elgato virtual channel, and nothing in
+   the UI could tell him — the button pulsed red and transcribed nothing. The
+   bar under the dropdown moves with your voice, so "is it hearing me" is
+   answered at a glance instead of by a console probe. */
+.ace-engine-mic-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: center;
+}
+
+#ace-engine-mic-device {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  font-size: 12px;
+  padding: 0 6px;
+  color: var(--ace-text-secondary);
+  background: linear-gradient(to bottom, #1e1e22 0%, #141416 100%);
+  border: 1px solid var(--ace-border-light);
+  border-radius: var(--ace-radius-sm);
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+#ace-engine-mic-device:hover {
+  border-color: var(--ace-accent);
+  color: var(--ace-accent);
+}
+#ace-engine-mic-device option { background: #141416; color: #e8e6e0; }
+
+/* The level bar. Grey while quiet, green the moment real sound arrives — that
+   colour change IS the diagnosis a player needs. */
+.ace-engine-mic-meter {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--ace-border-light);
+  overflow: hidden;
+}
+#ace-engine-mic-level {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: #6b6b72;
+  transition: width 60ms linear, background-color 150ms ease;
+}
+#ace-engine-mic-level.hot { background: #4ad66d; }
+
 /* ── THE MIC IS THE PRIMARY WAY TO TALK, SO IT LOOKS LIKE IT (2026-08-06) ──
    Johnny: "I want that microphone button to be bigger." It was 44x38 and sat
    quieter than the send arrow, which is backwards — talking is the point of

@@ -553,6 +553,20 @@ export class AceSettings {
     // That is the bug Johnny chased eleven times. The durable answer is
     // modules/ace-engine/config.local.json, which lives on the server, wins
     // over this setting, and is gitignored. The hint now says so.
+    // ── Which microphone NPC-chat voice input listens to (client-scoped) ──
+    // Set from the dropdown beside the mic button in the conversation window;
+    // stored per browser because the device list is per machine. Empty = the
+    // system default. Johnny 2026-08-06: his default was an Elgato Wave Link
+    // VIRTUAL channel carrying no audio (measured peak 2 of 128), so the
+    // recogniser listened to silence and looked broken. Anyone with Voicemeeter,
+    // OBS or NVIDIA Broadcast can hit the same thing.
+    s("micDeviceId", {
+      scope: "client",
+      config: false,
+      type: String,
+      default: "",
+    });
+
     s("elevenLabsApiKey", {
       scope: "client",
       name: "ElevenLabs API Key",

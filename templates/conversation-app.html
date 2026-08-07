@@ -15,6 +15,23 @@
     <div class="ace-engine-controls">
         <textarea id="ace-engine-input" placeholder="Type to speak, or press the mic to talk freely..." autocomplete="off" rows="1"></textarea>
         <div class="ace-engine-btn-row">
+            {{!-- MIC PICKER + LEVEL METER (2026-08-06).
+                  Johnny's default input was "Wave Link MicrophoneFX", an Elgato
+                  VIRTUAL channel that carries no audio unless Wave Link is
+                  routing to it — measured peak level 2 out of 128, i.e. silence.
+                  The recogniser ran perfectly against a dead line, so the button
+                  pulsed red forever and transcribed nothing.
+                  Anyone with Voicemeeter, OBS, NVIDIA Broadcast or a headset
+                  dock can have the same dead default, so the fix belongs HERE,
+                  where a player hits it — not buried in a settings tab. The bar
+                  under the picker shows live input, so "is it hearing me" stops
+                  being a guess. --}}
+            <div class="ace-engine-mic-picker">
+                <select id="ace-engine-mic-device" title="Which microphone to listen to">
+                    <option value="">Default microphone</option>
+                </select>
+                <div class="ace-engine-mic-meter"><span id="ace-engine-mic-level"></span></div>
+            </div>
             <button id="ace-engine-voice" title="Voice Input"><i class="fas fa-microphone"></i></button>
             <button id="ace-engine-send" title="Send to AI"><i class="fas fa-paper-plane"></i></button>
             <button id="ace-engine-pause" title="Pause / Resume audio"><i class="fas fa-pause"></i></button>

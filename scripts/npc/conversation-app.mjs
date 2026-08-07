@@ -240,6 +240,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         this._inputField        = el.querySelector("#ace-engine-input");
         this._sendBtn           = el.querySelector("#ace-engine-send");
         this._micBtn            = el.querySelector("#ace-engine-voice");
+        this._micSelect         = el.querySelector("#ace-engine-mic-device");
+        this._micLevelBar       = el.querySelector("#ace-engine-mic-level");
         this._thinkingIndicator = el.querySelector("#ace-engine-thinking");
         this._nameLabel         = el.querySelector("#ace-engine-npc-name");
         this._portraitImg       = el.querySelector("#ace-engine-portrait");
@@ -250,6 +252,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (!isReRender) {
             this._sendBtn.addEventListener("click",   () => this.handleSend());
             this._micBtn.addEventListener("click",    () => this.handleMic());
+            this._initMicPicker();
             // Use `keydown` (not the deprecated `keypress`) and stop ALL
             // keyboard events from propagating to Foundry's global keybinding
             // system. Without `stopPropagation`, Backspace inside the chat
@@ -594,6 +597,125 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    //  MICROPHONE PICKER + LIVE LEVEL METER (2026-08-06)
+    //
+    //  Johnny's default input was "Wave Link MicrophoneFX" — an Elgato VIRTUAL
+    //  channel that carries nothing unless Wave Link is routing to it. Measured
+    //  peak: 2 out of 128. Silence. Recognition ran flawlessly against a dead
+    //  line, so the button pulsed red and transcribed nothing, with no way to
+    //  tell the difference from the outside.
+    //
+    //  ⚠️ I FIRST CALLED THIS UNFIXABLE FROM HERE, AND THE EVIDENCE SAID NO.
+    //  The Web Speech API genuinely exposes no device parameter — there is no
+    //  deviceId anywhere on SpeechRecognition — so I concluded a picker could
+    //  not redirect it and only a browser setting could. Johnny's log
+    //  (2026-08-06 19:18) disproved that: while a device sweep happened to be
+    //  HOLDING a live input open, he pressed the mic and it transcribed and
+    //  sent perfectly, with the dead Wave Link channel still selected as the
+    //  system default.
+    //
+    //  So: opening the chosen device with getUserMedia and KEEPING it open for
+    //  the life of the recognition session is what makes recognition follow it.
+    //  That is exactly what the meter stream does, which means one mechanism
+    //  buys both the picker and the "is it hearing me" bar. The stream is held
+    //  for the whole session and released in _stopMic — releasing it early was
+    //  the flaw in the first version of this code.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    async _initMicPicker() {
+        const sel = this._micSelect;
+        if (!sel) return;
+        try {
+            // Labels stay hidden until the site has microphone permission, so a
+            // fresh player would see "Microphone 1, 2, 3". Ask once, release at
+            // once — we only wanted the names.
+            try {
+                const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+                probe.getTracks().forEach(t => t.stop());
+            } catch (_) { /* denied — fall through with generic labels */ }
+
+            const devices = (await navigator.mediaDevices.enumerateDevices())
+                .filter(d => d.kind === "audioinput");
+            const saved = game.settings.get(MODULE_ID, "micDeviceId") ?? "";
+
+            sel.innerHTML = '<option value="">Default microphone</option>';
+            for (const d of devices) {
+                const o = document.createElement("option");
+                o.value = d.deviceId;
+                o.textContent = d.label || `Microphone ${sel.options.length}`;
+                sel.appendChild(o);
+            }
+            if (saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
+
+            sel.addEventListener("change", async () => {
+                try { await game.settings.set(MODULE_ID, "micDeviceId", sel.value); } catch (_) {}
+                // Show the new choice working (or not) straight away.
+                this._startLevelMeter(sel.value, 4000);
+            });
+            sel.addEventListener("click", ev => ev.stopPropagation());
+        } catch (err) {
+            console.warn(`${MODULE_ID} | Mic picker init failed (voice still works):`, err);
+        }
+    }
+
+    /**
+     * Open the chosen device and drive the little bar under the picker.
+     * @param {string} deviceId  "" for the system default
+     * @param {number} ms        auto-stop after this long; 0 = until stopped
+     * @returns {Promise<boolean>} whether the stream opened at all
+     */
+    async _startLevelMeter(deviceId = "", ms = 0) {
+        this._stopLevelMeter();
+        try {
+            const constraint = deviceId ? { deviceId: { exact: deviceId } } : true;
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: constraint });
+            const ctx = new AudioContext();
+            const an  = ctx.createAnalyser();
+            an.fftSize = 512;
+            ctx.createMediaStreamSource(stream).connect(an);
+            const buf = new Uint8Array(an.fftSize);
+
+            this._meter = { stream, ctx, peak: 0, loudest: 0 };
+            this._meter.interval = setInterval(() => {
+                an.getByteTimeDomainData(buf);
+                let peak = 0;
+                for (const v of buf) peak = Math.max(peak, Math.abs(v - 128));
+                this._meter.peak = peak;
+                this._meter.loudest = Math.max(this._meter.loudest, peak);
+                if (this._micLevelBar) {
+                    const pct = Math.min(100, Math.round((peak / 60) * 100));
+                    this._micLevelBar.style.width = pct + "%";
+                    this._micLevelBar.classList.toggle("hot", peak > 6);
+                }
+            }, 60);
+
+            if (ms > 0) this._meter.timeout = setTimeout(() => this._stopLevelMeter(), ms);
+            return true;
+        } catch (err) {
+            console.warn(`${MODULE_ID} | Level meter could not open that microphone:`, err?.name ?? err);
+            if (this._micLevelBar) this._micLevelBar.style.width = "0%";
+            return false;
+        }
+    }
+
+    /** Loudest level seen since the meter started (0 when it never opened). */
+    get _meterLoudest() { return this._meter?.loudest ?? 0; }
+
+    _stopLevelMeter() {
+        const m = this._meter;
+        this._meter = null;
+        if (!m) return;
+        clearInterval(m.interval);
+        if (m.timeout) clearTimeout(m.timeout);
+        try { m.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+        try { m.ctx.close(); } catch (_) {}
+        if (this._micLevelBar) {
+            this._micLevelBar.style.width = "0%";
+            this._micLevelBar.classList.remove("hot");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     //  VOICE INPUT — press, talk, done.
     //
     //  WHAT ACTUALLY RUNS THE SPEECH-TO-TEXT: the browser's own Web Speech API
@@ -665,6 +787,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             try { rec.abort?.(); } catch (_) {}
         }
         this._micFinalText = "";
+        this._stopLevelMeter();            // release the held capture device
+        if (this._micSilenceCheck) { clearTimeout(this._micSilenceCheck); this._micSilenceCheck = null; }
         this._setMicState("idle", note);
         if (send && this._inputField?.value.trim()) this.handleSend();
     }
@@ -700,15 +824,35 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             return;
         }
 
-        // ── PERMISSION PRE-FLIGHT ────────────────────────────────────────
-        // Ask for the mic directly, so a refusal gives a REAL error we can
-        // explain instead of a recognition session that quietly dies. The
-        // stream is released at once — we only wanted the answer.
+        // ── OPEN THE CHOSEN DEVICE AND HOLD IT ───────────────────────────
+        // Two jobs in one stream: it proves the microphone is reachable (a real
+        // named error instead of a session that quietly dies), and holding it
+        // open for the whole session is what makes recognition actually listen
+        // to THIS device rather than a dead system default. Released in
+        // _stopMic — never before.
         this._setMicState("starting");
+        let deviceId = "";
+        try { deviceId = game.settings.get(MODULE_ID, "micDeviceId") ?? ""; } catch (_) {}
+        if (this._micSelect?.value) deviceId = this._micSelect.value;
+
+        const opened = await this._startLevelMeter(deviceId, 0);
+        if (!opened) {
+            // Retry on the default before giving up — a saved device can vanish
+            // when a headset is unplugged, and that must not brick the button.
+            const fellBack = deviceId ? await this._startLevelMeter("", 0) : false;
+            if (!fellBack) {
+                this._setMicState("idle");
+                ui.notifications.error("Could not open that microphone. Pick a different one from the dropdown beside the mic button.", { permanent: true });
+                return;
+            }
+            ui.notifications.warn("That microphone was unavailable — using the default instead.");
+        }
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            stream.getTracks().forEach(t => t.stop());
+            // Confirm permission explicitly so a denial is named, not guessed.
+            const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+            probe.getTracks().forEach(t => t.stop());
         } catch (err) {
+            this._stopLevelMeter();
             this._setMicState("idle");
             const name = err?.name ?? "";
             const msg = name === "NotAllowedError"
@@ -739,7 +883,23 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             if (this._recognition !== recognition) return;
             this._setMicState("listening");
             this._inputField?.focus();           // keep the caret where the words land
-            console.log("ACE: Engine | Mic: listening.");
+            console.log("ACE: Engine | Mic: listening on", this._micSelect?.selectedOptions?.[0]?.textContent ?? "default device");
+
+            // ── SAY SO WHEN NOTHING IS ARRIVING ──────────────────────────
+            // The whole reason this looked broken for so long: a dead input
+            // and a working one are indistinguishable from the outside. After
+            // five seconds of a completely flat signal, name the problem and
+            // the device it applies to.
+            if (this._micSilenceCheck) clearTimeout(this._micSilenceCheck);
+            this._micSilenceCheck = setTimeout(() => {
+                if (this._recognition !== recognition) return;
+                if (this._meterLoudest > 4) return;          // heard something — fine
+                const dev = this._micSelect?.selectedOptions?.[0]?.textContent ?? "your default microphone";
+                ui.notifications.warn(
+                    `No sound is reaching the browser from "${dev}". Pick a different microphone in the dropdown beside the mic button — virtual devices (Wave Link, Voicemeeter, OBS, NVIDIA Broadcast) are often silent unless that software is running.`,
+                    { permanent: true });
+                console.warn(`${MODULE_ID} | Mic: 5s of silence from "${dev}" — peak level ${this._meterLoudest}.`);
+            }, 5000);
         };
 
         recognition.onresult = (event) => {
