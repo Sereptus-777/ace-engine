@@ -569,8 +569,11 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             exclude: game.user.id
         });
 
+        // Emote-only lines post as italic actions rather than vanishing — see
+        // the note on the player path below. (2026-08-07)
         const dialogueOnly = text.replace(/\*(.*?)\*/g, "").trim();
-        if (dialogueOnly) {
+        const _postBody = dialogueOnly || (text.trim() ? `<em>${text.replace(/\*/g, "").trim()}</em>` : "");
+        if (_postBody) {
             ChatMessage.create({
                 speaker: {
                     alias: this.actor.name,
@@ -578,7 +581,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                     token: this.tokenDocument?.id || null,
                     scene: canvas.scene?.id || null
                 },
-                content: `<p>${dialogueOnly}</p>`,
+                content: `<p>${_postBody}</p>`,
                 flags: { [MODULE_ID]: { isAIConversation: true } }
             });
         }
@@ -1157,8 +1160,10 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             await this._saveMemorySafe(this.history);
 
             // Chat log entry — NPC speaking (not "DUNGEON MASTER")
+            // Emote-only lines post as italic actions rather than vanishing.
             const dialogueOnly = text.replace(/\*(.*?)\*/g, "").trim();
-            if (dialogueOnly) {
+            const _postBody = dialogueOnly || (text.trim() ? `<em>${text.replace(/\*/g, "").trim()}</em>` : "");
+            if (_postBody) {
                 ChatMessage.create({
                     speaker: {
                         alias: this.actor.name,
@@ -1166,7 +1171,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                         token: this.tokenDocument?.id || null,
                         scene: canvas.scene?.id || null
                     },
-                    content: `<p>${dialogueOnly}</p>`,
+                    content: `<p>${_postBody}</p>`,
                     flags: { [MODULE_ID]: { isAIConversation: true, gmInterjection: true } }
                 });
             }
@@ -1277,13 +1282,26 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 exclude: game.user.id
             });
 
-            const dialogueOnly = response
+            // ⚠️ AN EMOTE-ONLY REPLY USED TO VANISH (2026-08-07).
+            // Stripping *asterisks* and posting only what remains means a reply
+            // that is ENTIRELY an emote — "*Roar*", which is exactly what a
+            // 5-INT ogre produces — leaves an empty string, and the guard below
+            // skipped the ChatMessage entirely. Nothing reached the sidebar and
+            // it looked precisely like the Send button was broken. It was not:
+            // the same code posted fine one minute later when the AI happened to
+            // answer "Grrr! Roar!" with no asterisks.
+            // An emote is not nothing. It is an ACTION, so it posts in italics —
+            // which is how it reads at a table anyway.
+            const _cleanResponse = response
                 .replace(/\[SUBTLE_CHECK:[^\]]+\]/g, "")
                 .replace(/\[DISPOSITION:[^\]]+\]/gi, "")
-                .replace(/\*(.*?)\*/g, "")
                 .replace(/\s{2,}/g, " ")
                 .trim();
-            if (dialogueOnly) {
+            const dialogueOnly = _cleanResponse.replace(/\*(.*?)\*/g, "").replace(/\s{2,}/g, " ").trim();
+            // Emote-only → render the emote itself, italicised, rather than drop it.
+            const _postBody = dialogueOnly
+                || (_cleanResponse ? `<em>${_cleanResponse.replace(/\*/g, "")}</em>` : "");
+            if (_postBody) {
                 ChatMessage.create({
                     speaker: {
                         alias: this.actor.name,
@@ -1291,7 +1309,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                         token: this.tokenDocument?.id || null,
                         scene: canvas.scene?.id || null
                     },
-                    content: `<p><strong>${playerName}:</strong> ${text}</p><p>${dialogueOnly}</p>`,
+                    content: `<p><strong>${playerName}:</strong> ${text}</p><p>${_postBody}</p>`,
                     flags: { [MODULE_ID]: { isAIConversation: true } }
                 });
             }
