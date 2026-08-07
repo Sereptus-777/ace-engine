@@ -32,9 +32,23 @@
                 </select>
                 <div class="ace-engine-mic-meter"><span id="ace-engine-mic-level"></span></div>
             </div>
-            <button id="ace-engine-voice" title="Voice Input"><i class="fas fa-microphone"></i></button>
-            <button id="ace-engine-send" title="Send to AI"><i class="fas fa-paper-plane"></i></button>
-            <button id="ace-engine-pause" title="Pause / Resume audio"><i class="fas fa-pause"></i></button>
+            {{!-- LABELLED PILLS (2026-08-06). Icon-only buttons made players
+                  guess: a paper plane and a microphone mean nothing to someone
+                  who has never used this window, which is most of a table on
+                  session one. Every control now says what it does. --}}
+            <button type="button" id="ace-engine-voice" class="ace-engine-pill" title="Talk to this NPC out loud">
+                <i class="fas fa-microphone"></i><span>Speak</span>
+            </button>
+            <button type="button" id="ace-engine-send" class="ace-engine-pill" title="Send your message">
+                <i class="fas fa-paper-plane"></i><span>Send</span>
+            </button>
+            {{!-- One button, one job: pause holds the conversation, pressing it
+                  again continues. It does NOT become a separate Play control —
+                  that swap made people hunt for a button that had moved. Red
+                  while paused, brass while running. --}}
+            <button type="button" id="ace-engine-pause" class="ace-engine-pill" title="Pause the conversation — press again to continue">
+                <i class="fas fa-pause"></i><span>Pause Conversation</span>
+            </button>
             {{#if isGM}}
             <button id="ace-engine-stop-all" title="Stop conversation for everyone"><i class="fas fa-stop"></i></button>
             {{/if}}

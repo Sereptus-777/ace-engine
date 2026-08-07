@@ -377,7 +377,12 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         // ── GM-only controls ──────────────────────────────────────────────
         if (game.user.isGM) {
             // Update send button tooltip — GM sends as NPC, not to AI
-            if (this._sendBtn) this._sendBtn.title = "Speak as NPC";
+            // GM sends are NPC dialogue, so say so on the button itself.
+            if (this._sendBtn) {
+                this._sendBtn.title = "Speak as this NPC";
+                const lbl = this._sendBtn.querySelector("span");
+                if (lbl) lbl.textContent = "Speak as NPC";
+            }
 
             const stopAllBtn = el.querySelector("#ace-engine-stop-all");
             stopAllBtn?.addEventListener("click", () => {
@@ -419,10 +424,14 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 senderId: game.user.id,
                 isGM:     game.user.isGM
             });
-            pauseBtn.innerHTML = this._paused
-                ? '<i class="fas fa-play"></i>'
-                : '<i class="fas fa-pause"></i>';
+            // ONE button, ONE job. It used to swap its icon to a Play arrow,
+            // which meant the control people were looking for had visibly
+            // changed into something else. Now the label and icon stay put and
+            // only the COLOUR moves: red while paused, brass while running.
             pauseBtn.classList.toggle("ace-engine-paused", this._paused);
+            pauseBtn.title = this._paused
+                ? "Conversation paused — press to continue"
+                : "Pause the conversation — press again to continue";
             this._setInputLocked(this._paused, this._paused ? "Conversation paused." : "");
         });
 

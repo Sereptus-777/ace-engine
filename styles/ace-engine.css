@@ -9370,9 +9370,13 @@ li.ace-toolbar-btn:hover {
 .ace-engine-btn-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;            /* three labelled pills + a picker: wrap, never crush */
   gap: 8px;
 }
 .ace-engine-btn-row > button { flex: 0 0 auto; }
+/* The picker yields space to the buttons — a squeezed dropdown is still usable,
+   a squeezed button label is not. */
+.ace-engine-mic-picker { flex: 1 1 140px; min-width: 110px; }
 
 .ace-engine-controls {
   display: flex !important;
@@ -9443,6 +9447,72 @@ li.ace-toolbar-btn:hover {
 }
 
 /* ── Mic / Voice Button ──────────────────────────────────────── */
+/* ── LABELLED PILL BUTTONS (2026-08-06) ───────────────────────────────────
+   Icon-only controls made new players guess. A paper plane and a microphone
+   mean nothing on session one, and this window is the first thing a player
+   touches. Every control now carries its word. Shared shape here; each button
+   keeps its own colour below. */
+.ace-engine-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 20px;                 /* the pill */
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  white-space: nowrap;                 /* never break "Pause Conversation" */
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.ace-engine-pill i { font-size: 14px; }
+.ace-engine-pill:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* SPEAK — the primary action, so it is the loudest control in the row. */
+#ace-engine-voice.ace-engine-pill {
+  width: auto;
+  height: 44px;
+  font-size: 14px;
+  padding: 0 18px;
+}
+#ace-engine-voice.ace-engine-pill i { font-size: 17px; }
+
+/* SEND — brass, matching the suite's action colour. */
+#ace-engine-send.ace-engine-pill {
+  width: auto;
+  height: 40px;
+}
+
+/* PAUSE — brass while the conversation is RUNNING, red while PAUSED.
+   The icon and the words never change; only the colour tells the story, so the
+   button a player is reaching for is always in the same place saying the same
+   thing. */
+#ace-engine-pause.ace-engine-pill {
+  width: auto;
+  height: 40px;
+  border-radius: 20px;                 /* was a 50% circle for an icon */
+  background: linear-gradient(to bottom, #2a2418 0%, #1b170f 100%);
+  border: 1px solid var(--ace-accent, #d4af37);
+  color: var(--ace-accent, #d4af37);
+}
+#ace-engine-pause.ace-engine-pill:hover {
+  background: linear-gradient(to bottom, #3a3220 0%, #262013 100%);
+  box-shadow: 0 0 10px rgba(212, 175, 55, 0.28);
+}
+#ace-engine-pause.ace-engine-pill.ace-engine-paused {
+  background: rgba(220, 40, 40, 0.16);
+  border-color: #e04050;
+  color: #ff6b76;
+  box-shadow: 0 0 12px rgba(224, 64, 80, 0.35);
+}
+#ace-engine-pause.ace-engine-pill.ace-engine-paused:hover {
+  background: rgba(220, 40, 40, 0.28);
+  box-shadow: 0 0 18px rgba(224, 64, 80, 0.5);
+}
+
 /* ── MICROPHONE PICKER + LIVE LEVEL BAR (2026-08-06) ──────────────────────
    Sits immediately LEFT of the mic button, where a player meets the problem.
    Johnny's default input was a silent Elgato virtual channel, and nothing in
