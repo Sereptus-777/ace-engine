@@ -114,23 +114,48 @@ function sameKind(a, b) {
   return short.length >= 4 && long.startsWith(short);
 }
 
+// ── The compendium-backed generic-name probe ────────────────────────────────
+// bio-generator already owns `_isGenericName`, which tests a name against an
+// index of EVERY creature in the installed compendiums plus a role-word list.
+// That beats any string heuristic here: it knows "Ogre" is a statblock and
+// "Thalgar Stonehide" is not, without either matching the creature-type field.
+// It is INJECTED rather than imported, because bio-generator imports this file
+// and a direct import back would be a cycle.
+let _genericProbe = null;
+
+/** Called once by bio-generator at load. */
+export function setGenericNameProbe(fn) {
+  if (typeof fn === "function") _genericProbe = fn;
+}
+
 /**
  * Is the creature's name an actual NAME, or just a species label?
  * "Lilith Vex" → true.  "Goblin", "Goblin (3)", "Cambion 2" → false.
  *
  * @param {string} displayName  what the players see
  * @param {string} species      resolved creature kind
- * @param {string} [baseName]   the SOURCE actor's name, when known. This is the
- *   strongest signal there is: a creature still carrying its statblock's own
- *   name has not been personalised, whatever the type fields happen to say.
+ * @param {string} [baseName]   UNUSED, kept for call-site compatibility. See below.
+ *
+ * ⚠️ A SOURCE-ACTOR NAME COMPARISON WAS TRIED HERE AND WAS WRONG (2026-08-06).
+ * The idea was "still called what the statblock calls it → a label". For an
+ * UNLINKED token that works, because the token name and the base actor's name
+ * are different strings. For a LINKED actor the lookup returns the actor
+ * ITSELF, so the two are ALWAYS equal and every linked NPC was judged unnamed —
+ * Lilith Vex would have gone right on narrating as "the cambion", the exact bug
+ * being fixed. My first test stub returned null for that lookup and hid it
+ * completely; a stub more forgiving than reality is worse than no test. The
+ * probe below is the reliable discriminator, so the comparison is gone.
  */
 export function hasPersonalName(displayName, species, baseName = "") {
   const n = bareName(displayName);
   if (!n) return false;
 
-  // Still called what the statblock calls it → a label, not a name.
-  if (baseName && n === bareName(baseName)) return false;
+  // Strongest signal first: the compendium-backed detector.
+  if (_genericProbe) {
+    try { return !_genericProbe(displayName, species); } catch (_) { /* fall through */ }
+  }
 
+  // Fallback for the window before the compendium index exists (early boot).
   const s = bareName(species);
   if (s) {
     if (sameKind(n, s)) return false;                       // "Goblin" vs "goblinoid"
@@ -168,13 +193,7 @@ export function resolveIdentity(actor, tokenDoc = null) {
               || clean(tokenDoc?.delta?._source?.flags?.[MODULE_ID]?.flavorName);
   } catch (_) { /* nameplate flag unreadable — ignore, never fatal */ }
 
-  // The source actor's own name — the statblock's name. If the creature is
-  // still called that, nobody has personalised it.
-  let baseName = "";
-  try { baseName = clean(game.actors?.get?.(tokenDoc?.actorId ?? actor?.id)?.name); }
-  catch (_) { /* world not ready */ }
-
-  const isNamed = hasPersonalName(name, species, baseName);
+  const isNamed = hasPersonalName(name, species);
 
   // First name only, for natural narration: "Lilith hesitates", not
   // "Lilith Vex hesitates" every single line.

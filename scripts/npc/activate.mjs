@@ -108,6 +108,10 @@ export function activateNpcChat() {
             registerInitiativeHooks();
             console.log(`${TAG} | Companion-link feature online.`);
         }),
+        // Find a renamed NPC by WHAT it is: typing "ogre" still surfaces
+        // "Thalgar Stonehide". Feature-detected — logs and no-ops if this
+        // Foundry build doesn't expose the directory matcher.
+        import("./npc-sidebar-search.mjs").then(({ installNpcSidebarSearch }) => installNpcSidebarSearch()),
     ]).catch(err => console.error(`${TAG} | NPC chat dynamic module load failed (core hooks remain active):`, err));
 }
 

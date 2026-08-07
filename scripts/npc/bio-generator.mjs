@@ -13,6 +13,7 @@ import { processTokenFaction, buildFactionBioContext,
          resolveCreatureBase }                                   from "./faction-registry.mjs";
 import { SocialProfileEngine }                                   from "./social-profile.mjs";
 import npcProfileJournal                                         from "./npc-profile-journal.mjs";
+import { resolveSpecies, hasPersonalName, setGenericNameProbe } from "./npc-identity.mjs";
 
 const MODULE_ID = "ace-engine";
 const QOL_ID    = "ace-qol";
@@ -725,6 +726,12 @@ function _isGenericName(name, creatureType) {
 
     return false;
 }
+
+// Hand the compendium-backed generic-name test to the identity reader. It is a
+// far better "is this a real name" discriminator than any string heuristic —
+// it knows every creature in the installed compendiums. Injected rather than
+// imported to avoid a cycle (npc-identity is imported above).
+setGenericNameProbe(_isGenericName);
 
 // ─── INTELLIGENCE TIERS ──────────────────────────────────────────────────────
 
@@ -1841,15 +1848,64 @@ async function _generateBio(tokenDocument) {
         // on the nameplate for immersion). [2026-06-29 — identity-stability fix.]
         if (generatedName && generatedName !== actor.name) {
             try {
-                await actor.setFlag(MODULE_ID, "flavorName", generatedName);
-                await actor.setFlag(MODULE_ID, "nameRevealed", true);
-                console.log(`${TAG} | Flavor name stored (display-only): "${generatedName}" — real name kept as "${actor.name}"`);
-                if (tokenDocument && tokenDocument !== actor) {
-                    try { await tokenDocument.update({ displayName: 50 }); }   // keep nameplate visible
-                    catch (tokErr) { console.warn(`${TAG} | Nameplate visibility update failed (non-fatal):`, tokErr); }
+                // ── A NAMED, LINKED NPC IS RENAMED FOR REAL (2026-08-06) ──────
+                // Johnny: "what if I'm looking for an Ogre that they talked to…
+                // five sessions later I want to find that same Ogre. It's got to
+                // be named whatever name was given to it in the actor sidebar."
+                // He is right: a linked actor IS its own sidebar row, and a row
+                // called "Ogre" is unfindable a month later.
+                //
+                // ⚠️ WHY THIS IS NOW SAFE, when 2026-06-29 banned it. Back then
+                // mechanics read the actor NAME as identity, so renaming broke
+                // undead behaviour. The July species-tag work moved every engine
+                // onto system.details.type — verified 2026-08-06: nothing in
+                // ace-qol or ace-engine infers creature KIND from an actor name
+                // any more (every name.includes() hit is an ITEM or EFFECT name).
+                //
+                // ⚠️ LINKED ONLY. An unlinked token shares its base actor with
+                // every other token from it — renaming that would rename all
+                // eight goblins at once. The unlinked branch above keeps the
+                // display-only flag, which is correct: those have no sidebar row
+                // to find in the first place.
+                //
+                // ⚠️ ONLY WHEN THE NAME IS STILL A SPECIES LABEL. "Ogre" gets
+                // renamed; "Thalgar Stonehide" — named by the GM or by an earlier
+                // run — is left alone. That makes this idempotent and means a
+                // GM who renames something back is never overruled.
+                const _species = resolveSpecies(actor, tokenDocument ?? null);
+                const _isLabel = !hasPersonalName(actor.name, _species);
+
+                if (_isLabel) {
+                    // Keep what it WAS, so the sidebar search can still find it
+                    // by species/statblock name once the row says "Thalgar".
+                    await actor.setFlag(MODULE_ID, "originalName", actor.name);
+                    if (_species) await actor.setFlag(MODULE_ID, "species", _species);
+                    await actor.setFlag(MODULE_ID, "nameRevealed", true);
+
+                    // The real name IS the name now, so the display-only flavour
+                    // flag would just double up on the nameplate. Clear it.
+                    await actor.unsetFlag(MODULE_ID, "flavorName").catch(() => {});
+
+                    // prototypeToken too, so tokens placed later carry the name
+                    // instead of reverting to the statblock label.
+                    await actor.update({ name: generatedName, "prototypeToken.name": generatedName });
+                    if (tokenDocument && tokenDocument !== actor) {
+                        try { await tokenDocument.update({ name: generatedName, displayName: 50 }); }
+                        catch (tokErr) { console.warn(`${TAG} | Token rename failed (non-fatal):`, tokErr); }
+                    }
+                    console.log(`${TAG} | Linked actor RENAMED "${actor.name}" → "${generatedName}" (was a ${_species || "generic"} label; searchable by "${_species}" and the original name).`);
+                } else {
+                    // Already personally named — never overwrite the GM's choice.
+                    await actor.setFlag(MODULE_ID, "flavorName", generatedName);
+                    await actor.setFlag(MODULE_ID, "nameRevealed", true);
+                    console.log(`${TAG} | Flavor name stored (display-only): "${generatedName}" — real name kept as "${actor.name}" (already a personal name).`);
+                    if (tokenDocument && tokenDocument !== actor) {
+                        try { await tokenDocument.update({ displayName: 50 }); }   // keep nameplate visible
+                        catch (tokErr) { console.warn(`${TAG} | Nameplate visibility update failed (non-fatal):`, tokErr); }
+                    }
                 }
             } catch (flavorErr) {
-                console.warn(`${TAG} | Flavor-name flag failed (non-fatal — bio still saved):`, flavorErr);
+                console.warn(`${TAG} | Naming failed (non-fatal — bio still saved):`, flavorErr);
             }
         }
 
