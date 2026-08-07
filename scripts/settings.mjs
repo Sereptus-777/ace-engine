@@ -560,6 +560,20 @@ export class AceSettings {
     // VIRTUAL channel carrying no audio (measured peak 2 of 128), so the
     // recogniser listened to silence and looked broken. Anyone with Voicemeeter,
     // OBS or NVIDIA Broadcast can hit the same thing.
+    // ── The creature-sound index, resolved ONCE and shared (2026-08-07) ──
+    // Foundry forbids players from listing files at all:
+    //   "You do not have permission to browse the host file system!"
+    // So every player heard silence, and asking the GM to resolve it at play
+    // time only worked when a GM happened to be connected. The GM now walks the
+    // folders once and stores the result here, in WORLD data, which every
+    // client can read instantly with no permission and no round-trip.
+    s("creatureSoundIndex", {
+      scope: "world",
+      config: false,
+      type: Object,
+      default: {},
+    });
+
     s("micDeviceId", {
       scope: "client",
       config: false,

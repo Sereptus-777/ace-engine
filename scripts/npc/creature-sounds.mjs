@@ -130,9 +130,29 @@ function _filePicker() {
         ?? null;
 }
 
+/** The shared, world-stored listing. Readable by EVERYONE. */
+function _readIndex() {
+    try { return game.settings.get(MODULE_ID, "creatureSoundIndex") ?? {}; }
+    catch (_) { return {}; }
+}
+
 async function _getFiles(folder) {
     if (!folder) return [];
-    if (!game.user?.isGM) return [];  // browse is GM-only; players get an empty list
+
+    // ── PLAYERS READ THE INDEX (2026-08-07) ──────────────────────────────
+    // Foundry hard-refuses FilePicker.browse for non-GMs, in its own words:
+    //   "You do not have permission to browse the host file system!"
+    // That is a PERMISSION, not a bug, and no amount of retrying changes it.
+    // Every player therefore heard silence. Asking the GM to resolve it at play
+    // time (the first fix) only worked while a GM happened to be connected —
+    // Johnny was testing solo as a player, so nobody answered.
+    // The GM now resolves the folders ONCE and publishes the listing to world
+    // data, which any client can read instantly: no permission, no round-trip,
+    // no GM required online.
+    if (!game.user?.isGM) {
+        const hit = _readIndex()?.[folder];
+        return Array.isArray(hit) ? hit : [];
+    }
     const now = Date.now();
     const cacheKey = folder;
     const cached = _fileCache.get(cacheKey);
@@ -156,6 +176,7 @@ async function _getFiles(folder) {
             const files = all.filter(f => /\.(mp3|wav|ogg|flac|webm)$/i.test(f));
             if (files.length) {
                 _fileCache.set(cacheKey, { files, ts: now });
+                _rememberForPlayers(folder, files);   // publish it for everyone
                 return files;
             }
             // Folder exists but yielded nothing — say WHICH of the two it was,
@@ -171,6 +192,60 @@ async function _getFiles(folder) {
         console.warn(`${TAG} | Could not browse creature sounds for "${folder}":`, lastErr?.message ?? lastErr);
     }
     return [];
+}
+
+/**
+ * Publish one folder's listing to world data so players can read it.
+ * GM-only — only a GM may write a world setting. Skips the write when the
+ * listing has not changed, so this costs nothing on the common path.
+ */
+async function _rememberForPlayers(folder, files) {
+    if (!game.user?.isGM) return;
+    try {
+        const idx = _readIndex();
+        const prev = idx[folder];
+        if (Array.isArray(prev) && prev.length === files.length
+            && prev.every((f, i) => f === files[i])) return;   // unchanged
+        idx[folder] = files;
+        idx._builtAt = Date.now();
+        await game.settings.set(MODULE_ID, "creatureSoundIndex", idx);
+        console.log(`${TAG} | Published ${files.length} "${folder}" clips to the world index — players can hear them now.`);
+    } catch (err) {
+        console.warn(`${TAG} | Could not publish the "${folder}" listing:`, err?.message ?? err);
+    }
+}
+
+/**
+ * Walk every folder and publish the whole index at once.
+ * Runs automatically for the GM at startup; also available on demand after
+ * adding sounds:
+ *   game.modules.get("ace-engine").api.rebuildCreatureSoundIndex()
+ */
+export async function rebuildCreatureSoundIndex() {
+    if (!game.user?.isGM) {
+        console.warn(`${TAG} | Only the GM can build the creature-sound index.`);
+        return null;
+    }
+    const folders = ["beast", "construct", "dragon", "elemental", "fiend", "flying",
+                     "generic", "giant", "goblinoid", "insect", "monster", "ooze",
+                     "serpent", "swarm", "undead"];
+    _fileCache.clear();
+    const idx = {};
+    let total = 0;
+    for (const f of folders) {
+        const files = await _getFiles(f);
+        if (files.length) { idx[f] = files; total += files.length; }
+    }
+    idx._builtAt = Date.now();
+    try {
+        await game.settings.set(MODULE_ID, "creatureSoundIndex", idx);
+        const n = Object.keys(idx).length - 1;
+        console.log(`${TAG} | Creature-sound index published: ${total} clips across ${n} folders. Players can now hear creature sounds.`);
+        return { folders: n, clips: total };
+    } catch (err) {
+        console.error(`${TAG} | Could not publish the creature-sound index:`, err);
+        return null;
+    }
 }
 
 /**
@@ -464,25 +539,31 @@ export async function playCreatureSound(folder, pitch = 1.0, affinities = []) {
     // Johnny caught it on a client login: "No usable creature VOICE in giant"
     // while the giant folder holds 31 working clips.
     if (!game.user?.isGM) {
+        // Once the index exists a player resolves and plays the clip itself, with
+        // no GM online. Only fall back to asking a GM if it was never built.
+        const idx = _readIndex();
+        if (Object.keys(idx).some(k => k !== "_builtAt")) {
+            return _resolveAndPlay(folder, pitch, affinities);
+        }
         try {
             game.socket.emit(`module.${MODULE_ID}`, {
                 action:  "creatureSoundRequest",
                 userId:  game.user.id,
-                folder,
-                pitch,
-                affinities,
+                folder, pitch, affinities,
             });
-            console.log(`${TAG} | Creature sound: asked the GM to choose (players cannot list files).`);
+            console.warn(`${TAG} | No creature-sound index has been built yet, so this client asked a GM to choose. ` +
+                `If nothing plays, the GM should log in once and run ` +
+                `game.modules.get("${MODULE_ID}").api.rebuildCreatureSoundIndex().`);
             return true;
         } catch (err) {
             console.warn(`${TAG} | Could not ask the GM for a creature sound:`, err);
             return false;
         }
     }
-    return _playCreatureSoundAsGM(folder, pitch, affinities);
+    return _resolveAndPlay(folder, pitch, affinities);
 }
 
-async function _playCreatureSoundAsGM(folder, pitch = 1.0, affinities = []) {
+async function _resolveAndPlay(folder, pitch = 1.0, affinities = []) {
     // Accepts a single folder or an ordered candidate list. Falls through to the
     // next candidate when one has nothing PLAYABLE — a folder full of footstep
     // clips is as useless as an empty one, so "has files" is not the test.

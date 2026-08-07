@@ -1906,6 +1906,12 @@ Hooks.once("ready", async () => {
      * doors, cymbals and footsteps — invisible from inside Foundry until now.
      *   game.modules.get("ace-engine").api.auditCreatureSounds()
      */
+    /** Republish the creature-sound listing so PLAYERS can hear clips.
+     *  Run after adding or removing sound files. GM only. */
+    rebuildCreatureSoundIndex: async () => {
+      const cs = await import("./npc/creature-sounds.mjs");
+      return cs.rebuildCreatureSoundIndex();
+    },
     auditCreatureSounds: async (folders) => {
       const cs = await import("./npc/creature-sounds.mjs");
       return cs.auditCreatureSounds(folders);

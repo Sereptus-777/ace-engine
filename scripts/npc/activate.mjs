@@ -116,7 +116,15 @@ export function activateNpcChat() {
         // what another client chose, one so a player (who cannot list files)
         // can ask the GM to choose. Neither existed until 2026-08-06, so a
         // roar only ever played on the machine that picked it.
-        import("./creature-sounds.mjs").then(({ wireCreatureSoundSocket }) => wireCreatureSoundSocket()),
+        import("./creature-sounds.mjs").then(({ wireCreatureSoundSocket, rebuildCreatureSoundIndex }) => {
+            wireCreatureSoundSocket();
+            // The GM publishes the clip listing to world data so PLAYERS can
+            // read it — Foundry forbids them from listing files themselves.
+            // Without this every player hears silence. Backgrounded; a failure
+            // here must never hold up activation.
+            if (game.user?.isGM) rebuildCreatureSoundIndex().catch(err =>
+                console.warn(`${TAG} | Creature-sound index build failed:`, err));
+        }),
         // Five NPC socket messages had no receiver at all — most importantly
         // ollamaRequest, which left players on a local-AI world unable to get
         // any NPC reply. Audited 2026-08-06.
