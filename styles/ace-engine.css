@@ -9435,9 +9435,18 @@ li.ace-toolbar-btn:hover {
 }
 
 /* ── Mic / Voice Button ──────────────────────────────────────── */
+/* ── THE MIC IS THE PRIMARY WAY TO TALK, SO IT LOOKS LIKE IT (2026-08-06) ──
+   Johnny: "I want that microphone button to be bigger." It was 44x38 and sat
+   quieter than the send arrow, which is backwards — talking is the point of
+   NPC chat; typing is the fallback. Now the largest control in the row, with
+   three unmistakable states: idle, warming up, listening. */
 #ace-engine-voice {
-  width: 44px;
-  height: 38px;
+  width: 60px;
+  height: 52px;
+  font-size: 22px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: linear-gradient(to bottom, #1e1e22 0%, #141416 100%);
   border: 1px solid var(--ace-border-light);
   color: var(--ace-text-secondary);
@@ -9461,6 +9470,19 @@ li.ace-toolbar-btn:hover {
   color: var(--ace-danger);
   box-shadow: 0 0 12px rgba(255, 23, 68, 0.3);
   animation: ace-engine-mic-glow 1.2s ease-in-out infinite;
+}
+
+/* Warming up — permission check / session starting. Amber, steady, so it is
+   clearly DOING something and not simply dead. */
+#ace-engine-voice.mic-warmup {
+  background: rgba(212, 175, 55, 0.12);
+  border-color: var(--ace-accent);
+  color: var(--ace-accent);
+  animation: ace-engine-mic-warm 0.9s ease-in-out infinite;
+}
+@keyframes ace-engine-mic-warm {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
 }
 
 @keyframes ace-engine-mic-glow {

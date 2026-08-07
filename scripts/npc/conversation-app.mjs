@@ -266,7 +266,17 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 ev.stopPropagation();
                 if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
                     ev.preventDefault();
+                    // Enter while dictating means "that is my sentence, send it"
+                    // — stop the mic FIRST so a late result cannot repopulate
+                    // the box after the message has gone. (2026-08-06)
+                    if (this._recognition) { this._stopMic({ send: true }); return; }
                     this.handleSend();
+                }
+                // Escape abandons a dictation without sending it.
+                if (ev.key === "Escape" && this._recognition) {
+                    ev.preventDefault();
+                    this._stopMic({ send: false });
+                    this._inputField.value = "";
                 }
             });
             // ALSO stop keyup propagation — Foundry's keybinding system fires
@@ -369,8 +379,14 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         }
 
         // ── Pause button — only active player + GM can pause ────────────
+        // ⚠️ WIRED ONCE. This sat OUTSIDE the isReRender guard above, so it
+        // gained a fresh listener on EVERY render — and this window re-renders
+        // on every message. Click it after an even number of renders and the
+        // handler toggled `_paused` an even number of times: net zero, plus
+        // pause()/resume() racing each other. That is the whole of "Pause does
+        // not work". (2026-08-06)
         const pauseBtn = el.querySelector("#ace-engine-pause");
-        pauseBtn?.addEventListener("click", () => {
+        if (pauseBtn && !isReRender) pauseBtn.addEventListener("click", () => {
             this._paused = !this._paused;
             if (this._paused) {
                 ttsEngine.pause();
@@ -577,131 +593,221 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (!locked && this._inputField) this._inputField.focus();
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    //  VOICE INPUT — press, talk, done.
+    //
+    //  WHAT ACTUALLY RUNS THE SPEECH-TO-TEXT: the browser's own Web Speech API
+    //  (SpeechRecognition / webkitSpeechRecognition). In Chrome and Edge that
+    //  streams the microphone to Google's speech service and streams words
+    //  back. Free, no key, but it needs a live internet connection. Firefox
+    //  does not implement it; Brave blocks the service by default.
+    //  (INPUT only — the NPC's spoken reply is ElevenLabs, a separate system
+    //  configured in AI Setup.)
+    //
+    //  WHAT WAS WRONG (2026-08-06, Johnny: "it did not go to the text area and
+    //  it did not start recording"):
+    //   1. handleMic NEVER focused the input. The caret stayed wherever it
+    //      was, so it looked dead even on the runs where it worked.
+    //   2. Only TWO of the eight error codes were ever reported.
+    //      "service-not-allowed" (page not served over https) and
+    //      "audio-capture" (no mic, or another app holding it — a dictation
+    //      tool, say) both failed in total silence: button lit, nothing
+    //      happened, no message anywhere.
+    //   3. No permission pre-flight, so a blocked mic was indistinguishable
+    //      from a working one right up until it quietly did nothing.
+    //   4. On a continuous-mode session cycle it called start() again — and
+    //      event.results RESETS on a new session, while the old code assigned
+    //      that fresh transcript straight over the field. Everything said
+    //      before the cycle was wiped mid-sentence.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /** Milliseconds of silence before the sentence sends itself. */
+    static MIC_SILENCE_MS = 3000;
+
+    /** Human wording for every error the Web Speech API can raise. */
+    static _MIC_ERRORS = {
+        "not-allowed":            "Microphone permission is blocked. Click the padlock in the address bar, then Site settings, then allow Microphone, and reload.",
+        "service-not-allowed":    "Your browser will not run speech recognition on this page. This almost always means Foundry is served over plain http:// — the speech service requires https:// or localhost. Typing still works.",
+        "audio-capture":          "No microphone was available. Check it is plugged in, and close any other app holding it (dictation tools, meeting apps, recorders).",
+        "network":                "Speech recognition needs an internet connection — the browser sends the audio to its own cloud service.",
+        "aborted":                null,
+        "no-speech":              null,
+        "language-not-supported": "This browser cannot do speech recognition in the configured language.",
+        "bad-grammar":            "Speech recognition rejected its grammar configuration.",
+    };
+
+    /** Put the mic UI into a named state so it always LOOKS like what it is. */
+    _setMicState(state, note = "") {
+        const btn = this._micBtn;
+        if (btn) {
+            btn.classList.toggle("active", state === "listening");
+            btn.classList.toggle("mic-warmup", state === "starting");
+            btn.setAttribute("aria-pressed", state === "listening" ? "true" : "false");
+            btn.title = state === "listening" ? "Listening — click to send now (or press Enter)"
+                      : state === "starting"  ? "Starting the microphone..."
+                      : "Click to talk";
+        }
+        if (this._inputField) {
+            this._inputField.placeholder =
+                  state === "listening" ? (note || "Listening... pause when you're done, or press Enter to send")
+                : state === "starting"  ? "Starting the microphone..."
+                : "Type to speak, or press the mic to talk freely...";
+        }
+    }
+
+    /** Stop listening. `send` posts whatever is in the box. */
+    _stopMic({ send = false, note = "" } = {}) {
+        const rec = this._recognition;
+        this._recognition = null;                 // clear FIRST so late events bail
+        if (this._micSendTimer) { clearTimeout(this._micSendTimer); this._micSendTimer = null; }
+        if (rec) {
+            try { rec.stop(); } catch (_) {}
+            try { rec.abort?.(); } catch (_) {}
+        }
+        this._micFinalText = "";
+        this._setMicState("idle", note);
+        if (send && this._inputField?.value.trim()) this.handleSend();
+    }
+
     async handleMic() {
-        // Hard block: only spectators (readOnly) and locked-out players
-        // are denied. Lock-helper plumbing was lost in the merger — see
-        // the comment in _onRender. Until it returns, all conversation
-        // owners (i.e. not readOnly) can mic.
         if (!game.user.isGM && this.readOnly) return;
 
-        // ── Toggle OFF: stop listening and send what we have ─────────────
-        if (this._recognition) {
-            this._recognition.stop();
-            this._recognition = null;
-            this._micBtn.classList.remove("active");
-            if (this._micSendTimer) { clearTimeout(this._micSendTimer); this._micSendTimer = null; }
-            // Send whatever has been accumulated
-            if (this._inputField.value.trim()) this.handleSend();
+        // Already listening -> this click means "I'm done".
+        if (this._recognition) { this._stopMic({ send: true }); return; }
+
+        // ── FOCUS FIRST, SYNCHRONOUSLY ───────────────────────────────────
+        // Before any await, before any capability check. The caret belongs in
+        // the box the instant the button is pressed — if the mic then fails,
+        // the player is already able to type instead of staring at a dead UI.
+        // Doing it after an await would also drop the user-gesture context.
+        this._inputField?.focus();
+
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) {
+            ui.notifications.warn("This browser has no speech recognition. Chrome and Edge support it; Firefox does not. You can still type.", { permanent: true });
             return;
         }
 
-        // ── Toggle ON: start continuous listening ────────────────────────
-        if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
-            ui.notifications.warn("Your browser does not support voice input.");
+        // ── SECURE CONTEXT ───────────────────────────────────────────────
+        // The API OBJECT exists on plain http:// — it just never works. That
+        // is exactly why this failed silently for players on a LAN address
+        // while working for the GM on localhost.
+        if (window.isSecureContext === false) {
+            ui.notifications.error(
+                "Voice input needs a secure connection. This page is served over plain http://, and browsers only allow the microphone on https:// or localhost. Typing still works.",
+                { permanent: true });
+            console.warn("ACE: Engine | Mic: insecure context — speech recognition cannot run on", window.location.origin);
             return;
         }
 
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        const recognition       = new SpeechRecognition();
-        recognition.lang            = "en-US";
-        recognition.continuous      = true;       // keep listening across pauses
-        recognition.interimResults  = true;        // show words as they're spoken
+        // ── PERMISSION PRE-FLIGHT ────────────────────────────────────────
+        // Ask for the mic directly, so a refusal gives a REAL error we can
+        // explain instead of a recognition session that quietly dies. The
+        // stream is released at once — we only wanted the answer.
+        this._setMicState("starting");
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream.getTracks().forEach(t => t.stop());
+        } catch (err) {
+            this._setMicState("idle");
+            const name = err?.name ?? "";
+            const msg = name === "NotAllowedError"
+                ? "Microphone permission was denied. Click the padlock in the address bar, then Site settings, then allow Microphone, and reload."
+                : name === "NotFoundError"
+                ? "No microphone was found. Plug one in and try again."
+                : name === "NotReadableError"
+                ? "Your microphone is in use by another program. Close any dictation tool, meeting app or recorder and try again."
+                : `Could not open the microphone (${name || "unknown error"}).`;
+            ui.notifications.error(msg, { permanent: true });
+            console.error("ACE: Engine | Mic: getUserMedia failed:", err);
+            return;
+        }
+
+        const recognition = new SR();
+        recognition.lang = "en-US";
+        recognition.continuous = true;
+        recognition.interimResults = true;
         recognition.maxAlternatives = 1;
 
-        this._micBtn.classList.add("active");
-        this._recognition = recognition;
-        let _micFatalError = false;   // tracks real errors vs transient ones
-        let _micRestarts   = 0;       // prevent infinite restart loops
+        this._recognition  = recognition;
+        this._micFinalText = "";       // survives session cycles — see onresult
+        let fatal = false;
+        let restarts = 0;
+        let heardAnything = false;
+
+        recognition.onstart = () => {
+            if (this._recognition !== recognition) return;
+            this._setMicState("listening");
+            this._inputField?.focus();           // keep the caret where the words land
+            console.log("ACE: Engine | Mic: listening.");
+        };
 
         recognition.onresult = (event) => {
-            // Guard: drop late results that fire AFTER we've explicitly aborted
-            // recognition (e.g. user clicked Send while still mid-speech). Without
-            // this, the browser's queued onresult events overwrite the cleared
-            // input field and the just-sent text reappears in the textarea.
-            if (!this._recognition || this._recognition !== recognition) return;
+            if (this._recognition !== recognition) return;   // stale session
+            restarts = 0;
+            heardAnything = true;
 
-            _micRestarts = 0;  // successful result = reset restart counter
-
-            // Rebuild full transcript from scratch each event (no accumulator)
-            let final = "", interim = "";
+            // event.results holds only THIS session. On a cycle it resets, so
+            // finalized text must be banked in _micFinalText or it is erased
+            // mid-sentence.
+            let justFinal = "", interim = "";
             for (let i = 0; i < event.results.length; i++) {
-                if (event.results[i].isFinal) {
-                    final += event.results[i][0].transcript + " ";
-                } else {
-                    interim += event.results[i][0].transcript;
-                }
+                const r = event.results[i];
+                if (r.isFinal) justFinal += r[0].transcript + " ";
+                else           interim   += r[0].transcript;
             }
-            const full = (final + interim).trim();
+            const full = (this._micFinalText + justFinal + interim).trim().slice(0, 1000);
+            this._inputField.value = full;
+            this._inputField.dispatchEvent(new Event("input"));   // let it auto-grow
 
-            // Safety cap — prevent runaway text (500 chars max)
-            this._inputField.value = full.length > 500 ? full.slice(0, 500) : full;
-
-            // Reset the auto-send timer — sends 6s after the last speech.
-            // Gives the speaker time to pause and collect their thoughts.
+            // Silence timer — restarts on every word, fires when speech stops.
             if (this._micSendTimer) clearTimeout(this._micSendTimer);
             this._micSendTimer = setTimeout(() => {
-                if (this._recognition) {
-                    this._recognition.stop();
-                    this._recognition = null;
-                    this._micBtn.classList.remove("active");
-                    if (this._inputField.value.trim()) this.handleSend();
-                }
-            }, 6000);
+                if (this._recognition === recognition) this._stopMic({ send: true });
+            }, ConversationApp.MIC_SILENCE_MS);
         };
 
         recognition.onerror = (event) => {
-            // Transient errors — browser cycling, no speech yet, etc.
-            if (event.error === "no-speech" || event.error === "aborted") return;
+            if (this._recognition !== recognition) return;
+            const code = event.error;
+            if (code === "no-speech" || code === "aborted") return;   // transient
 
-            // Real errors — stop everything
-            console.error("ACE: Engine | Mic error:", event.error);
-            _micFatalError = true;
-            this._micBtn.classList.remove("active");
-            this._recognition = null;
+            fatal = true;
+            console.error("ACE: Engine | Mic error:", code);
 
-            // Helpful hint for common issues
-            const isBrave = navigator.brave?.isBrave || navigator.userAgent.includes("Brave");
-            if (event.error === "not-allowed") {
-                ui.notifications.warn("Microphone permission denied. Check your browser settings.");
-            } else if (event.error === "network") {
-                if (isBrave) {
-                    ui.notifications.warn("Voice input is not supported in Brave — its privacy shields block the speech service. Please use Chrome or Edge instead.", { permanent: true });
-                } else {
-                    ui.notifications.warn("Speech recognition requires an internet connection (audio is processed by your browser's cloud service).");
-                }
+            // EVERY code gets a human answer. Silence here is what made this
+            // look broken.
+            let msg = ConversationApp._MIC_ERRORS[code];
+            if (msg === undefined) msg = `Speech recognition failed (${code}).`;
+            if (code === "network" && (navigator.brave?.isBrave || navigator.userAgent.includes("Brave"))) {
+                msg = "Voice input does not work in Brave — its shields block the speech service. Use Chrome or Edge, or type instead.";
             }
+            if (msg) ui.notifications.error(msg, { permanent: true });
+            this._stopMic({ send: false });
         };
 
         recognition.onend = () => {
-            // Already cleaned up (manual stop, auto-send timer, or fatal error)
-            if (!this._recognition || _micFatalError) return;
+            if (this._recognition !== recognition || fatal) return;
 
-            // Browser often cycles the recognition session with continuous:true.
-            // Auto-restart to keep listening (up to 5 retries without results).
-            if (_micRestarts < 5) {
-                _micRestarts++;
-                try {
-                    recognition.start();
-                    console.log(`ACE: Engine | Mic: auto-restarted (cycle ${_micRestarts}).`);
-                    return;
-                } catch (_) { /* fall through to cleanup */ }
+            // Bank what this session finalized BEFORE a restart wipes it.
+            const banked = this._inputField?.value?.trim() ?? "";
+            if (banked) this._micFinalText = banked + " ";
+
+            // Chrome cycles continuous sessions on its own. Keep listening.
+            if (restarts < 5) {
+                restarts++;
+                try { recognition.start(); return; } catch (_) { /* fall through */ }
             }
-
-            // Could not restart or too many retries — send what we have
-            console.log("ACE: Engine | Mic: session ended, sending accumulated text.");
-            this._recognition = null;
-            this._micBtn.classList.remove("active");
-            if (this._micSendTimer) { clearTimeout(this._micSendTimer); this._micSendTimer = null; }
-            if (this._inputField.value.trim()) this.handleSend();
+            console.log("ACE: Engine | Mic: session ended.");
+            this._stopMic({ send: heardAnything });
         };
 
         try {
             recognition.start();
-            console.log("ACE: Engine | Mic: continuous listening started — click mic again or pause 2.5s to send.");
-        } catch(e) {
-            console.error("ACE: Engine | Mic start failed:", e);
-            this._micBtn.classList.remove("active");
-            this._recognition = null;
+        } catch (err) {
+            console.error("ACE: Engine | Mic start failed:", err);
+            ui.notifications.error("Could not start the microphone. Try again, or type your message.", { permanent: true });
+            this._stopMic({ send: false });
         }
     }
 
