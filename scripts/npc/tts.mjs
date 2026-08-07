@@ -632,10 +632,29 @@ class TTSEngine {
                             const { cleaned, hadSounds } = _csStripSoundEffects(dialogueText);
                             if (hadSounds) {
                                 console.log(`TTS | Stripped sound words: "${dialogueText}" → "${cleaned}"`);
-                                await _csPlayCreatureSound(creatureSoundFolder, voicePitch, _soundAffinities(actorName));
+                                // ⚠️ READ THE RETURN VALUE (2026-08-07). This used to
+                                // fire and forget, ASSUMING a clip played. When the
+                                // whole line is sound-words the stripped text is
+                                // EMPTY, so if the clip also failed the NPC said
+                                // absolutely nothing — which is exactly what Johnny
+                                // hit: a 5-INT ogre whose every line is "Grrr! Roar!"
+                                // was completely mute, twice, with the AI replying
+                                // perfectly both times.
+                                const played = await _csPlayCreatureSound(
+                                    creatureSoundFolder, voicePitch, _soundAffinities(actorName));
                                 if (this._stopRequested) break;
+                                if (!played && !cleaned.trim()) {
+                                    // No clip AND nothing left to say. Speak the line
+                                    // as written — an ogre growling "Grrr! Roar!" in
+                                    // its own voice beats silence every time.
+                                    console.warn(`TTS | No creature clip available and nothing left after stripping — speaking the raw line so the NPC is not mute.`);
+                                    dialogueText = seg.text;
+                                } else {
+                                    dialogueText = cleaned;
+                                }
+                            } else {
+                                dialogueText = cleaned;
                             }
-                            dialogueText = cleaned;
                         }
 
                         if (dialogueText) {
@@ -656,8 +675,12 @@ class TTSEngine {
                     } else {
                         if (creatureSoundFolder && _csIsSoundEmote && _csIsSoundEmote(seg.text)) {
                             console.log(`TTS | Sound emote → creature clip: "${seg.text}"`);
-                            await _csPlayCreatureSound(creatureSoundFolder, voicePitch, _soundAffinities(actorName));
-                            continue;
+                            const played = await _csPlayCreatureSound(
+                                creatureSoundFolder, voicePitch, _soundAffinities(actorName));
+                            // Only skip the spoken version if the clip ACTUALLY played.
+                            // `continue` on a failed clip is how "*Roar*" became silence.
+                            if (played) continue;
+                            console.warn(`TTS | Sound emote had no clip — narrating it instead of dropping it.`);
                         }
 
                         const isAction = /^I['\s,]/i.test(seg.text);
