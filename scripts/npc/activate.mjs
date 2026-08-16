@@ -21,6 +21,11 @@
 //   canvas hover/control hooks — chat bubble overlay rendering
 
 const MODULE_ID = "ace-engine";
+
+// Where dead linked NPCs are filed. The leading "X" is deliberate — see the
+// rename note in the cleanup function below.
+const FALLEN_FOLDER        = "X ☠ Fallen";
+const LEGACY_FALLEN_FOLDER = "☠ Fallen";
 const TAG       = "ACE: Engine | NPC Chat";
 
 let _activated = false;
@@ -103,6 +108,10 @@ export function activateNpcChat() {
     // _activated stays true even on import failure (core hooks remain registered).
     Promise.all([
         import("./ui-hooks.mjs").then(({ registerUiHooks }) => registerUiHooks()),
+        // The quill under an NPC token: "give this one a life". Token drops are
+        // silent now, so this is how a GM deliberately fleshes somebody out
+        // while building a dungeon rather than waiting for a player to walk up.
+        import("./hud-give-a-life.mjs").then(({ wireGiveALifeHud }) => wireGiveALifeHud()),
         import("./companion-link.mjs").then(({ registerActorDirectoryContext, registerInitiativeHooks }) => {
             registerActorDirectoryContext();
             registerInitiativeHooks();
@@ -136,6 +145,17 @@ export function activateNpcChat() {
         // ollamaRequest, which left players on a local-AI world unable to get
         // any NPC reply. Audited 2026-08-06.
         import("./npc-socket-router.mjs").then(({ wireNpcSocketRouter }) => wireNpcSocketRouter()),
+        // ⚠️ LOAD BIO-GENERATOR EAGERLY (2026-08-07). It owns _isGenericName —
+        // the compendium-backed test for "is this a real name or a statblock
+        // label" — and installs it into npc-identity at module load. It used to
+        // load ONLY on a token drop, so in a session where nothing was dropped
+        // the detector was null and the fallback word-matching ran instead.
+        // "Archmage" does not resemble "humanoid", so it was judged a PERSONAL
+        // NAME and the prompt told the creature "YOUR NAME: Archmage — you may
+        // introduce yourself with it." Which it dutifully did. Same for Bandit
+        // Captain, Cult Fanatic, Veteran — every statblock that reads like a name.
+        import("./bio-generator.mjs").then(() =>
+            console.log(`${TAG} | Name detector installed (statblock labels vs real names).`)),
     ]).catch(err => console.error(`${TAG} | NPC chat dynamic module load failed (core hooks remain active):`, err));
 }
 
@@ -190,10 +210,59 @@ function _registerHooks() {
             tier = game.settings.get(MODULE_ID, "tokenDropAI") ?? "full";
         } catch (_) { /* defaults */ }
 
+        // ── STAMP THE ARRIVAL (2026-08-07) ─────────────────────────────
+        // One tiny flag write. No network, no AI, nothing on screen — this is
+        // the only thing that happens on a silent drop besides the token
+        // appearing.
+        //
+        // It is what lets a history written three sessions later say "he took
+        // that wound AFTER he got here" instead of guessing. Without it, a
+        // creature found at 40 of 130 hit points is indistinguishable from one
+        // that walked in bleeding. Johnny asked for exactly that: "if it has a
+        // large wound or scar… recently got that from fighting the dragon one
+        // month ago or whatever, or maybe yesterday, depending on if the guy is
+        // still bleeding."
+        if (game.user?.isGM && !tokenDocument.actor?.getFlag?.(MODULE_ID, "arrival")) {
+            const _hp = tokenDocument.actor?.system?.attributes?.hp;
+            let _inGame = null;
+            // SimpleCalendar is optional — every reference to it in this module
+            // is guarded, and this one is no exception.
+            try { _inGame = globalThis.SimpleCalendar?.api?.timestampToDate?.(globalThis.SimpleCalendar.api.timestamp())?.display?.date ?? null; }
+            catch (_) { _inGame = null; }
+
+            tokenDocument.actor.setFlag(MODULE_ID, "arrival", {
+                scene: canvas.scene?.name ?? null,
+                sceneId: canvas.scene?.id ?? null,
+                at: Date.now(),
+                inGameDate: _inGame,
+                hp: (_hp?.value ?? null),
+                hpMax: (_hp?.max ?? null),
+            }).catch(err => console.debug(`${TAG} | Arrival stamp skipped (non-fatal):`, err));
+        }
+
         // tier = "off" is the explicit "leave this token alone" — vanilla drop.
         // Honors per-drop popup choice too, since that override sets the same
         // setting via the Smart Token Drop dialog.
         if (tier === "off") return;
+
+        // ── SILENT: the default. The token just appears. ───────────────
+        // Johnny, 2026-08-07: "Nothing — instant, silent."
+        //
+        // ⚠️ THIS MUST SHORT-CIRCUIT BEFORE THE AUTO-PIPELINE BELOW. That
+        // pipeline batches drops and AUTO-ACCEPTS the smart-setup dialog, so
+        // letting a silent drop reach it would spend an AI call per token —
+        // the precise thing the silent tier exists to stop.
+        //
+        // queueBioGeneration turns a silent drop away at its own front door,
+        // before the queue and before any database write, and does the one free
+        // thing (adopt a faction that already fits). One code path owns it.
+        if (tier === "silent") {
+            import("./bio-generator.mjs").then(({ queueBioGeneration }) => {
+                queueBioGeneration(tokenDocument).catch(err =>
+                    console.warn(`${TAG} | Silent drop handling failed (the token is fine):`, err));
+            }).catch(err => console.error(`${TAG} | Bio-generator load failed:`, err));
+            return;
+        }
 
         // ── Auto-pipeline branch ───────────────────────────────────────
         // When autoGenerateOnDrop is ON, every drop goes through the
@@ -268,7 +337,13 @@ function _registerHooks() {
                 // checked it (tier "off" = vanilla), but the scene scan didn't, so
                 // "Off" still generated bios on every reload. Same gate, both paths.
                 // (Root-caused with the Grulgar-ogre naming bug, 2026-07-26.)
-                if ((game.settings.get(MODULE_ID, "tokenDropAI") ?? "full") === "off") continue;
+                //
+                // ⚠️ SILENT BELONGS HERE TOO (2026-08-07). Without it, every
+                // creature on the map got a full generation on each scene load —
+                // which is far worse than the drop case it was meant to prevent,
+                // because a reload touches EVERY token at once.
+                const _scanTier = game.settings.get(MODULE_ID, "tokenDropAI") || "silent";
+                if (_scanTier === "off" || _scanTier === "silent") continue;
             } catch (_) { continue; }
 
             const _bioDelay = 100 + _idx * 150;
@@ -363,7 +438,11 @@ function _registerHooks() {
     // token in the world). Players still only clear their own tokens, but
     // since the GM sweep runs every load, the lock typically clears before
     // the player even sees it.
-    Hooks.once("ready", async () => {
+    // ⚠️ WAS Hooks.once("ready") — but activateNpcChat() is called from the
+    // entry file's ready handler, so this registered against an event already
+    // in progress and NEVER fired. "The GM sweep runs every load" was false:
+    // a crashed chat left a PC token locked FOREVER. 08-16 full audit.
+    const _runTokenLockSweep = async () => {
         try {
             let cleared = 0;
             const isGM = game.user.isGM;
@@ -388,7 +467,8 @@ function _registerHooks() {
         } catch (err) {
             console.warn("ACE: Engine | stale conversation-lock sweep failed:", err);
         }
-    });
+    };
+    if (game.ready) _runTokenLockSweep(); else Hooks.once("ready", _runTokenLockSweep);
 
     // ── Token deleted → close any open conversation ─────────────────────
     Hooks.on("deleteToken", (tokenDoc) => {
@@ -426,6 +506,41 @@ function _registerHooks() {
 
     // ── Death pipeline: prefer QOL custom hook, fall back to updateActor ─
     Hooks.on("ace-qol.npcDeath", (data) => {
+        // ── LOCK ANY OPEN CONVERSATION, ON EVERY CLIENT (2026-08-07) ────────
+        // Runs BEFORE the GM-only guard below, because the players are the ones
+        // who must be shut out — a GM-only handler would have left every player
+        // window live. Jeth killed Savid and then interviewed the corpse, which
+        // answered that it felt "stronger, no more pain".
+        try {
+            const deadActorId = data?.actor?.id ?? data?.tokenDoc?.actorId ?? null;
+            const deadTokenId = data?.tokenDoc?.id ?? null;
+            for (const [, app] of (openConversations ?? new Map())) {
+                if (!app || app._isClaim) continue;
+                const hit = (deadActorId && app.actor?.id === deadActorId)
+                         || (deadTokenId && app.tokenDocument?.id === deadTokenId);
+                if (!hit) continue;
+                app._applyDeathLock?.();
+                console.log(`${TAG} | ${app.npcName ?? "NPC"} died mid-conversation — window locked.`);
+            }
+        } catch (e) {
+            console.warn(`${TAG} | conversation death-lock failed:`, e);
+        }
+
+        // ⚠️ `ace-qol.npcDeath` is a LOCAL hook — Hooks.callAll never crosses
+        // the wire. Without this emit the lock above only ever ran on the GM's
+        // own client, and every PLAYER window would have stayed live: exactly
+        // the people the lock exists to stop. (2026-08-07)
+        try {
+            if (game.user.isGM) {
+                game.socket.emit(`module.${MODULE_ID}`, {
+                    action:   "npcDied",
+                    actorId:  data?.actor?.id ?? data?.tokenDoc?.actorId ?? null,
+                    tokenId:  data?.tokenDoc?.id ?? null,
+                    senderId: game.user.id,
+                });
+            }
+        } catch (e) { console.warn(`${TAG} | npcDied broadcast failed:`, e); }
+
         if (!game.user.isGM) return;
         // QOL fires this AFTER its dead-marker / loot / dead-art processing
         _handleEngineNpcDeath({
@@ -474,7 +589,9 @@ function _registerHooks() {
 
 /** Single entry point for engine NPC death logic: faction memory ripple +
  *  combat removal + XP + Fallen folder cleanup. */
-function _handleEngineNpcDeath({ actor, tokenDoc, changes, killerName }) {
+// async because the one-time rename of the legacy ☠ Fallen folder awaits
+// Foundry's update. Callers are hook handlers that do not await it.
+async function _handleEngineNpcDeath({ actor, tokenDoc, changes, killerName }) {
     if (!game.user.isGM) return;
 
     // Faction Memory (Death Ripple)
@@ -492,7 +609,7 @@ function _handleEngineNpcDeath({ actor, tokenDoc, changes, killerName }) {
         onActorHpChange(actor, changes);
     }).catch(err => console.error(`${TAG} | Death handler load failed:`, err));
 
-    // Dead NPC Cleanup: move linked actor to "☠ Fallen" folder
+    // Dead NPC Cleanup: move linked actor to "X ☠ Fallen" folder
     try {
         const autoCleanup = game.settings.get(MODULE_ID, "autoCleanupDead");
         if (!autoCleanup) return;
@@ -503,7 +620,28 @@ function _handleEngineNpcDeath({ actor, tokenDoc, changes, killerName }) {
     if (!sidebarActor) return;
     if (sidebarActor.type !== "npc") return;
 
-    const fallenFolder = game.folders?.find(f => f.name === "☠ Fallen" && f.type === "Actor");
+    // ⚠️ RENAMED 2026-08-07 at Johnny's request. "☠ Fallen" sorted to the very
+    // top of the Actors sidebar — the skull glyph sorts before every letter —
+    // so it sat open above the search results every single time he looked for
+    // a creature. Leading "X" drops it to the end and keeps the skull.
+    //
+    // The OLD name is still matched here so his existing folder, with all its
+    // dead NPCs in it, is found and renamed rather than orphaned beside a new
+    // empty one.
+    let fallenFolder = game.folders?.find(f => f.name === FALLEN_FOLDER && f.type === "Actor");
+    if (!fallenFolder) {
+        const legacy = game.folders?.find(f => f.name === LEGACY_FALLEN_FOLDER && f.type === "Actor");
+        if (legacy) {
+            try {
+                await legacy.update({ name: FALLEN_FOLDER });
+                fallenFolder = legacy;
+                console.log(`${TAG} | Renamed the "${LEGACY_FALLEN_FOLDER}" folder to "${FALLEN_FOLDER}" so it stops sorting to the top of the sidebar. Its contents are untouched.`);
+            } catch (err) {
+                console.warn(`${TAG} | Could not rename the fallen folder (using it as-is):`, err);
+                fallenFolder = legacy;
+            }
+        }
+    }
     if (fallenFolder && sidebarActor.folder?.id === fallenFolder.id) return;
 
     _moveActorToFallenFolder(sidebarActor).catch(err =>
@@ -525,9 +663,9 @@ async function _getOrCreateAceNpcsFolder() {
 
 async function _getOrCreateFallenFolder(parentFolder) {
     // Defensive find: prefer one nested under ACE NPCs, but accept any
-    // ☠ Fallen folder if a previous run left orphans at the root (the
+    // X ☠ Fallen folder if a previous run left orphans at the root (the
     // schema-validator dropped `parent:` in V12+ and stranded duplicates).
-    const all = (game.folders ?? []).filter(f => f.name === "☠ Fallen" && f.type === "Actor");
+    const all = (game.folders ?? []).filter(f => f.name === "X ☠ Fallen" && f.type === "Actor");
     const nested = all.find(f => f.folder?.id === parentFolder.id);
     if (nested) return nested;
     if (all.length) return all[0]; // reuse the first orphan rather than make another
@@ -535,7 +673,7 @@ async function _getOrCreateFallenFolder(parentFolder) {
     // Earlier versions used `parent:` which is silently dropped now → orphan
     // at root. Use the correct field.
     return Folder.create({
-        name:   "☠ Fallen",
+        name:   "X ☠ Fallen",
         type:   "Actor",
         folder: parentFolder.id,
         color:  "#8b0000",
@@ -554,5 +692,5 @@ async function _moveActorToFallenFolder(actor) {
     if (!fallenFolder) return;
     if (actor.folder?.id === fallenFolder.id) return;
     await actor.update({ folder: fallenFolder.id });
-    console.log(`${TAG} | Moved ${actor.name} to ☠ Fallen folder.`);
+    console.log(`${TAG} | Moved ${actor.name} to X ☠ Fallen folder.`);
 }

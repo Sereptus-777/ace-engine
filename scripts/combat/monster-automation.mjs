@@ -603,13 +603,24 @@ export function initMonsterAutomation() {
   Hooks.on("dnd5e.rollSavingThrowV2", saveHandler);
 
   // Apply-damage buttons on our chat cards.
+  //
+  // ⚠️ ONE HOOK PER CORE VERSION (2026-08-16 audit). This registered BOTH
+  // renderChatMessageHTML AND legacy renderChatMessage unconditionally, and
+  // Foundry V13 fires both for every message. bindApplyButtons has no
+  // rebind guard, so every apply button got TWO click listeners — one click,
+  // damage applied TWICE. Invisible in testing because the second apply reads
+  // the same dataset and just doubles the number quietly.
   Hooks.on("renderChatMessageHTML", (message, html) => {
     try { bindApplyButtons(message, html); } catch (_) {}
   });
-  // Legacy renderChatMessage for older cores still running this code path.
-  Hooks.on("renderChatMessage", (message, html) => {
-    try { bindApplyButtons(message, html); } catch (_) {}
-  });
+  try {
+    const major = parseInt(game?.version);
+    if (isNaN(major) || major < 13) {
+      Hooks.on("renderChatMessage", (message, html) => {
+        try { bindApplyButtons(message, html); } catch (_) {}
+      });
+    }
+  } catch (_) { /* no legacy registration — V13+ is covered above */ }
 
   console.log(`${TAG} | Monster trait automation initialized.`);
 }

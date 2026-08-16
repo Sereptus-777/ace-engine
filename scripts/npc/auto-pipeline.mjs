@@ -391,8 +391,13 @@ export function activateAutoPipeline() {
     if (_activated) return;
     if (!game.user.isGM) return;
     _activated = true;
-    Hooks.on("renderChatMessage", _onRenderChatMessage);       // V12
-    Hooks.on("renderChatMessageHTML", _onRenderChatMessage);   // V13 (was missing → inert on V13)
+    // ⚠️ ONE HOOK PER CORE VERSION (2026-08-16 audit) — V13 fires BOTH hooks,
+    // so registering both ran this handler twice per message.
+    Hooks.on("renderChatMessageHTML", _onRenderChatMessage);   // V13
+    try {
+      const major = parseInt(game?.version);
+      if (isNaN(major) || major < 13) Hooks.on("renderChatMessage", _onRenderChatMessage); // V12
+    } catch (_) { /* V13+ covered above */ }
     console.log(`${TAG} | Auto-pipeline active (gated by autoGenerateOnDrop setting).`);
 }
 
