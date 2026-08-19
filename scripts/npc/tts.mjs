@@ -91,9 +91,16 @@ function _warnBrowserFallback() {
     if (_warnedNoKey || !game.user?.isGM) return;
     _warnedNoKey = true;
     console.warn(`${MODULE_ID} | No ElevenLabs key found (checked config.local.json, then Module Settings) — NPC speech has fallen back to robotic browser TTS.`);
+    // ⚠️🔴 THIS TOAST USED TO SAY "paste your key into config.local.json"
+    // (Brock, 2026-08-19). Two other places in this same module warn that a key
+    // in that file is readable by every player — Foundry serves it over plain
+    // HTTP — so a GM who followed this toast recreated the exact leak the
+    // loader had just warned them about. A permanent on-screen instruction
+    // beats a console warning every time. Never point anyone at that file again.
     ui.notifications?.warn(
         "ACE: no ElevenLabs key found — NPC voices are using robotic browser TTS. "
-      + "Paste your key into modules/ace-engine/config.local.json so it survives browser clears.",
+      + "Add your key in ACE Engine → AI Setup. It is stored in this browser only "
+      + "and is never sent to your players.",
         { permanent: true }
     );
 }

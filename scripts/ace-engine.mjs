@@ -4,6 +4,7 @@
 // ============================================================
 
 import { AcePanel }          from "./panel.mjs";
+import { maySpendOnAI, doneSpending } from "./npc/ai-spend-limit.mjs";
 import { isBioInFlight, openAutoLinkCleanup } from "./npc/bio-generator.mjs";
 import { setSharedElevenLabsKey, getSharedElevenLabsKey, getSharedElevenLabsKeyInfo } from "./npc/shared-credentials.mjs";
 import { AceSettings }       from "./settings.mjs";
@@ -1318,8 +1319,24 @@ Hooks.once("ready", async () => {
       // arbitrary text and spend the GM's voice credits in a loop. The claim
       // must name a real, connected, non-GM user, and the text is capped at a
       // length a spoken NPC line could plausibly reach.
-      if (!_authoriseEnginePlayerSocket(data, "ttsRequest")) return;
+      const _ttsUser = _authoriseEnginePlayerSocket(data, "ttsRequest");
+      if (!_ttsUser) return;
+      // ⚠️🔴 AUTHORISED BUT NOT RATE-LIMITED WAS STILL A BILL (Brock,
+      // 2026-08-19). The character cap below bounds ONE request; it does
+      // nothing about a thousand of them. A console loop of legitimate-looking
+      // 1,200-character lines still drains the voice credits. The limiter was
+      // written in the socket router, which this file cannot reach, so the one
+      // relay that actually costs money per character was the one that missed
+      // it. That is why the limiter now lives in its own module.
+      if (!maySpendOnAI(_ttsUser, Date.now(), "ttsRequest")) {
+        game.socket.emit(`module.${MODULE_ID}`, {
+          action: "ttsResponse", requestId: data.requestId,
+          error: "Too many voice requests in a row — give it a moment.",
+        });
+        return;
+      }
       if (String(data.text).length > 1200) {
+        doneSpending(_ttsUser);
         console.warn(`${MODULE_ID} | ttsRequest REFUSED — ${String(data.text).length} characters is far past a spoken line.`);
         game.socket.emit(`module.${MODULE_ID}`, {
           action: "ttsResponse", requestId: data.requestId, error: "That line is too long to voice.",
@@ -1333,6 +1350,7 @@ Hooks.once("ready", async () => {
         // fine (live-fire 2026-07-10 18:24).
         const apiKey = getSharedElevenLabsKey();
         if (!apiKey) {
+          doneSpending(_ttsUser);
           game.socket.emit(`module.${MODULE_ID}`, {
             action: "ttsResponse", requestId: data.requestId, error: "GM has no ElevenLabs API key configured."
           });
@@ -1390,8 +1408,12 @@ Hooks.once("ready", async () => {
           game.socket.emit(`module.${MODULE_ID}`, {
             action: "ttsResponse", requestId: data.requestId, error: String(err?.message ?? err)
           });
-        });
+        // ⚠️ RELEASE ON EVERY PATH. A slot claimed and never released locks
+        // that player out of voice until they reload — the limiter would then
+        // read as "TTS is broken", which is worse than no limiter.
+        }).finally(() => doneSpending(_ttsUser));
       } catch (err) {
+        doneSpending(_ttsUser);
         console.warn(`${MODULE_ID} | ttsRequest handler threw:`, err);
       }
     }

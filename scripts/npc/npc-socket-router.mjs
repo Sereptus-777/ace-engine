@@ -25,6 +25,10 @@
 const MODULE_ID = "ace-engine";
 const TAG = "ACE: Engine | Socket";
 
+// ⚠️ Shared with every other relay, including the one in ace-engine.mjs. See
+// ai-spend-limit.mjs for why this is not defined here any more.
+import { maySpendOnAI as _maySpendOnAI, doneSpending as _doneSpending } from "./ai-spend-limit.mjs";
+
 let _wired = false;
 
 /** True when THIS client is the one GM that answers proxied requests. */
@@ -48,45 +52,6 @@ function _claimingPlayer(data, label) {
     if (user.isGM)      { console.warn(`${TAG} | ${label} REFUSED — claims GM "${user.name}".`);      return null; }
     if (!user.active)   { console.warn(`${TAG} | ${label} REFUSED — "${user.name}" is offline.`);     return null; }
     return user;
-}
-
-/**
- * Spend limiter for anything that costs the GM money.
- *
- * ⚠️ THIS IS A BILL, NOT JUST A PERMISSION. Relaying AI calls through the GM
- * is the only safe place for the credential, but it also means a player's
- * client decides when the GM's card gets charged. Without a ceiling, a script
- * in a player's console could run the GM's balance to zero in a minute.
- *
- * One in flight per player (a human is waiting on a reply before typing the
- * next line anyway) and 20 per five minutes, which is far above real roleplay
- * and far below abuse.
- */
-const _aiSpend = new Map();   // userId -> { inFlight: boolean, stamps: number[] }
-const AI_WINDOW_MS = 300_000;
-const AI_MAX_PER_WINDOW = 20;
-
-function _maySpendOnAI(user, now) {
-    const rec = _aiSpend.get(user.id) ?? { inFlight: false, stamps: [] };
-    _aiSpend.set(user.id, rec);
-    if (rec.inFlight) {
-        console.warn(`${TAG} | AI relay REFUSED — "${user.name}" already has a request in flight.`);
-        return false;
-    }
-    rec.stamps = rec.stamps.filter(t => now - t < AI_WINDOW_MS);
-    if (rec.stamps.length >= AI_MAX_PER_WINDOW) {
-        console.warn(`${TAG} | AI relay REFUSED — "${user.name}" hit ${AI_MAX_PER_WINDOW} requests in ` +
-            `${AI_WINDOW_MS / 60000} minutes. Ignoring until the window clears.`);
-        return false;
-    }
-    rec.stamps.push(now);
-    rec.inFlight = true;
-    return true;
-}
-
-function _doneSpending(user) {
-    const rec = _aiSpend.get(user.id);
-    if (rec) rec.inFlight = false;
 }
 
 /** Is this message addressed to someone else? */
@@ -166,19 +131,32 @@ export function wireNpcSocketRouter() {
                     // ⚠️ This spends an AI call and writes a name, a history and
                     // a faction onto a token. Unauthed, any client could make the
                     // GM generate identities for every token on the map.
-                    if (!_claimingPlayer(data, "ensureIdentity")) return;
+                    const _idUser = _claimingPlayer(data, "ensureIdentity");
+                    if (!_idUser) return;
                     const scene = game.scenes?.get(data.sceneId) ?? canvas.scene;
                     const tokenDoc = scene?.tokens?.get(data.tokenId);
                     if (!tokenDoc) {
                         console.warn(`${TAG} | A player asked for an identity for a token that is not on any scene I can see (${data.tokenId}).`);
                         return;
                     }
+                    // ⚠️ "The claimant is a real player" was the ONLY test, so
+                    // one console line could make the GM generate an identity —
+                    // a paid AI call each — for every token on the map. The
+                    // limiter caps that at the same rate as a conversation.
+                    //
+                    // No proximity test on purpose: the player-side UI already
+                    // gates the button on range and line of sight, and copying
+                    // that check here would refuse honest requests whenever the
+                    // player has no token placed, which the UI explicitly allows.
+                    if (!_maySpendOnAI(_idUser, Date.now(), "ensureIdentity")) return;
                     try {
                         const { giveThisOneALife } = await import("./hud-give-a-life.mjs");
                         console.log(`${TAG} | ${game.users?.get(data.senderId)?.name ?? "A player"} started talking to "${tokenDoc.name}", which is nobody yet — giving it a name and a history.`);
                         await giveThisOneALife(tokenDoc);
                     } catch (err) {
                         console.error(`${TAG} | Could not create an identity on a player's behalf:`, err);
+                    } finally {
+                        _doneSpending(_idUser);
                     }
                     return;
                 }
@@ -281,12 +259,27 @@ export function wireNpcSocketRouter() {
                     // ⚠️ Spends an AI call and writes a journal entry into the
                     // campaign record. Both are the GM's, not a player's to
                     // trigger at will.
-                    if (!_claimingPlayer(data, "summarizeSession")) return;
+                    const _sumUser = _claimingPlayer(data, "summarizeSession");
+                    if (!_sumUser) return;
                     const actor = game.actors.get(data.actorId);
                     if (!actor || !data.history?.length) return;
-                    const { summarizeAndSaveSession } = await import("./memory.mjs");
-                    await summarizeAndSaveSession(actor, data.history, data.playerName);
-                    console.log(`${TAG} | Summarised a player's conversation with ${actor.name}.`);
+                    // ⚠️ This spends an AI call and writes into the campaign
+                    // journal. Unlimited, a loop fills the journal and the bill.
+                    // It is also only ever a conversation with a CREATURE the
+                    // player was talking to — never another player's character.
+                    if (actor.type === "character" && !actor.testUserPermission(_sumUser, "OWNER")) {
+                        console.warn(`${TAG} | summarizeSession REFUSED — "${_sumUser.name}" tried to write a ` +
+                            `conversation summary onto "${actor.name}", a character they do not own.`);
+                        return;
+                    }
+                    if (!_maySpendOnAI(_sumUser, Date.now(), "summarizeSession")) return;
+                    try {
+                        const { summarizeAndSaveSession } = await import("./memory.mjs");
+                        await summarizeAndSaveSession(actor, data.history, data.playerName);
+                        console.log(`${TAG} | Summarised a player's conversation with ${actor.name}.`);
+                    } finally {
+                        _doneSpending(_sumUser);
+                    }
                     return;
                 }
             }

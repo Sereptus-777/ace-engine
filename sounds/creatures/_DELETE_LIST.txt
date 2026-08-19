@@ -1,8 +1,0 @@
-UNUSABLE/elemental/intro-wind.mp3
-UNUSABLE/flying/fs_389633_wing_flap_2_wav.mp3
-UNUSABLE/flying/fs_696037_glossy_black_cockatoo_wav.mp3
-UNUSABLE/fs_389614_growl_5.mp3
-UNUSABLE/insect/fs_824925_cicadas_w_breeze_2.mp3
-UNUSABLE/insect/fs_824926_cicadas_distant.mp3
-UNUSABLE/swarm/fs_564499_buzzing_insect_wav.mp3
-UNUSABLE/swarm/fs_653105_nature_summer_day_bees_wav.mp3

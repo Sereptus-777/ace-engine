@@ -258,7 +258,7 @@ async function applyPassiveTraits(tokenDoc) {
 
   for (const t of iterTraits(actor)) {
     // Reactive auras & Heated Body → visual marker + (visuals) token light.
-    if (REACTIVE_AURAS[t.key] && !seen.has("aura")) {
+    if (REACTIVE_AURAS[t.key] && !seen.has("aura") && !qolOwnsTrait("reactive aura")) {
       seen.add("aura");
       const isFire = (REACTIVE_AURAS[t.key].defType ?? "fire") === "fire";
       toCreate.push(_effectData(actor, t.item.name,
@@ -361,6 +361,16 @@ async function onDamageRolled(rolls, data) {
   for (const tok of targets) {
     const victim = tok?.actor;
     if (!victim || victim === attacker) continue;
+
+    // ⚠️ QOL OWNS RETALIATION (Brock, 2026-08-19). The comment on qolOwnsTrait
+    // listed Heated Body as something Engine "uniquely provides". It does not:
+    // ace-qol/scripts/retaliation-engine.mjs has handled exactly this family
+    // since June, and handles it BETTER — it reads each feature's DESCRIPTION
+    // for the retaliation intent instead of matching a name, so it catches the
+    // homebrew salamander whose trait is called "Molten Hide", which the name
+    // table below never would. With both installed, the attacker took the
+    // damage twice.
+    if (qolOwnsTrait("reactive aura")) continue;
 
     const aura = findTrait(victim, (t) => REACTIVE_AURAS[t.key]);
     if (!aura) continue;
@@ -514,7 +524,16 @@ async function onCombatTurn(combat, changed) {
  * QOL is the combat engine and its versions are wired into the save pipeline,
  * the damage chokepoint and the reaction system. So QOL wins, and Engine
  * stands down for exactly the traits it duplicates — not for the ones it
- * uniquely provides (Heated Body, Spider Climb, Pack Tactics, Death Burst).
+ * uniquely provides (Death Burst and the other on-death effects, Spider Climb's
+ * movement change, the passive stat-block markers).
+ *
+ * ⚠️ THIS COMMENT USED TO NAME "Heated Body" AS UNIQUELY ENGINE'S, and it was
+ * wrong (Brock, 2026-08-19). QOL's retaliation engine has covered that whole
+ * family since June. A stand-down list is only as good as the survey behind it,
+ * and this one was written from memory instead of from a grep of the other
+ * module. Before adding a trait here, search ace-qol for the CAPABILITY, not
+ * the trait name — QOL matches retaliation by description intent, so it will
+ * never contain the string "Heated Body" in the code that handles it.
  *
  * ⚠️ Checks that QOL is ACTIVE, not merely installed, and honours QOL's own
  * setting: if the GM turned QOL's Legendary Resistance off, Engine should NOT
@@ -529,6 +548,11 @@ function qolOwnsTrait(traitKey) {
         // the whole save context. Stand down whether its toggle is on or off.
         return true;
       case "regeneration":
+        return true;
+      case "reactive aura":
+        // Heated Body, Fire Form, Barbed Hide, Fiery Body and every homebrew
+        // rename of them. QOL applies these from the damage chokepoint, where
+        // it already knows the attacker's resistances.
         return true;
       default:
         return false;

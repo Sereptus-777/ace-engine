@@ -5173,8 +5173,8 @@ Appropriate loot, XP, and story rewards.
           this._browserTtsWarned = true;
           console.log(
             `${MODULE_ID} | TTS: no ElevenLabs key — using the free browser voice.\n` +
-            `  → Add one in ACE Engine → AI Setup for premium voices,\n` +
-            `  → or create modules/${MODULE_ID}/config.local.json with your key.`
+            `  → Add one in ACE Engine → AI Setup for premium voices.\n` +
+            `  → It is stored in this browser only and is never sent to your players.`
           );
         }
         await this._speakBrowser(clean, gender, broadcast);
