@@ -181,7 +181,7 @@ export function hasPersonalName(displayName, species, baseName = "") {
  *            shortName:string, descriptor:string, selfReference:string}}
  */
 export function resolveIdentity(actor, tokenDoc = null) {
-  const species = resolveSpecies(actor, tokenDoc);
+  let species = resolveSpecies(actor, tokenDoc);
 
   // What the players actually see. The token's own name wins over the base
   // actor's, because that is the thing on screen in front of them.
@@ -193,7 +193,17 @@ export function resolveIdentity(actor, tokenDoc = null) {
               || clean(tokenDoc?.delta?._source?.flags?.[MODULE_ID]?.flavorName);
   } catch (_) { /* nameplate flag unreadable — ignore, never fatal */ }
 
-  const isNamed = hasPersonalName(name, species);
+  let isNamed = hasPersonalName(name, species);
+
+  // ── A STATBLOCK LABEL DESCRIBES BETTER THAN A BROAD TYPE ────────────────
+  // An Archmage has no subtype, so species resolves to "humanoid" and the
+  // creature would narrate as "the humanoid" — which is worse than the label
+  // it already carries. When the name IS a label and the species is only a
+  // broad category, the label wins: "the archmage", "the bandit captain".
+  if (!isNamed && BROAD_TYPES.has(species)) {
+    const bare = bareName(name);
+    if (bare && bare !== species) species = bare;
+  }
 
   // First name only, for natural narration: "Lilith hesitates", not
   // "Lilith Vex hesitates" every single line.
@@ -229,7 +239,13 @@ export function buildIdentityPrompt(actor, tokenDoc = null) {
   } else if (id.species) {
     lines.push(`You are ${/^[aeiou]/i.test(id.species) ? "an" : "a"} ${id.species}.`);
     lines.push(`YOU HAVE NO PERSONAL NAME. "${id.name}" is a label, not a name.`);
-    lines.push(`IN NARRATION (the *asterisk* parts), refer to yourself as "the ${id.species}" — for example *the ${id.species} hesitates.* If asked your name you may invent one that suits your kind, and you should then use it from that point on.`);
+    lines.push(`IN NARRATION (the *asterisk* parts), refer to yourself as "the ${id.species}" — for example *the ${id.species} hesitates.*`);
+    // The bio is generated the moment someone first speaks to a nameless
+    // creature (see ConversationApp._ensureIdentity), so by the time this
+    // prompt is built there is usually a name sitting in BIOGRAPHY above.
+    // Point at it explicitly — otherwise the model treats the statblock label
+    // as the name, which is how an "Archmage" ended up saying "I am Archmage".
+    lines.push(`⚠️ YOUR REAL NAME IS IN YOUR BIOGRAPHY ABOVE. "${id.name}" is a statblock label — a kind of creature, not a person — so NEVER introduce yourself as "${id.name}". If the biography names you, THAT is your name: answer to it, and offer it when the conversation earns it. If your biography gives you no name, invent one that suits your kind the first time you are asked, and use it from then on.`);
   } else {
     lines.push(`You are ${id.name}.`);
     lines.push(`IN NARRATION (the *asterisk* parts), refer to yourself as "${id.selfReference}".`);

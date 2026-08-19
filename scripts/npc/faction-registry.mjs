@@ -13,6 +13,7 @@
 // EngineBridge.* calls now reach engine's own api by module id.
 
 import { isAIFailure } from "./ai-failure.mjs";
+import { getSecret, getSecretVault } from "../settings.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -21,7 +22,7 @@ function getEnvoyAIConfig() {
     try {
         return {
             provider: game.settings.get(MODULE_ID, "aiProvider") || "ollama",
-            apiKey:   game.settings.get(MODULE_ID, "apiKey")     || "",
+            apiKey:   getSecret("apiKey")     || "",
             apiUrl:   game.settings.get(MODULE_ID, "apiUrl")     || "",
             modelName: game.settings.get(MODULE_ID, "modelName") || "",
         };
@@ -671,7 +672,7 @@ export function rollSpyChance(tokenDoc, assignedFactionId) {
  * @param {object} [parentFaction] — the governance faction this exists within
  * @returns {Promise<{ name: string, purpose: string, lore: string, leader: string }>}
  */
-export async function generateFactionIdentity(creatureBase, sceneName, worldName, template, parentFaction) {
+export async function generateFactionIdentity(creatureBase, sceneName, worldName, template, parentFaction, neighbourContext = "") {
     const { provider, apiKey } = getEnvoyAIConfig();
 
     const parentContext = parentFaction
@@ -692,7 +693,11 @@ Respond in EXACTLY this format (no extra text):
 NAME: [faction name]
 LEADER: [leader name and title]
 PURPOSE: [1 sentence — why they are HERE]
-LORE: [2-3 sentences of shared history]`;
+LORE: [2-3 sentences of shared history]
+
+If — and ONLY if — one of the already-existing factions listed below is genuinely
+the right home for this creature, do not invent anything. Reply with a single line:
+EXISTING: [the exact existing faction name]`;
 
     // ── Scene Intelligence + World Bible + Direct Lookup: inject canonical knowledge ──
     let locationContext = "";
@@ -721,12 +726,18 @@ LORE: [2-3 sentences of shared history]`;
 - Stability: ${template.stability}
 ${parentContext ? `- Operates within: ${parentContext}` : ""}
 ${locationContext}
-The faction name should feel appropriate for ${creatureBase}s — not generic.${locationContext ? " Use canonical faction names from the scene intelligence or World Bible if appropriate for this creature type and location." : ""}`;
+The faction name should feel appropriate for ${creatureBase}s — not generic.${locationContext ? " Use canonical faction names from the scene intelligence or World Bible if appropriate for this creature type and location." : ""}${neighbourContext || ""}`;
 
     try {
         const Handler = await _getAIHandler();
         const response = await Handler.callAI(systemPrompt, [], userMsg, provider, apiKey, [], { context: "faction-naming" });
         if (isAIFailure(response)) throw new Error("AI unavailable — using fallback name");
+
+        // The model may decline to invent and point at something real instead.
+        // That is the preferred outcome, not a parse failure.
+        const existing = /^\s*EXISTING:\s*(.+?)\s*$/mi.exec(response);
+        if (existing) return { useExistingName: existing[1].trim() };
+
         return _parseFactionIdentity(response);
     } catch (err) {
         console.error(`${TAG} | AI faction generation failed:`, err);
@@ -2646,7 +2657,60 @@ async function showSmartSetupDialog(actorName, creatureBase, recommendations, cr
  * @param {TokenDocument} tokenDoc
  * @returns {Promise<{ faction: FactionData|null, isSpy: boolean, spyFaction: FactionData|null, role: string }>}
  */
-export async function processTokenFaction(tokenDoc) {
+/**
+ * Decide a creature's rank inside its faction and record it on the roster.
+ *
+ * ⚠️ SHARED BY BOTH PATHS ON PURPOSE (2026-08-07). The silent adopt path used
+ * to return the moment it found a faction, so it never reached the rank ladder
+ * and every silently-dropped creature ended up with an empty role and a null
+ * roster — proven live on Johnny's Amberfang goblin. Rank costs nothing: it is
+ * read from the statblock, class levels, gear and token, with a weighted roll
+ * only as a last resort. There is no reason for a free path to skip it.
+ *
+ * @returns {Promise<string>} the role label ("" if it could not be decided)
+ */
+async function _decideAndClaimRole(actor, tokenDoc, faction, factionId, template, creatureBase) {
+    if (!actor || !faction || !factionId) return "";
+    try {
+        const { decideRole, claimRosterSlot, ensureOfficersHarvested } = await import("./faction-roster.mjs");
+
+        // ⚠️ HARVEST BEFORE DECIDING (2026-08-07). A faction records its leader
+        // in a field and every other officer in prose — "Their shaman, Zizka the
+        // Wise, communes with the spirits". Nothing structured knew about Zizka,
+        // so the shaman post read as vacant and the next shaman-shaped creature
+        // would have been given a rival name, contradicting the tribe's own
+        // history. Reading those officers onto the roster first means the post
+        // is held, and a creature that qualifies for it BECOMES that person.
+        // Idempotent — a post with an occupant is left alone.
+        await ensureOfficersHarvested(factionId, template);
+        // Re-read: the harvest above may have just written the roster.
+        const freshFaction = getFaction(factionId) ?? faction;
+
+        // Everyone of this faction standing on this scene, so slot capacity and
+        // the CR comparison are measured against the actual group.
+        const groupActors = [];
+        try {
+            for (const t of canvas.scene?.tokens ?? []) {
+                const a = t.actor;
+                if (!a) continue;
+                if (a.getFlag?.(MODULE_ID, "factionId") === factionId || t.id === tokenDoc?.id) groupActors.push(a);
+            }
+        } catch (_) { /* an empty group is a valid answer */ }
+
+        const decided = decideRole({ actor, tokenDoc, faction: freshFaction, template, speciesLabel: creatureBase, groupActors });
+        await claimRosterSlot(factionId, decided.slotKey, actor.id, decided.roleLabel, decided.becomesOfficer ?? null);
+        if (decided.becomesOfficer?.name) {
+            console.log(`${TAG} | ${actor.name} IS ${decided.becomesOfficer.name}, the ${decided.roleLabel} "${freshFaction.name}" already spoke of.`);
+        }
+        console.log(`${TAG} | ${actor.name} is ${decided.roleLabel} of "${freshFaction.name}" — ${decided.reasons.join("; ")}.`);
+        return decided.roleLabel;
+    } catch (err) {
+        console.warn(`${TAG} | Could not decide a role (the creature still joins the faction):`, err);
+        return "";
+    }
+}
+
+export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) {
     const actor = tokenDoc.actor;
     if (!actor) return { faction: null, isSpy: false, spyFaction: null, role: "" };
 
@@ -2682,32 +2746,90 @@ export async function processTokenFaction(tokenDoc) {
       return { faction: null, isSpy: false, spyFaction: null, role: "" };
     }
 
+    // ── Existing factions for this creature type in this world ─────
+    // ⚠️ DECLARED HERE, ABOVE THE AUTO-SCAN BRANCH, ON PURPOSE (2026-08-07).
+    // These two used to be declared ~30 lines further down while the silent
+    // branch below already read `matching` and wrote `isNew`. In a module that
+    // is a temporal-dead-zone ReferenceError — thrown every single time a
+    // non-civilian creature arrived by scene auto-scan, which is now the
+    // DEFAULT path for every token drop. ESLint's no-use-before-define is what
+    // surfaced it; `node --check` cannot see this class of bug. Do not move
+    // them back down.
+    const matching = findMatchingFactions(creatureBase, worldTag);
+    let isNew = false;
+
+    // ── The proper lookup, loaded once and shared by both paths ────
+    // Dynamic import keeps faction-lookup and faction-registry from forming an
+    // import cycle (lookup reads the registry's store).
+    let _lookup = null;
+    let _lookupCtx = null;
+    try {
+        _lookup = await import("./faction-lookup.mjs");
+        let sceneIntelText = "";
+        try { sceneIntelText = EngineBridge.digestLookupContext(sceneName, { maxChars: 1500 }) || ""; }
+        catch (_) { /* digest is optional context, never a blocker */ }
+        _lookupCtx = {
+            creatureBase, sceneName, worldTag, template, sceneIntelText,
+            factionIdsOnScene: _lookup.factionIdsOnCurrentScene(tokenDoc?.id ?? null),
+        };
+    } catch (err) {
+        console.warn(`${TAG} | Faction lookup module unavailable — falling back to creature-base matching only:`, err);
+    }
+
     // ── Auto-scan (scene load) vs manual drop ──────────────────────
     // Scene auto-scan should generate silently — no dialog popups.
     // Manual drops get the full NPC Identity Dialog.
-    const isManualDrop = !!tokenDoc._aceManualDrop;
+    // adoptOnly is the silent drop: pure registry lookup, no dialog, no
+    // invention, no AI call. It is deliberately treated as an auto-scan.
+    const isManualDrop = !adoptOnly && !!tokenDoc._aceManualDrop;
     if (!isManualDrop) {
       // Silent path: auto-assign faction or skip for civilians
       if (_isCivilianBase(creatureBase)) {
         console.log(`${TAG} | ${actor.name} (${creatureBase}) — auto-scan, civilian, skipping faction`);
         return { faction: null, isSpy: false, spyFaction: null, role: creatureBase };
       }
-      // For non-civilians on auto-scan, use first matching faction or auto-generate
-      if (matching.length > 0) {
-        const factionId = matching[0].id;
-        const role = "";
+
+      // LOOK BEFORE YOU INVENT — the silent path gets the same full lookup the
+      // dialog path does. It used to take `matching[0]`, which only ever
+      // considered creature-base matches and so could never see any of the 440
+      // imported world factions (they carry an empty creature base by design).
+      let silentPick = null;
+      if (_lookup && _lookupCtx) {
+        const verdict = _lookup.decideFaction(_lookupCtx);
+        if (verdict.decision === "adopt" && verdict.id) {
+          silentPick = verdict.faction;
+          await _lookup.rememberPresence(verdict.id, sceneName);
+          console.log(`${TAG} | ${actor.name} joined the EXISTING "${verdict.faction.name}" — ${verdict.reasons.join("; ")}.`);
+        }
+      } else if (matching.length > 0) {
+        silentPick = matching[0];   // degraded fallback if the lookup failed to load
+      }
+
+      if (silentPick) {
+        const factionId = silentPick.id;
+        // Rank is free — read from the statblock, levels, gear and token — so
+        // the silent path decides it too. Skipping it left every silently
+        // dropped creature with no role and the faction with an empty roster,
+        // which is exactly what "this faction already has a chief" needs.
+        const role = await _decideAndClaimRole(actor, tokenDoc, silentPick, factionId, template, creatureBase);
         await assignToFaction(tokenDoc, factionId, role);
         const spyResult = rollSpyChance(tokenDoc, factionId);
         const spyFaction = spyResult.isSpy ? getFaction(spyResult.realFactionId) : null;
-        return { faction: matching[0], isSpy: spyResult.isSpy, spyFaction, role };
+        return { faction: silentPick, isSpy: spyResult.isSpy, spyFaction, role };
       }
-      // No matching factions — auto-generate silently
-      isNew = true;
-      console.log(`${TAG} | ${actor.name} — auto-scan, first of type, auto-generating faction`);
-    }
 
-    // Find existing factions for this creature type in this world
-    const matching = findMatchingFactions(creatureBase, worldTag);
+      // Nothing in the world fits. On a silent drop we stop here rather than
+      // spend an AI call inventing a warband for a creature nobody may ever
+      // speak to — the question gets settled on first contact instead.
+      if (adoptOnly) {
+        console.log(`${TAG} | ${actor.name} — no existing faction fits; leaving it unaffiliated until somebody talks to it.`);
+        return { faction: null, isSpy: false, spyFaction: null, role: "" };
+      }
+
+      // Nothing in the world fits — auto-generate silently
+      isNew = true;
+      console.log(`${TAG} | ${actor.name} — nothing in the registry fits, generating a new faction silently.`);
+    }
 
     // ── Scene Intelligence: get canonical factions from source material ──
     let sceneIntel = null;
@@ -2727,9 +2849,10 @@ export async function processTokenFaction(tokenDoc) {
     }
 
     let factionId = null;
-    let isNew = false;
     let role = "";
     let faction = null;
+    // `matching` and `isNew` are declared above the auto-scan branch — see the
+    // temporal-dead-zone note there.
 
     // ── Wild Card: "The guy from Zambia" ──────────────────────────────
     // 1-in-N chance this NPC is from a completely different region of the world.
@@ -3002,41 +3125,118 @@ export async function processTokenFaction(tokenDoc) {
         }
     }
 
+    // ── LOOK BEFORE YOU INVENT (2026-08-07) ──────────────────────────────
+    // Johnny: "we already got real factions… like over 200 or something, but
+    // yet we're inventing them through the AI." Proven cause: the only lookup
+    // that ever ran matched on creature base alone, and every imported world
+    // faction is an ORGANISATION with a deliberately empty creature base — so
+    // all 440 of them were invisible to the only question ever asked.
+    //
+    // faction-lookup asks properly: kin, place, institution shape, what the
+    // scene's own canon names, and who is already standing on this map. It
+    // never invents; it returns a verdict.
+    if (isNew && _lookup && _lookupCtx) {
+        try {
+            const verdict = _lookup.decideFaction(_lookupCtx);
+            if (verdict.decision === "adopt" && verdict.id) {
+                faction   = verdict.faction;
+                factionId = verdict.id;
+                isNew     = false;
+                // The world map grows on its own: a faction adopted somewhere it
+                // had no recorded presence now has it.
+                await _lookup.rememberPresence(factionId, sceneName);
+                ui.notifications?.info(`Joined existing faction: ${faction.name}`);
+                console.log(`${TAG} | ${tokenDoc?.name ?? creatureBase} joined the EXISTING "${faction.name}" — ${verdict.reasons.join("; ")}.`);
+            }
+        } catch (err) {
+            console.warn(`${TAG} | Faction lookup failed — falling back to inventing one:`, err);
+        }
+    }
+
     // ── Generate new faction if needed ───────────────────────────────────
     if (isNew) {
         // Find the local governance faction for context (if any)
         const localGovernance = _findLocalGovernance(worldTag);
 
+        let neighbourContext = "";
+        try {
+            if (_lookup && _lookupCtx) neighbourContext = _lookup.describeNeighbours(_lookupCtx);
+        } catch (_) { /* prompt garnish only */ }
+
         const identity = await generateFactionIdentity(
-            creatureBase, sceneName, worldTag, template, localGovernance
+            creatureBase, sceneName, worldTag, template, localGovernance, neighbourContext
         );
 
-        faction = {
-            id: foundry.utils.randomID(),
-            name: identity.name,
-            type: template.type,
-            tier: template.type,  // Power factions use their type as tier
-            stability: template.stability,
-            creatureBase,
-            worldTag,
-            scene: sceneName,
-            purpose: identity.purpose,
-            leader: identity.leader,
-            lore: identity.lore,
-            parentFaction: localGovernance?.id || null,
-            members: [],
-            reputation: 0,
-            created: Date.now(),
-            lastActive: Date.now(),
-        };
+        // ── ADOPT ON COLLISION ───────────────────────────────────────────
+        // Scene intelligence and the world bible are already in the generation
+        // prompt, so the model regularly answers with a canonical name that is
+        // ALREADY in the registry. Without this test each of those became a
+        // duplicate sitting next to the real entry. Also catches the model
+        // taking the explicit EXISTING: escape hatch.
+        const wantedName = identity.useExistingName || identity.name;
+        let adopted = null;
+        try { adopted = _lookup?.findFactionByName?.(wantedName) ?? null; } catch (_) { adopted = null; }
 
-        await saveFaction(faction);
-        factionId = faction.id;
+        if (adopted) {
+            faction   = adopted.faction;
+            factionId = adopted.id;
+            isNew     = false;
+            try { await _lookup.rememberPresence(factionId, sceneName); } catch (_) { /* non-fatal */ }
+            ui.notifications?.info(`Joined existing faction: ${faction.name}`);
+            console.log(`${TAG} | The generator named "${wantedName}", which already exists — joined it instead of creating a duplicate.`);
+        } else if (identity.useExistingName) {
+            // It named something that is not actually in the registry. Treat the
+            // name as an invention rather than losing the answer entirely.
+            console.log(`${TAG} | The generator pointed at "${identity.useExistingName}", which is not in the registry — creating it.`);
+            identity.name = identity.useExistingName;
+        }
 
-        ui.notifications?.info(`New faction created: ${faction.name} (${template.type})`);
-        console.log(`${TAG} | Created new faction: ${faction.name} (${faction.id})`);
+        if (isNew) {
+            faction = {
+                id: foundry.utils.randomID(),
+                name: identity.name,
+                type: template.type,
+                tier: template.type,  // Power factions use their type as tier
+                stability: template.stability,
+                creatureBase,
+                worldTag,
+                scene: sceneName,
+                // ⚠️ presence is what makes an emergent faction FINDABLE later.
+                // Without it the Red Fang met in a forest could never be matched
+                // by place again, and the next encounter would invent a second one.
+                presence: sceneName ? [sceneName] : [],
+                source: "emergent",
+                purpose: identity.purpose,
+                leader: identity.leader,
+                lore: identity.lore,
+                parentFaction: localGovernance?.id || null,
+                members: [],
+                reputation: 0,
+                created: Date.now(),
+                lastActive: Date.now(),
+            };
+
+            await saveFaction(faction);
+            factionId = faction.id;
+
+            ui.notifications?.info(`New faction created: ${faction.name} (${template.type})`);
+            console.log(`${TAG} | Created new faction: ${faction.name} (${faction.id}) — recorded at ${sceneName || "an unnamed scene"}.`);
+        }
     } else if (factionId) {
         faction = getFaction(factionId);
+    }
+
+    // ── WHO IS THE CHIEF, AND WHO IS A MOOK (2026-08-07) ────────────────
+    // Johnny: "there's going to be a lot more mooks than chiefs… the AI has to
+    // be smart enough to know, okay, this faction already has a chief."
+    //
+    // Rank is READ, not rolled. The Monster Manual builds the hierarchy into
+    // statblock names — Goblin Boss IS the chieftain — and gear, class levels
+    // and legendary actions fill in the rest. Only when nothing says anything
+    // does a weighted roll happen, and the roster refuses to hand out a post
+    // that is already held. See faction-roster.mjs for the full ladder.
+    if (faction && factionId && !role) {
+        role = await _decideAndClaimRole(actor, tokenDoc, faction, factionId, template, creatureBase);
     }
 
     // ── Assign token to faction ─────────────────────────────────────────

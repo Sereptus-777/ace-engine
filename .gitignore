@@ -20,3 +20,7 @@ node_modules/
 **/*api*key*.txt
 **/*.env
 **/*.secret
+
+# Never let a parked secret ride along again (audit 2026-08-07)
+*key*.txt
+*secret*

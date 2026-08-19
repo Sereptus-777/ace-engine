@@ -8,6 +8,19 @@ import { getSharedElevenLabsKeyInfo } from "./npc/shared-credentials.mjs";
 import { CanvasHighlight } from "./canvas-highlight.mjs";
 import { filterProfanity, buildProfanityPrompt } from "./profanity-filter.mjs";
 import { writeBiography, appendToBiography } from "./bio-writer.mjs";
+import { getSecret, getSecretVault } from "./settings.mjs";
+
+// dnd5e 5.3 moved senses to `senses.ranges.*`; the old path logs a deprecation
+// on every read and is REMOVED in 6.1 (it would silently return 0 — every
+// creature blind in the dark, nothing thrown). New shape first, old as fallback.
+function _senseFt(senses, key) {
+  try {
+    const modern = senses?.ranges?.[key];
+    if (modern !== undefined && modern !== null) return Number(modern) || 0;
+    return Number(senses?.[key]) || 0;
+  } catch (_) { return 0; }
+}
+
 // Social Profile Engine moved to ace-envoy (standalone module)
 
 // v13-safe FilePicker access (for document library uploads)
@@ -6182,9 +6195,12 @@ Appropriate loot, XP, and story rewards.
     // ── 2. Senses attribute (compatible with D&D 5e 5.2.x and 5.3.0+) ──
     const rawSenses = actor.system?.attributes?.senses ?? {};
     const senses = rawSenses.ranges ?? rawSenses;
-    if (senses.blindsight > 0) traits.push(`Blindsight ${senses.blindsight}ft`);
-    if (senses.tremorsense > 0) traits.push(`Tremorsense ${senses.tremorsense}ft`);
-    if (senses.truesight > 0) traits.push(`Truesight ${senses.truesight}ft`);
+    const _bs = _senseFt(senses, "blindsight");
+    if (_bs > 0) traits.push(`Blindsight ${_bs}ft`);
+    const _ts = _senseFt(senses, "tremorsense");
+    if (_ts > 0) traits.push(`Tremorsense ${_ts}ft`);
+    const _tr = _senseFt(senses, "truesight");
+    if (_tr > 0) traits.push(`Truesight ${_tr}ft`);
 
     const specialSenses = (rawSenses.special ?? senses.special ?? "").toLowerCase();
     if (specialSenses.includes("telepathy") && !traits.some(t => t.startsWith("Telepathy"))) {
@@ -6269,7 +6285,7 @@ Appropriate loot, XP, and story rewards.
   _checkNeedsSetup() {
     try {
       const provider = game.settings.get(MODULE_ID, "aiProvider");
-      const apiKey   = game.settings.get(MODULE_ID, "apiKey") || "";
+      const apiKey   = getSecret("apiKey") || "";
       // Local providers (ollama, lmstudio) don't need an API key
       if (provider === "ollama" || provider === "lmstudio") return false;
       return !apiKey.trim();

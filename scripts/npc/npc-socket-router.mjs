@@ -61,10 +61,20 @@ export function wireNpcSocketRouter() {
                 }
 
                 // ── Stop everything. Usually a GM ending a conversation. ──
+                // ⚠️ THIS ONLY STOPPED ONE OF SIX THINGS (2026-08-07).
+                // It called `ttsEngine.stop()` and nothing else — so the
+                // NARRATOR's audio (a bare `new Audio()` that never enters the
+                // DOM), a browser speechSynthesis utterance already queued,
+                // Sequencer sounds and anything playing through Foundry's own
+                // audio helper all carried on. The engine reported itself
+                // stopped while the room kept talking, which is exactly why
+                // Johnny said "I have a big red button that's supposed to stop
+                // narration in its tracks — I doubt it works."
+                // ConversationApp.silenceEverything goes after every route.
                 case "stopAudio": {
                     if (_notForMe(data)) return;
-                    const { ttsEngine } = await import("./tts.mjs");
-                    ttsEngine.stop();
+                    const { ConversationApp } = await import("./conversation-app.mjs");
+                    ConversationApp.silenceEverything("stopAudio socket");
                     return;
                 }
 
@@ -84,6 +94,35 @@ export function wireNpcSocketRouter() {
                 }
 
                 // ── A player cannot reach the GM's local AI. Answer for it. ──
+                // ── A PLAYER WALKED UP TO A NAMELESS CREATURE ────────────
+                // Token drops are silent, so a goblin nobody expected the party
+                // to talk to has no name, no history and no faction until the
+                // moment somebody talks to it. That moment usually happens on a
+                // PLAYER's client — and a player cannot create an Actor, write
+                // a world setting, or rename anything. Foundry refuses, and
+                // rightly so.
+                //
+                // So the player asks and the GM does it. Same code path as the
+                // GM's own client and the quill button — never a second
+                // implementation.
+                case "ensureIdentity": {
+                    if (!_isAnsweringGM()) return;
+                    const scene = game.scenes?.get(data.sceneId) ?? canvas.scene;
+                    const tokenDoc = scene?.tokens?.get(data.tokenId);
+                    if (!tokenDoc) {
+                        console.warn(`${TAG} | A player asked for an identity for a token that is not on any scene I can see (${data.tokenId}).`);
+                        return;
+                    }
+                    try {
+                        const { giveThisOneALife } = await import("./hud-give-a-life.mjs");
+                        console.log(`${TAG} | ${game.users?.get(data.senderId)?.name ?? "A player"} started talking to "${tokenDoc.name}", which is nobody yet — giving it a name and a history.`);
+                        await giveThisOneALife(tokenDoc);
+                    } catch (err) {
+                        console.error(`${TAG} | Could not create an identity on a player's behalf:`, err);
+                    }
+                    return;
+                }
+
                 case "ollamaRequest": {
                     if (!_isAnsweringGM()) return;
                     if (!data.requestId || !Array.isArray(data.messages)) return;

@@ -10813,3 +10813,140 @@ body.ace-engine-hide-tah #token-hud .bar2 {
 .ace-ai-advanced > summary:hover { color: #ffd878; }
 .ace-ai-advanced-sub { font-weight: 400; font-size: 13px; color: #9c8e6d; }
 .ace-ai-advanced-body { padding: 0 14px 8px; }
+
+/* ─── NPC LANGUAGE PICKER (2026-08-07) ────────────────────────────────────
+   GM-only dropdown beside Speak as NPC: which tongue this creature is using.
+   Styled to sit in the pill row without pretending to be a button — it is a
+   choice, not an action, so it reads quieter than Send and Speak. Hidden
+   entirely when the creature knows only one language.                        */
+.ace-engine-lang-select {
+  height: 40px;
+  max-width: 140px;
+  padding: 0 10px;
+  border-radius: 20px;
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  background: #14100a;
+  color: #f0e4c0;                      /* light on DARK — never light on light */
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+.ace-engine-lang-select:hover {
+  border-color: #d4af37;
+  box-shadow: 0 0 8px rgba(212, 175, 55, 0.35);
+}
+.ace-engine-lang-select:focus {
+  outline: none;
+  border-color: #d4af37;
+}
+/* The options render in the browser's own menu, which does NOT inherit the
+   control's colours in every browser — set them explicitly so the list is
+   never dark-on-dark or light-on-light. */
+.ace-engine-lang-select option {
+  background: #14100a;
+  color: #f0e4c0;
+}
+/* SEND, once its label is stripped on the GM's window — keep it round rather
+   than a stretched pill with nothing in it. */
+.ace-engine-pill-icon {
+  width: 40px !important;
+  padding: 0 !important;
+}
+
+/* ─── SPOKEN LANGUAGE TABLE (2026-08-07) ──────────────────────────────────
+   Foundry's form background is light parchment and ACE's cream text is
+   invisible on it, so the whole panel forces its own dark surface. Body text
+   is 16px minimum per the suite's contrast-and-size rule — this window pops
+   over Foundry's chrome, where anything smaller is not shippable.            */
+.ace-lang-table {
+  background: #0c0c10;
+  color: #f0e4c0;
+  padding: 16px 18px;
+  border-radius: 8px;
+  font-family: 'Signika', sans-serif;
+  font-size: 16px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+}
+.ace-lang-intro p { margin: 0 0 8px; line-height: 1.45; font-size: 16px; }
+.ace-lang-intro strong { color: #d4af37; }
+.ace-lang-note { color: #b9a978; font-size: 14px; font-style: italic; }
+.ace-lang-warn {
+  color: #ffaa44; font-size: 15px; font-weight: 600;
+  border-left: 3px solid #ffaa44; padding-left: 10px; margin-top: 10px;
+}
+
+.ace-lang-rows {
+  flex: 1;
+  overflow-y: auto;
+  margin: 14px 0;
+  border-top: 1px solid rgba(212,175,55,0.3);
+  border-bottom: 1px solid rgba(212,175,55,0.3);
+  padding: 10px 4px;
+}
+.ace-lang-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 4px; border-bottom: 1px solid rgba(212,175,55,0.08);
+}
+.ace-lang-row:last-child { border-bottom: none; }
+.ace-lang-name {
+  flex: 1; font-weight: 700; color: #ffffff; font-size: 16px;
+}
+.ace-lang-select {
+  width: 240px; height: 34px; padding: 0 8px;
+  background: #14100a;                 /* DARK bg + light text — never light-on-light */
+  color: #f0e4c0;
+  border: 1px solid rgba(212,175,55,0.45); border-radius: 6px;
+  font-family: inherit; font-size: 15px; cursor: pointer;
+}
+.ace-lang-select:hover, .ace-lang-select:focus {
+  border-color: #d4af37; outline: none;
+}
+/* The browser's own option menu does not always inherit — set it explicitly. */
+.ace-lang-select option { background: #14100a; color: #f0e4c0; }
+.ace-lang-changed { color: #d4af37; font-size: 22px; line-height: 1; width: 10px; }
+
+.ace-lang-footer { display: flex; gap: 10px; justify-content: flex-end; }
+.ace-lang-footer button {
+  height: 38px; padding: 0 18px; border-radius: 19px;
+  font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
+  border: 1px solid rgba(212,175,55,0.5); background: #14100a; color: #f0e4c0;
+  transition: all 0.2s ease;
+}
+.ace-lang-footer button:hover { border-color: #d4af37; box-shadow: 0 0 8px rgba(212,175,55,0.35); }
+.ace-lang-btn-save { background: linear-gradient(180deg,#3a2c10,#241a08) !important; color: #ffd76a !important; }
+
+/* ─── DEAD NPC — the conversation is over (2026-08-07) ─────────────────────
+   Players are locked out; the GM may still speak as the body. A desaturated
+   frame so it is obvious at a glance which window is a corpse.              */
+.ace-engine-dead .ace-engine-video-area { filter: grayscale(0.75) brightness(0.7); }
+.ace-engine-dead .ace-engine-npc-name::after {
+  content: " — dead";
+  color: #9a9aa2;
+  font-weight: 400;
+  letter-spacing: 0.5px;
+}
+
+/* ─── GM PERCEPTION READOUT (2026-08-07) ──────────────────────────────────
+   Sits under the "X — speaking with Y" label. What this creature can actually
+   perceive right now, so the GM can see WHY it reacted as it did and catch a
+   wrong scan instantly. GM-only — the element is never rendered for a player.
+   Quiet by design: it is instrumentation, not part of the scene.            */
+.ace-engine-perception {
+  text-align: center;
+  font-family: 'Signika', sans-serif;
+  font-size: 14px;                     /* the floor for anything over Foundry's chrome */
+  color: #b9a978;
+  letter-spacing: 0.2px;
+  padding: 3px 10px 6px;
+  background: #0c0c10;
+  border-bottom: 1px solid rgba(212,175,55,0.18);
+  white-space: normal;
+  line-height: 1.35;
+}

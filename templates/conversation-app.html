@@ -9,6 +9,14 @@
     </div>
 
     <div id="ace-engine-npc-name" class="ace-engine-npc-name">{{actorName}}</div>
+    {{!-- GM ONLY. What this creature can actually perceive right now — how many
+          it can see, how many it can only hear, who looks hurt, the light, the
+          weather, and how well it understands what it is looking at. Lets the
+          GM see WHY the NPC reacted the way it did, and spot instantly when the
+          scan is wrong. Never rendered for a player. (2026-08-07) --}}
+    {{#if isGM}}
+    <div id="ace-engine-perception" class="ace-engine-perception" style="display:none;"></div>
+    {{/if}}
 
     <div id="ace-engine-log" class="ace-engine-log"></div>
 
@@ -42,15 +50,44 @@
             <button type="button" id="ace-engine-send" class="ace-engine-pill" title="Send your message">
                 <i class="fas fa-paper-plane"></i><span>Send</span>
             </button>
+            {{!-- WHICH TONGUE THE NPC IS SPEAKING (2026-08-07).
+                  GM only, and only ever populated with languages this creature
+                  actually knows. Defaults to Common when it has it, otherwise
+                  to whatever it does have — a creature should never default to
+                  speaking a language it does not know.
+                  The choice is stamped onto the chat message so Polyglot (if
+                  installed) renders it in that script for anyone who can't read
+                  it. Hidden entirely for a creature with only one language:
+                  a dropdown with one option is just clutter. --}}
+            {{#if isGM}}
+            <select id="ace-engine-npc-language" class="ace-engine-lang-select"
+                    title="Which language this NPC is speaking" style="display:none;"></select>
+            {{/if}}
             {{!-- One button, one job: pause holds the conversation, pressing it
                   again continues. It does NOT become a separate Play control —
                   that swap made people hunt for a button that had moved. Red
                   while paused, brass while running. --}}
             <button type="button" id="ace-engine-pause" class="ace-engine-pill" title="Pause the conversation — press again to continue">
-                <i class="fas fa-pause"></i><span>Pause Conversation</span>
+                <i class="fas fa-pause"></i><span>Pause</span>
+            </button>
+            {{!-- STOP AUDIO — everyone gets this, not just the GM (2026-08-07).
+                  Johnny: "sometimes these things are going on and on and people
+                  don't want to hear it." A player sitting through a narration
+                  they didn't ask for had no way to kill it. One press stops
+                  every voice on EVERY client, instantly, no confirm dialog —
+                  a stop button that asks "are you sure?" is not a stop button.
+                  This used to be a GM-only control that ENDED the conversation,
+                  which is a different job entirely; that now lives on its own
+                  button below. --}}
+            <button type="button" id="ace-engine-stop-all" title="Stop all narration and voices right now — for everyone">
+                <i class="fas fa-volume-xmark"></i>
             </button>
             {{#if isGM}}
-            <button id="ace-engine-stop-all" title="Stop conversation for everyone"><i class="fas fa-stop"></i></button>
+            {{!-- End it on the players' screens but keep mine open, so the GM
+                  can still read back what was said. --}}
+            <button type="button" id="ace-engine-end-players" title="Close this conversation on every player's screen — yours stays open">
+                <i class="fas fa-door-closed"></i>
+            </button>
             {{/if}}
         </div>
     </div>

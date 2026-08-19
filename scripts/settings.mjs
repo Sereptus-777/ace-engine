@@ -4,6 +4,7 @@
 
 import { MODULE_ID }      from "./ace-engine.mjs";
 import { AceConfigPanel } from "./config-panel.mjs";
+import { AceLanguageTable } from "./npc/language-table.mjs";
 
 // ── First-page settings visibility ──────────────────────────
 // Settings whose keys are in this set stay visible on Foundry's standard
@@ -77,6 +78,36 @@ export class AceSettings {
         ...data,
       });
 
+    // ══════════════════════════════════════════════════════════════════════
+    //  🔴 SECRETS ARE CLIENT-SCOPED. THE WORLD-SCOPED ONES LEAK (2026-08-18)
+    //
+    //  The `s()` helper above defaults every setting to scope:"world" — and a
+    //  world-scoped setting is PUSHED TO EVERY CONNECTED CLIENT. So `apiKey`,
+    //  `chatApiKey`, `digestApiKey` and `apiKeysByProvider` were all readable
+    //  by any player, from their own console, with one line:
+    //
+    //      game.settings.get("ace-engine", "apiKey")
+    //
+    //  A paying GM's Anthropic or OpenAI balance was spendable by anyone at
+    //  their table. The ElevenLabs key was already client-scoped for exactly
+    //  this reason (see the note further down) — the cloud keys were missed.
+    //
+    //  ⚠️ WHY NEW KEY NAMES INSTEAD OF FLIPPING `scope`. Flipping the scope on
+    //  the existing name leaves the old VALUE sitting in the world settings
+    //  database, where Foundry keeps broadcasting it whether we still register
+    //  it or not. The only way to stop the leak is to keep the world-scoped
+    //  registration alive so we can BLANK it, and put the live secret under a
+    //  new client-scoped name. Migration below does exactly that, once, GM-side.
+    // ══════════════════════════════════════════════════════════════════════
+    for (const secure of ["apiKeySecure", "chatApiKeySecure", "digestApiKeySecure"]) {
+      game.settings.register(MODULE_ID, secure, {
+        scope: "client", config: false, type: String, default: "",
+      });
+    }
+    game.settings.register(MODULE_ID, "apiKeysByProviderSecure", {
+      scope: "client", config: false, type: Object, default: {},
+    });
+
     // ── "Open Configuration" menu button ──────────────────────────
     // Sits at the top of the module's settings section, opens the popup
     // config panel where every other setting lives.
@@ -86,6 +117,37 @@ export class AceSettings {
       hint:       "Open the full configuration panel — AI provider, voice, NPC chat, combat, memory, documents, and more.",
       icon:       "fas fa-sliders-h",
       type:       AceConfigPanel,
+      restricted: true,
+    });
+
+    // ── SPOKEN LANGUAGE SUBSTITUTION ────────────────────────
+    // Polyglot scrambles TEXT; nothing scrambles AUDIO. Without this, an NPC
+    // speaking a tongue the party cannot follow still had the line read aloud
+    // in plain English and the barrier leaked through their ears.
+    s("spokenLanguageSubstitution", {
+      name: "ACE Engine — Speak foreign tongues aloud",
+      hint: "When an NPC speaks a language the listener does not know, the voice says it in a real-world stand-in language (Elvish sounds like Finnish, and so on) instead of reading it aloud in English. The chat log still carries the English meaning, so a character who genuinely knows the language can read it.",
+      type: Boolean,
+      default: true,
+    });
+    // The GM's edits, laid over the shipped defaults. Object rather than a
+    // string so a partial map is legal — an unedited tongue keeps its default.
+    s("spokenLanguageMap", { scope: "world", config: false, type: Object, default: {} });
+
+    // ── RE-VOICE THE GM'S PUPPET LINES ──────────────────────────────────
+    s("revoicePuppetLines", {
+      name: "ACE Engine — Re-voice my NPC lines",
+      hint: "When you speak as an NPC, run your line through the AI first so it is delivered in that character's rhythm and tone. Your meaning and length are kept — it re-voices, it does not rewrite. Start a line with a quote mark (\") to say it exactly as typed, with no AI and no delay.",
+      type: Boolean,
+      default: true,
+    });
+
+    game.settings.registerMenu(MODULE_ID, "openLanguageTable", {
+      name:       "ACE Engine — Spoken Language Table",
+      label:      "Edit Language Sounds",
+      hint:       "Choose which real-world language each fantasy tongue sounds like when spoken aloud.",
+      icon:       "fas fa-language",
+      type:       AceLanguageTable,
       restricted: true,
     });
 
@@ -933,8 +995,8 @@ export class AceSettings {
     });
 
     s("autoCleanupDead", {
-      name: "Auto-Move Dead NPCs to ☠ Fallen Folder",
-      hint: "When a persistent (linked) NPC dies, automatically move their actor from the sidebar into a \"☠ Fallen\" folder under ACE NPCs. Keeps your Actors sidebar clean.",
+      name: "Auto-Move Dead NPCs to X ☠ Fallen Folder",
+      hint: "When a persistent (linked) NPC dies, automatically move their actor from the sidebar into a \"X ☠ Fallen\" folder under ACE NPCs. Keeps your Actors sidebar clean.",
       type: Boolean,
       default: true,
     });
@@ -981,15 +1043,21 @@ export class AceSettings {
 
     s("tokenDropAI", {
       name: "Token Drop AI Level",
-      hint: "Controls how much AI processing runs when you drag an NPC onto a scene. Full = faction + bio + name + items. Bio Only = bio + name, no faction popup. Faction Only = faction popup, no bio or items. Off = nothing, vanilla token drop.",
+      hint: "What happens when you drag an NPC onto a scene. Silent (recommended) = the token just appears — no dialog, no wait, no AI call, nothing your players can see. It is given a name and a history the first time somebody actually talks to it, or whenever you click the quill under its token. Drop nine goblins instantly; the eight that die in combat never cost a thing. Full = faction popup + bio + name + items on every single drop. Bio Only = bio + name, no faction popup. Faction Only = faction popup, no bio or items. Off = vanilla drop, nothing at all.",
       type: String,
       choices: {
-        "full":         "Full (faction + bio + items)",
+        "silent":       "Silent (instant drop — identity when someone talks to it)",
+        "full":         "Full (faction + bio + items on every drop)",
         "bio-only":     "Bio Only (bio + name, no faction)",
         "faction-only": "Faction Only (faction popup, no bio)",
         "off":          "Off (vanilla drop, no AI)",
       },
-      default: "full",
+      // Johnny, 2026-08-07, choosing between drop behaviours: "Nothing —
+      // instant, silent." Nine goblins mid-session used to mean nine AI calls,
+      // nine waits and nine dialogs in front of the players, which also tipped
+      // them off that something was coming. Identity is now created lazily on
+      // first contact, which costs nothing for the creatures nobody talks to.
+      default: "silent",
     });
 
     s("sceneContextMinDays", {
@@ -2223,5 +2291,80 @@ export class AceSettings {
       apiUrl:    game.settings.get(MODULE_ID, "apiUrl")   || defaults.apiUrl   || "https://api.openai.com",
       modelName: game.settings.get(MODULE_ID, "modelName") || defaults.modelName || "gpt-4o-mini",
     };
+  }
+}
+
+/**
+ * Read an AI secret. Client-scoped first; legacy world value only as a
+ * fallback so a GM who has not migrated yet still works.
+ *
+ * ⚠️ Never read the legacy names directly anywhere else.
+ */
+export function getSecret(name) {
+  const map = {
+    apiKey: "apiKeySecure",
+    chatApiKey: "chatApiKeySecure",
+    digestApiKey: "digestApiKeySecure",
+  };
+  const secure = map[name];
+  try {
+    if (secure) {
+      const v = game.settings.get(MODULE_ID, secure);
+      if (v) return v;
+    }
+    return game.settings.get(MODULE_ID, name) || "";
+  } catch (_) { return ""; }
+}
+
+/** Per-provider vault, client-scoped, with legacy fallback. */
+export function getSecretVault() {
+  try {
+    const v = game.settings.get(MODULE_ID, "apiKeysByProviderSecure");
+    if (v && Object.keys(v).length) return v;
+    return game.settings.get(MODULE_ID, "apiKeysByProvider") || {};
+  } catch (_) { return {}; }
+}
+
+/**
+ * Move any world-scoped secret into client scope and BLANK the world copy.
+ * GM only, idempotent, runs once per client at ready.
+ */
+export async function migrateSecretsToClientScope() {
+  if (!game.user?.isGM) return;
+  const pairs = [
+    ["apiKey", "apiKeySecure"],
+    ["chatApiKey", "chatApiKeySecure"],
+    ["digestApiKey", "digestApiKeySecure"],
+  ];
+  let moved = 0;
+  for (const [legacy, secure] of pairs) {
+    try {
+      const old = game.settings.get(MODULE_ID, legacy);
+      if (!old) continue;
+      if (!game.settings.get(MODULE_ID, secure)) {
+        await game.settings.set(MODULE_ID, secure, old);
+      }
+      await game.settings.set(MODULE_ID, legacy, "");   // stop broadcasting it
+      moved++;
+    } catch (err) {
+      console.warn(`${MODULE_ID} | secret migration failed for "${legacy}":`, err);
+    }
+  }
+  try {
+    const oldVault = game.settings.get(MODULE_ID, "apiKeysByProvider") || {};
+    if (Object.keys(oldVault).length) {
+      const cur = game.settings.get(MODULE_ID, "apiKeysByProviderSecure") || {};
+      if (!Object.keys(cur).length) {
+        await game.settings.set(MODULE_ID, "apiKeysByProviderSecure", oldVault);
+      }
+      await game.settings.set(MODULE_ID, "apiKeysByProvider", {});
+      moved++;
+    }
+  } catch (err) {
+    console.warn(`${MODULE_ID} | secret vault migration failed:`, err);
+  }
+  if (moved) {
+    console.log(`${MODULE_ID} | Moved ${moved} secret(s) out of world scope into this client. Players can no longer read them.`);
+    ui.notifications?.info(`ACE Engine: ${moved} API key(s) moved to GM-only storage. They were previously readable by any player.`);
   }
 }

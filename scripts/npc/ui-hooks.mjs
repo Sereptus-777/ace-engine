@@ -377,9 +377,36 @@ export function registerUiHooks() {
                 Hooks.off("closeTokenHUD", _restoreHook);
             });
 
-            // Skip chat bubble injection if GM disabled chat or creature is mindless
+            // ── SAY WHY, DON'T JUST VANISH (2026-08-07) ─────────────────────
+            // Out-of-range, party-face and someone-else-is-talking all show a
+            // dimmed icon with a reason on hover. "Mindless" and "no line of
+            // sight" showed NOTHING — a player walking up to a wolf, or
+            // standing behind a pillar, saw empty space and could not tell
+            // whether the creature was unreachable, the module was broken, or
+            // they were doing it wrong. Same treatment for all of them.
+            //
+            // chatDisabled stays silent on purpose: the GM deliberately hid
+            // this creature's chat, and advertising "you may not talk to this
+            // one" is itself a piece of information they chose not to give.
             if (_getFlag(actor, MODULE_ID, "chatDisabled")) return;
-            if (_isMindless(actor)) return;
+
+            /** Dimmed icon + a reason, matching the existing gated states. */
+            const _blockedIcon = (title, filter) => {
+                jHtml.find(".ai-token-controls").remove();
+                jHtml.append($(`
+                <div class="ai-token-controls"
+                     style="position:absolute; top:-55px; left:50%; transform:translateX(-50%);
+                            pointer-events:all; z-index:70; text-align:center;">
+                    <img src="modules/ace-engine/assets/chat-icon.png"
+                         style="width:36px; height:36px; opacity:0.3; filter:${filter} drop-shadow(0 0 3px black);
+                                cursor:default;" title="${title}" />
+                </div>`));
+            };
+
+            if (_isMindless(actor)) {
+                _blockedIcon(`${actor.name} cannot understand speech`, "grayscale(1) brightness(0.8)");
+                return;
+            }
 
             // Range + LoS checks for players
             const playerToken = getPlayerToken();
@@ -401,6 +428,9 @@ export function registerUiHooks() {
                     return;
                 }
                 if (!hasLOS(playerToken, token)) {
+                    // They already have this token's HUD open, so its position
+                    // is not a secret — nothing is leaked by explaining.
+                    _blockedIcon(`You can't see ${actor.name} clearly enough to talk`, "grayscale(1) blur(0.6px)");
                     return;
                 }
             }

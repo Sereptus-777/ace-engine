@@ -14,6 +14,19 @@ import { processTokenFaction, buildFactionBioContext,
 import { SocialProfileEngine }                                   from "./social-profile.mjs";
 import npcProfileJournal                                         from "./npc-profile-journal.mjs";
 import { resolveSpecies, hasPersonalName, setGenericNameProbe } from "./npc-identity.mjs";
+import { getSecret, getSecretVault } from "../settings.mjs";
+
+// dnd5e 5.3 moved senses to `senses.ranges.*`; the old path logs a deprecation
+// on every read and is REMOVED in 6.1 (it would silently return 0 — every
+// creature blind in the dark, nothing thrown). New shape first, old as fallback.
+function _senseFt(senses, key) {
+  try {
+    const modern = senses?.ranges?.[key];
+    if (modern !== undefined && modern !== null) return Number(modern) || 0;
+    return Number(senses?.[key]) || 0;
+  } catch (_) { return 0; }
+}
+
 
 const MODULE_ID = "ace-engine";
 const QOL_ID    = "ace-qol";
@@ -146,7 +159,7 @@ function getEnvoyAIConfig() {
     try {
         return {
             provider: game.settings.get(MODULE_ID, "aiProvider") || "ollama",
-            apiKey:   game.settings.get(MODULE_ID, "apiKey")     || "",
+            apiKey:   getSecret("apiKey")     || "",
             apiUrl:   game.settings.get(MODULE_ID, "apiUrl")     || "",
             modelName: game.settings.get(MODULE_ID, "modelName") || "",
         };
@@ -366,9 +379,54 @@ Write the 5-10 line scene-context paragraph now. Just the paragraph — no pream
  * Called from the createToken hook in main.js.
  * @param {TokenDocument} tokenDocument
  */
-export async function queueBioGeneration(tokenDocument) {
+/**
+ * Queue a creature for identity generation.
+ *
+ * @returns {Promise<{ok: boolean, error?: string, skipped?: string, actor?: Actor}>}
+ *   Settles when generation ACTUALLY finishes — not when it is queued. Callers
+ *   that report to the user must await this and read `ok`.
+ */
+export async function queueBioGeneration(tokenDocument, { force = false, onContact = false } = {}) {
     const actor = tokenDocument.actor;
-    if (!actor) return;
+    if (!actor) return { ok: false, error: "that token has no actor behind it" };
+
+    // ── SILENT DROPS NEVER ENTER THE QUEUE (2026-08-07) ──────────────────
+    // The queue is not free: it writes bioInFlight to the actor, waits for the
+    // compendium name cache, then clears the flag again. That is TWO database
+    // writes per token, and every write syncs to every connected client — so
+    // dropping nine goblins meant eighteen broadcasts to produce nothing at
+    // all. "Instant, silent" has to mean it.
+    //
+    // The free half still runs: adopt a faction that already fits (a pure
+    // registry lookup, no AI, no dialog, nothing invented). Identity waits for
+    // somebody to actually talk to the creature, or for the GM's quill.
+    //
+    // ⚠️ `force` is the quill button, which is the GM deliberately asking. It
+    // must never be swallowed here.
+    //
+    // ⚠️ `onContact` is somebody TALKING to the creature — the other half of the
+    // whole design ("identity is created lazily, on contact"). It was missing,
+    // so this gate answered a question about DROPS at a moment that was not a
+    // drop, and killed the feature stone dead: Johnny talked to his Stone Golem
+    // and got a perfect roar and an empty biography. A setting named "Token
+    // Drop AI Level" must only ever gate a token drop. (2026-08-08)
+    if (!force && !onContact) {
+        let _tier = "silent";
+        try { _tier = tokenDocument._aceDropTier || game.settings.get(MODULE_ID, "tokenDropAI") || "silent"; }
+        catch (_) { _tier = "silent"; }
+
+        if (_tier === "silent") {
+            try {
+                const { processTokenFaction } = await import("./faction-registry.mjs");
+                await processTokenFaction(tokenDocument, { adoptOnly: true });
+            } catch (err) {
+                console.warn(`${TAG} | Silent faction adoption failed for ${actor.name} (non-fatal):`, err);
+            }
+            console.log(`${TAG} | ${actor.name} dropped silently — no AI, no dialog, nothing written. ` +
+                `It becomes somebody when a player talks to it, or when you click the quill on its token.`);
+            return { ok: true, skipped: "dropped silently by design" };
+        }
+    }
 
     // ── Guard: already generated? ─────────────────────────────────────────
     // ── Guard: already has a real bio? ─────────────────────────────────────
@@ -376,7 +434,11 @@ export async function queueBioGeneration(tokenDocument) {
     // skip. If the flag is set but the bio is just a stub/boilerplate (no
     // ace-engine-bio section), allow re-generation so stat-block inference can run.
     const existingBio = actor.system?.details?.biography?.value || "";
-    const hasOurBio = existingBio.includes('class="ace-engine-bio"');
+    // ⚠️ force:true is the GM deliberately asking for a REWRITE from the token
+    // HUD quill. It is the only thing that may overwrite an existing history,
+    // and the button confirms first. Nothing automatic ever sets it.
+    const hasOurBio = !force && existingBio.includes('class="ace-engine-bio"');
+    if (force) console.log(`${TAG} | ${actor.name} — the GM asked for a rewrite; the existing history will be replaced.`);
 
     if (tokenDocument.actorLink) {
         // ── v0.7.21 Two-Part Bio System (Steps 1-3 wired) ──
@@ -392,7 +454,7 @@ export async function queueBioGeneration(tokenDocument) {
                 console.warn(`${TAG} | scene-context journal pipeline threw (non-fatal):`, err);
             });
             _generateItemBios(tokenDocument).then(() => _generateLoot(tokenDocument)).catch(() => {});
-            return;
+            return { ok: true, skipped: "already has an ACE history" };
         }
 
         // NOTE: Linked actors with existing non-ACE bios (e.g. from adventure modules
@@ -405,21 +467,21 @@ export async function queueBioGeneration(tokenDocument) {
         if (hasOurBio) {
             console.log(`${TAG} | Skipping token ${tokenDocument.id} — ACE bio already exists.`);
             _generateItemBios(tokenDocument).then(() => _generateLoot(tokenDocument)).catch(() => {});
-            return;
+            return { ok: true, skipped: "already has an ACE history" };
         }
     }
 
     // Dedup: skip linked tokens whose actor is already queued or in-flight
     if (tokenDocument.actorLink && _pendingActorIds.has(actor.id)) {
         console.log(`${TAG} | ${actor.name} already queued for bio generation, skipping duplicate.`);
-        return;
+        return { ok: false, error: "one is already being written for this creature — wait for it to finish" };
     }
     if (tokenDocument.actorLink) _pendingActorIds.add(actor.id);
 
     if (_queue.length >= MAX_QUEUE_SIZE) {
         console.warn(`${TAG} | Bio queue full (${MAX_QUEUE_SIZE}). Skipping ${actor.name} — drop fewer tokens at once.`);
         ui.notifications?.warn(`Envoy: Bio generation queue full (${MAX_QUEUE_SIZE} max). Some tokens were skipped.`);
-        return;
+        return { ok: false, error: `the generation queue is full (${MAX_QUEUE_SIZE} at a time) — try again in a moment` };
     }
 
     // ── SYNCHRONOUS in-memory in-flight mark (closes race window) ──
@@ -448,8 +510,40 @@ export async function queueBioGeneration(tokenDocument) {
         });
     } catch (_) { /* non-fatal — flag is advisory */ }
 
-    _queue.push(tokenDocument);
+    // ⚠️ REPORT THE OUTCOME, NOT THE INTENTION (2026-08-08).
+    // This used to push and return, so `await queueBioGeneration(...)` resolved
+    // the instant the token joined the queue — before a single word had been
+    // written. The quill button then announced "is now a persistent character
+    // with a history", and if generation failed a moment later the GM had
+    // already been told it worked. Johnny clicked the quill, got two cheerful
+    // toasts, and nothing happened.
+    //
+    // The returned promise now settles when THIS token's generation actually
+    // finishes, carrying whether it worked. Fire-and-forget callers (the token
+    // drop path) are unaffected — they simply don't await it.
+    // ⚠️ CARRY THE INTENT THROUGH TO THE GENERATOR (2026-08-08).
+    //
+    // `_generateBio` reads the Token Drop AI Level a SECOND time and turns
+    // away anything on Silent. Neither `force` nor `onContact` reached it, so
+    // the quill got past the gate here and was refused at the next one — two
+    // toasts, no biography, no faction, nothing. Johnny hit it twice.
+    //
+    // `_aceDropTier` is the per-token override the generator checks FIRST, so
+    // stamping it is how a deliberate request states itself.
+    //
+    //   force (the quill)  -> "full": faction picker, bio, name, items. Johnny
+    //                        asked for the picker back — "it's the quickest and
+    //                        easiest way for me to see."
+    //   onContact (a chat) -> "bio-only": a player talking to a goblin must not
+    //                        throw a GM dialog into the middle of the scene.
+    if (force) tokenDocument._aceDropTier = "full";
+    else if (onContact && !tokenDocument._aceDropTier) tokenDocument._aceDropTier = "bio-only";
+
+    let _settle;
+    const done = new Promise(res => { _settle = res; });
+    _queue.push({ tokenDoc: tokenDocument, settle: _settle });
     _processQueue();
+    return done;
 }
 
 async function _processQueue() {
@@ -457,11 +551,26 @@ async function _processQueue() {
     _processing = true;
 
     try {
-        // Load compendium creature names on first use (cached after that)
-        await _loadCompendiumNames();
+        // Load compendium creature names on first use (cached after that).
+        //
+        // ⚠️ CAPPED. This awaits every creature compendium in the world. If one
+        // is slow, corrupt, or stamped by a newer Foundry and refuses to
+        // migrate, this used to hang forever — taking the whole queue with it
+        // and producing absolutely no output, no error, nothing. A name cache
+        // is a nicety; it must never be able to stop a bio from being written.
+        try {
+            await Promise.race([
+                _loadCompendiumNames(),
+                new Promise((_, rej) => setTimeout(() => rej(new Error("compendium name cache timed out")), 20_000)),
+            ]);
+        } catch (err) {
+            console.warn(`${TAG} | Creature-name cache unavailable (${err?.message ?? err}) — continuing without it. Names may be less varied.`);
+        }
 
         while (_queue.length > 0) {
-            const tokenDoc = _queue.shift();
+            const entry = _queue.shift();
+            // Tolerate a bare TokenDocument in case anything still pushes one.
+            const tokenDoc = entry?.tokenDoc ?? entry;
             let error = null;
             // ── bioInFlight already set at QUEUE time (in addToBioQueue) ──
             // Previous code re-set it here too — redundant DB write (and DB
@@ -505,10 +614,27 @@ async function _processQueue() {
                 } catch (hookErr) {
                     console.warn(`${TAG} | bioComplete hook callAll failed (non-fatal):`, hookErr);
                 }
+
+                // Tell whoever is waiting what ACTUALLY happened. Settled in
+                // `finally` so a thrown generation can never leave a caller
+                // hanging on a promise that never resolves.
+                try {
+                    entry?.settle?.({
+                        ok:    !error,
+                        error: error ? String(error.message ?? error) : null,
+                        actor: tokenDoc?.actor ?? null,
+                    });
+                } catch (_) { /* nobody listening */ }
             }
         }
     } finally {
         _processing = false;
+        // Anything still queued when the loop exits abnormally must not leave
+        // its caller waiting forever.
+        while (_queue.length) {
+            const orphan = _queue.shift();
+            try { orphan?.settle?.({ ok: false, error: "the generation queue stopped before reaching this creature" }); } catch (_) {}
+        }
     }
 }
 
@@ -735,7 +861,46 @@ setGenericNameProbe(_isGenericName);
 
 // ─── INTELLIGENCE TIERS ──────────────────────────────────────────────────────
 
-function _getIntTier(intScore) {
+/**
+ * Which KIND of history does this creature get?
+ *
+ * Intelligence alone was the wrong question for two whole families:
+ *
+ *  • A CONSTRUCT at Intelligence 3 landed in the "instinct" tier, whose own
+ *    example is "Mindless — driven by hunger alone." A golem is not hungry and
+ *    holds no territory. It was BUILT, by somebody, and given ORDERS. What a
+ *    player who talks to it actually wants to know is who made it and what it
+ *    was told to do. It has no name and never had one.
+ *
+ *  • A MINDLESS UNDEAD is the mirror image: it was ALIVE once and did have a
+ *    name, centuries ago. It does not answer to that name now and cannot tell
+ *    you it — but the name is real, and the party can uncover it. Designed
+ *    2026-08-07 as "name-in-life vs name-it-answers-to", built 2026-08-08.
+ *
+ * @param {number} intScore
+ * @param {string} [creatureType] lowercase 5e type
+ */
+function _getIntTier(intScore, creatureType = "", chaScore = 10) {
+    const type = String(creatureType || "").toLowerCase();
+
+    // Built things: provenance, not personality. Any intelligence — a shield
+    // guardian is no more a person than a flying sword.
+    if (type === "construct") return "bound";
+
+    // Raised things with nobody home.
+    //
+    // Intelligence ALONE does not draw this line. A Skeleton is Intelligence 6
+    // and a Mummy is Intelligence 6, but one is a walking pile of bones and the
+    // other is a cursed guardian who understands you. CHARISMA is what separates
+    // them — presence, will, a personality still in there. Skeleton and Zombie
+    // are Charisma 5; a Mummy is 12.
+    //
+    // Catches: Skeleton (6/5), Zombie (3/5), Warhorse Skeleton (2/3),
+    //          Crawling Claw (5/4), Shadow (6/8 — a shade of a person, exactly
+    //          the creature this tier was written for).
+    // Excludes: Ghoul (7), Mummy (6/12), Wight, Specter, Wraith, Vampire, Lich.
+    if (type === "undead" && intScore <= 6 && chaScore <= 8) return "remembered";
+
     if (intScore <= 3) return "instinct";
     if (intScore <= 7) return "simple";
     if (intScore <= 12) return "moderate";
@@ -744,6 +909,24 @@ function _getIntTier(intScore) {
 
 function _getTierInstructions(tier) {
     switch (tier) {
+        case "bound":
+            return `This creature is a CONSTRUCT — it was BUILT, not born. It has no childhood, no family, no hopes, and NO NAME. Do not invent one and do not write a NAME: line.
+Write 3-4 sentences of PROVENANCE, not personality:
+1. Who made it — a name and what kind of spellcaster or artisan they were.
+2. When, and why they needed it.
+3. The ORDERS it was given, stated plainly, as an instruction it still follows.
+4. What has happened around it since — how long it has stood there, whether its maker ever came back.
+Never give it feelings, opinions, loyalty or fear. It does not want anything. It obeys the last thing it was told. If its maker is long dead, say so — an order with nobody left to rescind it is the whole horror of the thing.`;
+
+        case "remembered":
+            return `This creature is MINDLESS UNDEAD — a corpse animated by someone else's magic. There is nobody home. But it WAS a person once, and that person had a name.
+Write 3-4 sentences:
+1. The name it had IN LIFE, and roughly how long ago that was.
+2. What they did for a living, or who they were to somebody.
+3. How they died, and who raised them afterwards — name the necromancer, cult or curse if the scene suggests one.
+4. One physical trace of that life still visible on the remains: a guild ring, a mason's callus, a soldier's bootstraps, a wedding band worn thin.
+CRITICAL: it does NOT answer to that name, cannot tell anyone what it is, and has no memory of any of this. The name is a fact the party could UNCOVER — from the ring, a grave marker, a records ledger — not something the creature offers. Write it as a fact about the body, never as self-awareness.`;
+
         case "instinct":
             return `This creature has barely any intellect. Write ONE short sentence describing its basic instinctual behavior, territory, or pack role. For oozes and mindless undead, write something like "Mindless — driven by hunger alone." Keep it under 20 words.`;
         case "simple":
@@ -810,10 +993,14 @@ function _gatherStatBlock(actor) {
         const rawSenses = sys.attributes?.senses || {};
         const senses = rawSenses.ranges ?? rawSenses;
         const senseList = [];
-        if (senses.darkvision)     senseList.push(`darkvision ${senses.darkvision} ft`);
-        if (senses.blindsight)     senseList.push(`blindsight ${senses.blindsight} ft`);
-        if (senses.tremorsense)    senseList.push(`tremorsense ${senses.tremorsense} ft`);
-        if (senses.truesight)      senseList.push(`truesight ${senses.truesight} ft`);
+        const _dv = _senseFt(senses, "darkvision");
+        if (_dv)                   senseList.push(`darkvision ${_dv} ft`);
+        const _bs = _senseFt(senses, "blindsight");
+        if (_bs)                   senseList.push(`blindsight ${_bs} ft`);
+        const _ts = _senseFt(senses, "tremorsense");
+        if (_ts)                   senseList.push(`tremorsense ${_ts} ft`);
+        const _tr = _senseFt(senses, "truesight");
+        if (_tr)                   senseList.push(`truesight ${_tr} ft`);
         if (rawSenses.special ?? senses.special) senseList.push(rawSenses.special ?? senses.special);
         if (senseList.length) parts.push(`Senses: ${senseList.join(", ")}`);
 
@@ -892,7 +1079,11 @@ function _gatherStatBlock(actor) {
 async function _buildPrompt(tokenDocument, factionResult = {}, socialProfile = null, canonBio = "") {
     const actor = tokenDocument.actor;
     const intScore = actor.system?.abilities?.int?.value ?? 10;
-    const tier = _getIntTier(intScore);
+    const tier = _getIntTier(
+        intScore,
+        actor.system?.details?.type?.value || "",
+        actor.system?.abilities?.cha?.value ?? 10,
+    );
 
     // ── Actor data ──────────────────────────────────────────────────────
     const name = actor.name || "Unknown Creature";
@@ -1063,8 +1254,16 @@ async function _buildPrompt(tokenDocument, factionResult = {}, socialProfile = n
     // ── Build system prompt ─────────────────────────────────────────────
     const isUnlinked = !tokenDocument.actorLink;
 
-    // Non-sentient creature types: don't rename, use minimal bio
-    const NO_RENAME_TYPES = new Set(["beast", "ooze", "plant", "swarm"]);
+    // Creature types that must never be given a personal name.
+    //
+    // ⚠️ "construct" added 2026-08-08. A golem was being christened like a
+    // person; it has no name and never had one. Its identity is who BUILT it.
+    //
+    // ⚠️ Mindless undead deliberately stay OUT of this list. They DID have a
+    // name — a real one, centuries ago — and that name is a fact the party can
+    // uncover. The "remembered" tier writes it as something true about the
+    // body, never as something the creature knows or answers to.
+    const NO_RENAME_TYPES = new Set(["beast", "ooze", "plant", "swarm", "construct"]);
     const isNonSentient = NO_RENAME_TYPES.has((creatureType || "").toLowerCase());
 
     let nameInstruction = "";
@@ -1347,6 +1546,44 @@ ${statBlock}`;
             tokenCreatureBase
         );
         if (factionCtx) userMsg += factionCtx;
+
+        // ── THE SHARED GROUP RECORD (2026-08-07) ─────────────────────────
+        // Johnny: "they should be related somehow… or know each other."
+        //
+        // They already were — badly. The scene-mates block below hands each
+        // creature only the FIRST SENTENCE of its siblings' biographies and
+        // asks it to weave relationships. So goblin one invents the Red Fang
+        // out of nothing; goblin four sees 120 characters of goblin one and, if
+        // the tribe was not named in that opening line, invents a DIFFERENT
+        // tribe; and goblin one can never learn about goblin four because it
+        // was written first and never revisited. The relatedness was real but
+        // one-directional and running on luck.
+        //
+        // The fix is one shared record that every member QUOTES: the warband's
+        // name, its leader, its camp, why it is here, and the roster showing
+        // which posts are already held. Interrogate the first goblin and the
+        // seventh and they name the same chief, because they are reading the
+        // same text — not guessing from each other's first sentences.
+        try {
+            const { buildRosterContext, getRoleForActor } = await import("./faction-roster.mjs");
+            const { getTemplate } = await import("./faction-registry.mjs");
+            const _tpl = getTemplate(resolveCreatureBase(actor));
+
+            let _groupSize = 1;
+            try {
+                const fid = factionResult.faction.id;
+                _groupSize = (canvas.scene?.tokens ?? [])
+                    .filter(t => t.actor?.getFlag?.(MODULE_ID, "factionId") === fid).length || 1;
+            } catch (_) { /* one is a safe floor */ }
+
+            const _myRole = getRoleForActor(factionResult.faction, actor.id, _tpl, _groupSize)
+                ?? (factionResult.role ? { roleLabel: factionResult.role, rung: "pool", leaderPresent: false, leadsDetachment: false } : null);
+
+            const rosterCtx = buildRosterContext(factionResult.faction, _tpl, _myRole, _groupSize);
+            if (rosterCtx) userMsg += rosterCtx;
+        } catch (err) {
+            console.warn(`${TAG} | Could not add the group record to the prompt (the bio still writes):`, err);
+        }
     }
 
     // ── Social Profile: inject societal structure constraints ──────────
@@ -1443,23 +1680,95 @@ ${statBlock}`;
 // ─── GENERATE BIO ────────────────────────────────────────────────────────────
 
 async function _generateBio(tokenDocument) {
-    const actor = tokenDocument.actor;
+    // `let`, not `const`: promotion below swaps this for the new persistent
+    // actor, and everything after must write to that one.
+    let actor = tokenDocument.actor;
     if (!actor) return;
 
     // ── Tier check: determine what AI work to run ───────────────────────
-    // The dialog may have overridden the tier on the tokenDoc itself
-    let tier = tokenDocument._aceDropTier || "full";
-    if (tier === "full" || tier === "bio-only" || tier === "faction-only") {
-        // Valid tier from dialog override
-    } else {
-        try { tier = game.settings.get(MODULE_ID, "tokenDropAI") ?? "full"; }
-        catch (_) { tier = "full"; }
+    // 🔴 THE SETTING WAS UNREACHABLE FROM HERE (found 2026-08-07).
+    //
+    // The old code read:
+    //     let tier = tokenDocument._aceDropTier || "full";
+    //     if (tier === "full" || tier === "bio-only" || …) { /* dialog override */ }
+    //     else { tier = game.settings.get(MODULE_ID, "tokenDropAI"); }
+    //
+    // With no dialog override, `tier` defaulted to "full" — and "full" is in
+    // that list, so it was mistaken for a deliberate override and the `else`
+    // that reads the setting NEVER RAN. Token Drop AI Level therefore never
+    // reached this function at all: "Bio Only" and "Faction Only" both ran a
+    // FULL generation, and only "Off" appeared to work because activate.mjs
+    // checks that one separately on its way in.
+    //
+    // Johnny proved it live — a clean compendium goblin dropped on Silent came
+    // out with a complete ACE biography.
+    //
+    // The absence of an override and a deliberate choice of "full" are two
+    // different things, so null is the only correct starting value.
+    let tier = tokenDocument._aceDropTier || null;
+    if (!tier) {
+        try { tier = game.settings.get(MODULE_ID, "tokenDropAI") || "silent"; }
+        catch (_) { tier = "silent"; }
+    }
+    const _VALID_TIERS = new Set(["full", "bio-only", "faction-only", "silent", "off"]);
+    if (!_VALID_TIERS.has(tier)) {
+        console.warn(`${TAG} | "${tier}" is not a Token Drop AI Level — treating it as Silent.`);
+        tier = "silent";
     }
 
     // "off" — bail entirely (shouldn't normally reach here, but guard anyway)
     if (tier === "off") {
         console.log(`${TAG} | Token drop AI is off — skipping all generation for ${actor.name}`);
         return;
+    }
+
+    // A silent drop never reaches here — queueBioGeneration turns it away before
+    // the queue, so no database write happens for a creature nobody has spoken
+    // to. This guard only catches a silent tier arriving by some other route.
+    if (tier === "silent") {
+        console.log(`${TAG} | ${actor.name} — silent tier; nothing to generate.`);
+        return;
+    }
+
+    // ── ANYTHING THAT GETS A BIO OR A RENAME BECOMES LINKED (2026-08-07) ─
+    // Johnny: "anything that gets renamed or gets a bio becomes linked. We got
+    // to put that in there."
+    //
+    // He is right, and this is the only place that catches every route. Wiring
+    // promotion into the conversation window and the quill covered two doors
+    // and left the rest open — a Full-tier drop, the scene scan, or any future
+    // caller would still have written a history into a token delta that dies
+    // with the token.
+    //
+    // It also makes the rename further down actually work. That rename is
+    // deliberately LINKED-ONLY, because renaming a shared base actor would
+    // rename all nine goblins at once. Promote first and the creature owns its
+    // own actor, so the rename affects nobody else.
+    //
+    // ⚠️ BEFORE the AI call, not after. If the generation fails there is still
+    // a real actor and a quill to retry with, rather than a half-written
+    // identity trapped in a delta. promoteToNamedActor is idempotent and
+    // returns immediately for player characters and already-linked actors.
+    if (game.user?.isGM && !tokenDocument.actorLink) {
+        try {
+            const { promoteToNamedActor } = await import("./actor-promotion.mjs");
+            let factionName = "";
+            try {
+                const fid = actor.getFlag?.(MODULE_ID, "factionId");
+                if (fid) {
+                    const { getFaction } = await import("./faction-registry.mjs");
+                    factionName = getFaction(fid)?.name || "";
+                }
+            } catch (_) { /* folder nicety only */ }
+
+            const res = await promoteToNamedActor(tokenDocument, { factionName, reason: "given a history" });
+            if (res.promoted && res.actor) {
+                // Everything below must write to the NEW actor.
+                actor = res.actor;
+            }
+        } catch (err) {
+            console.warn(`${TAG} | Could not promote ${actor.name} to a persistent actor (the bio still writes to the token):`, err);
+        }
     }
 
     const { provider, apiKey } = getEnvoyAIConfig();
@@ -2053,7 +2362,7 @@ async function _autoLinkToken(tokenDocument, generatedName) {
     // by the validator — caused location subfolders to be created as
     // root-level orphans instead of nested under "ACE NPCs". Use the
     // correct field. (Same gotcha is documented in activate.mjs for the
-    // ☠ Fallen folder helper.)
+    // X ☠ Fallen folder helper.)
     let folder = game.folders?.find(f => f.name === folderPath && f.type === "Actor");
     if (!folder) {
         // Find or create a parent "ACE NPCs" folder

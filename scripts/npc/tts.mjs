@@ -608,8 +608,13 @@ class TTSEngine {
             const regex = /\*(.*?)\*/g;
             let lastIndex = 0, match;
             while ((match = regex.exec(fullText)) !== null) {
-                if (match.index > lastIndex)
-                    segments.push({ type: "dialogue", text: fullText.slice(lastIndex, match.index).trim() });
+                if (match.index > lastIndex) {
+                    // Only push real speech — the gap between two adjacent
+                    // emotes is whitespace, not a line, and pushing it as an
+                    // empty segment is what broke the queue above.
+                    const _between = fullText.slice(lastIndex, match.index).trim();
+                    if (_between) segments.push({ type: "dialogue", text: _between });
+                }
                 segments.push({ type: "emote", text: match[1].trim() });
                 lastIndex = regex.lastIndex;
             }
@@ -622,7 +627,19 @@ class TTSEngine {
 
             // Play each segment
             for (const seg of segments) {
-                if (!seg.text || this._stopRequested) break;
+                // ⚠️ AN EMPTY SEGMENT SKIPS. IT DOES NOT STOP THE QUEUE.
+                // This was `if (!seg.text || this._stopRequested) break;` — one
+                // condition for two completely different situations. The parser
+                // creates an EMPTY dialogue segment between two adjacent emotes
+                // (the space between `*a*` and `*b*`), so any reply with two
+                // emotes in a row spoke its first line and then went silent.
+                // Johnny: "the narrator didn't continue… it happens once in a
+                // while." It happened every single time the AI wrote two
+                // actions back to back, which for a creature that can only
+                // gesture is most of the time. The console said it plainly:
+                // "5 segment(s) to speak", one heard. (2026-08-07)
+                if (this._stopRequested) break;      // a real stop — end everything
+                if (!seg.text) continue;             // nothing to say — move on
 
                 try {
                     if (seg.type === "dialogue") {

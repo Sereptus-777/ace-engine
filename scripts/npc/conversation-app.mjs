@@ -13,6 +13,7 @@ import { getVoiceConfig, getDynamicVoiceSettings }   from "./voice-engine.mjs";
 import { getCreatureSoundCandidates, getVoicePitch } from "./creature-sounds.mjs";
 import { npcChatState }                              from "./activate.mjs";
 import { isAIFailure }                               from "./ai-failure.mjs";
+import * as Lang                                     from "./language-barrier.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -58,6 +59,38 @@ async function _envoyConfirmDialog(title, content) {
         d.render(true);
     });
 }
+
+/** Read a setting without letting an unregistered key throw into a caller.
+ *  Returns the fallback and SAYS SO — an absent setting and a broken one must
+ *  never look the same in the console. */
+function QolSafe(fn, fallback) {
+    try {
+        const v = fn();
+        return (v === undefined || v === null) ? fallback : v;
+    } catch (err) {
+        console.debug(`ace-engine | setting unavailable, using default (${fallback}):`, err?.message ?? err);
+        return fallback;
+    }
+}
+
+
+/**
+ * How long a player's conversation window sits idle before it releases.
+ *
+ * Was 30 minutes, on the reasoning that it should cover rule lookups and snack
+ * breaks. Johnny cut it to 10 on 2026-08-09: 30 is far longer than any real
+ * pause, and a window that stays live that long holds the NPC hostage from
+ * everyone else at the table.
+ *
+ * ⚠️ This is ALSO the cap on conversation time-cost. Talking to an NPC advances
+ * the world clock by the real elapsed time, so this constant is what stops a
+ * forgotten window from charging the party half an hour for standing in a
+ * doorway. It bounds both behaviours — change it and you change both.
+ *
+ * GM and read-only spectator windows never time out at all; see the guard in
+ * `_resetInactivityTimer`.
+ */
+const CONVERSATION_IDLE_MS = 10 * 60 * 1000;   // 10 minutes
 
 export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
@@ -152,7 +185,13 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
      */
     get conversationTitle() {
         const npc = this.npcName;
-        const who = this.speakingAs?.name
+        // `_speakerNameHint` is the name the SENDER told us when this client
+        // couldn't resolve their token (different scene, not yet drawn). A
+        // right name beats a resolved-but-wrong creature, so it outranks the
+        // guess and sits just under the real token. (2026-08-07)
+        const who = this._speakerToken?.actor?.name
+                 ?? this._speakerNameHint
+                 ?? this.speakingAs?.name
                  ?? this._playerName
                  ?? game.user.character?.name
                  ?? null;
@@ -169,12 +208,210 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             const sel = canvas.tokens?.controlled?.[0];
             if (sel && sel.actor?.id !== this.actor.id) return sel.actor;
         }
-        const sceneToken = canvas.tokens?.placeables?.find(t =>
-            t.actor?.hasPlayerOwner
-            && t.actor.testUserPermission(game.user, "OWNER")
+        // ── THE LAST-RESORT GUESS, AND IT USED TO GUESS BADLY (2026-08-07) ──
+        // Old test: "first token that has a player owner AND that I own".
+        //
+        // On a GM client the second half does NOTHING — a GM owns every actor
+        // in the world — so it degenerated to "first player-owned token in
+        // canvas order". Johnny's first was an Artificer's STEEL DEFENDER:
+        // player-owned, but a companion, not a person. Every window on his
+        // screen read "Vilnius — speaking with Steel Defender" while his six
+        // actual characters sat behind it in the same list.
+        //
+        // Two changes:
+        //  • Ask "does a real PLAYER own this?" (a non-GM user), which means
+        //    something on every client, instead of "do I own this?".
+        //  • Prefer an actual character. A companion — Steel Defender, a
+        //    familiar, a summon — is only ever a fallback, and only when there
+        //    is no real character to be found.
+        // Ranked, so the order tokens happen to sit in on the canvas can never
+        // decide who the party is talking as.
+        const _ownedByAPlayer = (a) => {
+            try { return game.users.some(u => u.active && !u.isGM && a?.testUserPermission?.(u, "OWNER")); }
+            catch (_) { return false; }
+        };
+        const pool = (canvas.tokens?.placeables ?? []).filter(t =>
+            t.actor
             && t.document?.actorId !== this.actor.id
+            && (_ownedByAPlayer(t.actor) || t.actor.hasPlayerOwner)
         );
-        return sceneToken?.actor ?? game.user.character;
+        // 1. A real character an online player owns — the overwhelmingly right answer.
+        let pick = pool.find(t => t.actor.type === "character" && _ownedByAPlayer(t.actor));
+        // 2. Any real character with a player owner (their player may be offline).
+        pick ??= pool.find(t => t.actor.type === "character");
+        // 3. Only now consider a companion / summon.
+        pick ??= pool[0];
+        return pick?.actor ?? game.user.character ?? null;
+    }
+
+    /**
+     * WHO IS SPEAKING — sent with every broadcast so the receiving client is
+     * TOLD instead of guessing. (2026-08-07)
+     *
+     * A spectator/GM window is opened by the socket handler when a message
+     * arrives, and that handler had no idea who the player was — so it fell
+     * through to the `speakingAs` guess above. On a GM client that guess is
+     * worthless: it filters for "a player-owned token I own", and a GM owns
+     * EVERY actor, so it simply took the first player-owned token in canvas
+     * order. Johnny's was an Artificer's Steel Defender, so every window on his
+     * screen read "Vilnius — speaking with Steel Defender" while the player's
+     * own window correctly said Chudd Buckland.
+     *
+     * ⚠️ Only ever sends a speaker we actually KNOW — one captured at
+     * conversation start. Never the guess. Broadcasting a guess would spread
+     * the wrong answer to every client instead of leaving it on one.
+     */
+    /**
+     * WHICH LANGUAGE THIS NPC IS SPEAKING RIGHT NOW. (2026-08-07)
+     *
+     * The GM's dropdown when they have made a choice; otherwise the creature's
+     * default — Common when it knows it, else its own first language. Never a
+     * language the creature does not know.
+     *
+     * Used to tag the chat message so Polyglot renders it in that script. One
+     * reader so the three places the NPC's words reach chat cannot drift apart.
+     */
+    _spokenLanguage() {
+        try {
+            if (this._npcLanguage) return this._npcLanguage;
+            return Lang.defaultLanguageFor(this.actor);
+        } catch (_) { return null; }
+    }
+
+    /**
+     * IS THIS CREATURE DEAD? (Johnny 2026-08-07)
+     *
+     * ⚠️ THE BUG THIS EXISTS FOR. Jeth killed Savid — 3 slashing, 3 → 0, the
+     * death pipeline ran, the token became a corpse, the loot card posted, and
+     * ace-engine's OWN log said "Death ripple: Savid fell — moved to X ☠ Fallen
+     * folder". Twenty-two seconds later Jeth asked "how do you feel now elf?"
+     * and the corpse replied "Savid feel... stronger. No more pain. Ready to
+     * face what comes next."
+     *
+     * The information was never missing — the prompt already carries hit
+     * points, which is exactly how he correctly described being wounded at 1 HP
+     * earlier in the same conversation. What was missing was a RULE. Nothing
+     * anywhere said a dead creature does not talk. Building a profile is not
+     * consulting it.
+     *
+     * Reads the same markers the rest of the suite writes, in order of
+     * authority: ace-qol's death flag, the dnd5e "dead" status, then hit
+     * points. Any one of them is enough.
+     */
+    get isDeadNow() {
+        try {
+            // Re-read the token from the scene rather than trusting the copy
+            // captured at construction — the death flag is written after this
+            // window opened, so a stale reference would report "alive" forever.
+            const held = this.tokenDocument ?? null;
+            const td = (held?.id && held?.parent?.tokens?.get?.(held.id)) || held;
+            if (td?.flags?.["ace-qol"]?.isDead === true) return true;
+
+            const a = td?.actor ?? this.actor;
+            if (!a) return false;
+            if (a.statuses?.has?.("dead")) return true;
+            // A PC at 0 is unconscious and dying, not dead — they can still be
+            // spoken to. Only an NPC is finished at 0.
+            const hp = Number(a.system?.attributes?.hp?.value ?? 1);
+            if (a.type === "npc" && hp <= 0) return true;
+            return false;
+        } catch (err) {
+            // Never let a state read silence a living NPC — fail toward alive
+            // and say so, rather than mute a scene on a lookup error.
+            console.warn(`${MODULE_ID} | couldn't read life state for ${this.npcName} — treating as alive:`, err);
+            return false;
+        }
+    }
+
+    /**
+     * Lock the conversation because the creature is dead.
+     *
+     * Johnny's call: PLAYERS are locked out, the GM can still puppet. A dying
+     * word, a ghost, an undead that talks, or simply narrating through the body
+     * are all legitimate — taking the tool off the GM would be worse than the
+     * bug. The AI never speaks for a corpse again either way.
+     */
+    _applyDeathLock({ announce = true } = {}) {
+        if (this._deathLocked) return;
+        this._deathLocked = true;
+        try {
+            if (announce) {
+                this.renderMessage("system", game.user.isGM
+                    ? `${this.npcName} is dead. Players can no longer speak here; you can still speak as ${this.npcName}.`
+                    : `${this.npcName} is dead.`);
+            }
+            if (!game.user.isGM) {
+                this._setInputLocked(true, "");
+                if (this._recognition) { try { this._stopMic({ send: false }); } catch (_) {} }
+            }
+            this.element?.classList?.add?.("ace-engine-dead");
+        } catch (err) {
+            console.warn(`${MODULE_ID} | death lock failed for ${this.npcName}:`, err);
+        }
+    }
+
+    /**
+     * WHAT THE ROOM HEARS, when the NPC is speaking a tongue the listener
+     * cannot follow. (2026-08-07 — replaces the [SPOKEN] marker.)
+     *
+     * Takes the finished English line, renders it in the stand-in language, and
+     * hands back what the voice should say. Used by BOTH the AI's replies and
+     * the GM's own "Speak as NPC" lines, so they can never behave differently —
+     * the marker approach only ever covered the first, which is why Johnny's
+     * puppet lines came out in English while the chat was scrambled.
+     *
+     * Returns null when nothing should change: substitution off, no barrier,
+     * Common, no real dialogue, or the render failed. Every one of those means
+     * "just say it in English" — losing the line entirely would be worse than
+     * saying it plainly.
+     */
+    async _foreignAudioFor(fullText) {
+        try {
+            const dialogue = String(fullText ?? "").replace(/\*(.*?)\*/g, "").replace(/\s{2,}/g, " ").trim();
+            if (!dialogue) return null;                       // pure action — nothing is said
+
+            const tongue = this._spokenLanguage();
+            if (!Lang.shouldSubstituteAudio(tongue, this.speakingAs)) return null;
+
+            const real = Lang.spokenLanguageFor(tongue);      // null => invented sounds
+            const said = await AIHandler.renderSpoken(dialogue, real, Lang.labelFor(tongue));
+            return said || null;
+        } catch (err) {
+            console.warn(`${MODULE_ID} | foreign audio unavailable — speaking in English:`, err);
+            return null;
+        }
+    }
+
+    /**
+     * The language to stamp on a chat message — but ONLY if that message is
+     * actually SPEECH. (Johnny 2026-08-07)
+     *
+     * ⚠️ Polyglot scrambles the WHOLE message (`content.innerHTML =
+     * scrambleString(innerText, …)`) — there is no per-span option for chat. So
+     * stamping the language on a message that carries an *emote* scrambled the
+     * NARRATION: Johnny watched "Savid raises an eyebrow, crossing his arms"
+     * turn into Dwarvish runes. What a creature DOES is public — everyone in
+     * the room can see him fold his arms. Only what he SAYS is hidden.
+     *
+     * An emote-only reply therefore gets no language flag at all and posts in
+     * plain text, which is exactly right.
+     */
+    _chatLanguageFor(bodyText) {
+        try {
+            const dialogue = String(bodyText ?? "").replace(/\*(.*?)\*/g, "").trim();
+            if (!dialogue) return null;        // pure action — never scramble it
+            return this._spokenLanguage();
+        } catch (_) { return null; }
+    }
+
+    _speakerPayload() {
+        const tok = this._speakerToken;
+        if (!tok) return {};
+        return {
+            speakerTokenId: tok.id ?? tok.document?.id ?? null,
+            speakerActorId: tok.actor?.id ?? null,
+            speakerName:    tok.actor?.name ?? tok.name ?? null,
+        };
     }
 
     static PARTS = {
@@ -289,6 +526,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             this._micBtn.addEventListener("click",    guard("Microphone", () => this.handleMic()));
             this._sendGuard = guard("Send", () => this.handleSend());
             this._initMicPicker();
+            // A creature nobody bothered to name gets one NOW — see below.
+            this._ensureIdentity();
             // Measure AFTER the browser has laid the row out, and again once
             // webfonts land — a fallback font measures narrower than the real
             // one, which is how a "fitted" row still clips a letter.
@@ -404,22 +643,110 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (game.user.isGM) {
             // Update send button tooltip — GM sends as NPC, not to AI
             // GM sends are NPC dialogue, so say so on the button itself.
+            // Johnny 2026-08-07: on the GM's window the MIC is the thing that
+            // voices the NPC, so that is where the label belongs. Send is just
+            // send — the paper plane says it, and a word beside it only crowds
+            // the row.
+            if (this._micBtn) {
+                this._micBtn.title = "Speak as this NPC out loud";
+                const mlbl = this._micBtn.querySelector("span");
+                if (mlbl) mlbl.textContent = "Speak as NPC";
+            }
             if (this._sendBtn) {
                 this._sendBtn.title = "Speak as this NPC";
                 const lbl = this._sendBtn.querySelector("span");
-                if (lbl) lbl.textContent = "Speak as NPC";
+                if (lbl) lbl.remove();
+                this._sendBtn.classList.add("ace-engine-pill-icon");
             }
 
-            const stopAllBtn = el.querySelector("#ace-engine-stop-all");
-            stopAllBtn?.addEventListener("click", () => {
+            // ── WHICH TONGUE IS HE SPEAKING (2026-08-07) ──────────────────
+            // Only languages this creature actually knows. Defaults to Common
+            // when it has it, otherwise its own first language — a creature
+            // must never default to speaking something it does not know.
+            // Hidden when there is nothing to choose between.
+            this._langSelect = el.querySelector("#ace-engine-npc-language");
+            if (this._langSelect) {
+                try {
+                    const rows = Lang.speakableLanguages(this.actor);
+                    if (rows.length > 1) {
+                        const chosen = this._npcLanguage ?? Lang.defaultLanguageFor(this.actor);
+                        this._langSelect.innerHTML = rows
+                            .map(r => `<option value="${r.key}"${r.key === chosen ? " selected" : ""}>${r.label}</option>`)
+                            .join("");
+                        this._npcLanguage = chosen;
+                        this._langSelect.style.display = "";
+                        if (!isReRender) {
+                            this._langSelect.addEventListener("change", (ev) => {
+                                this._npcLanguage = ev.target.value || null;
+                                console.log(`ACE: Engine | ${this.npcName} will speak ${Lang.labelFor(this._npcLanguage)}.`);
+                            });
+                        }
+                    } else {
+                        // One language (or none) — nothing to pick, so don't
+                        // show a control that cannot change anything. Still
+                        // record it so the chat message is tagged correctly.
+                        this._npcLanguage = rows[0]?.key ?? null;
+                        this._langSelect.style.display = "none";
+                    }
+                } catch (err) {
+                    console.warn(`${MODULE_ID} | language dropdown unavailable:`, err);
+                }
+            }
+
+            // END IT ON THE PLAYERS' SCREENS, KEEP MINE. (2026-08-07)
+            // The old red button ended the whole conversation including the
+            // GM's own window; that job now lives here, and the red button is
+            // a pure audio kill for everyone (wired OUTSIDE this GM block).
+            const endPlayersBtn = el.querySelector("#ace-engine-end-players");
+            endPlayersBtn?.addEventListener("click", () => {
                 Dialog.confirm({
-                    title: "Stop Conversation?",
-                    content: `<p>Stop the conversation with <strong>${escapeHtml(this.npcName)}</strong> for everyone?</p>`,
-                    yes: () => this._gmStopAll(),
+                    title: "Close on players' screens?",
+                    content: `<p>Close the conversation with <strong>${escapeHtml(this.npcName)}</strong> on every player's screen?</p>`
+                           + `<p style="opacity:.8;font-size:13px;">Your window stays open so you can read it back.</p>`,
+                    yes: () => this._endForPlayers(),
                     no:  () => {}
                 });
             });
         }
+
+        // ── GM's perception readout (2026-08-07) ────────────────────────
+        // Fed by the scan that runs before every reply, so the GM can see what
+        // the creature was reacting to — and catch it instantly when the scan
+        // is wrong. GM-only: the element does not exist on a player's client.
+        if (game.user.isGM && !isReRender) {
+            this._perceptionEl = el.querySelector("#ace-engine-perception");
+            this._perceptionHook = Hooks.on(`${MODULE_ID}.perceptionScan`, (data) => {
+                try {
+                    if (data?.actorId !== this.actor?.id) return;
+                    const box = this._perceptionEl
+                        ?? this.element?.querySelector?.("#ace-engine-perception");
+                    if (!box || !data.line) return;
+                    box.textContent = data.line;
+                    box.style.display = "";
+                } catch (_) { /* cosmetic — never block a reply */ }
+            });
+        }
+
+        // Opened onto a body — a window can be opened AFTER the death, or
+        // reopened later, and the death hook has long since fired. Check the
+        // state rather than relying on having been present for the event.
+        if (this.isDeadNow) this._applyDeathLock({ announce: !isReRender });
+
+        // ── STOP AUDIO — every client, including spectators ─────────────
+        // Wired BEFORE the spectator bail below on purpose: someone watching a
+        // conversation they are not part of is exactly the person most likely
+        // to want the narration to shut up. No confirm dialog — a stop button
+        // that asks a question is not a stop button. (2026-08-07)
+        const stopAudioBtn = el.querySelector("#ace-engine-stop-all");
+        if (stopAudioBtn && !isReRender) stopAudioBtn.addEventListener("click", () => {
+            ConversationApp.silenceEverything("local");
+            game.socket.emit(`module.${MODULE_ID}`, {
+                action:   "aceStopAudio",
+                senderId: game.user.id,
+                who:      game.user.name,
+            });
+            ui.notifications?.info("Audio stopped.");
+        });
 
         // ── Spectator (readOnly) — lock EVERYTHING and bail ─────────────
         if (this.readOnly) {
@@ -439,6 +766,15 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             this._paused = !this._paused;
             if (this._paused) {
                 ttsEngine.pause();
+                // PAUSE MEANS PAUSE. A live recogniser kept transcribing into a
+                // box the player can no longer see or correct. Stop it — WITHOUT
+                // sending — so nothing is lost and nothing is fired off while
+                // the conversation is held. Whatever is already typed or
+                // dictated stays exactly where it is; pressing the mic after
+                // resuming continues from it (see _startMic). (2026-08-07)
+                if (this._recognition) {
+                    try { this._stopMic({ send: false }); } catch (_) { /* already stopped */ }
+                }
             } else {
                 ttsEngine.resume();
             }
@@ -537,6 +873,115 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         }
     }
 
+    /**
+     * KILL EVERY VOICE ON THIS CLIENT, RIGHT NOW. (2026-08-07)
+     *
+     * Johnny: "sometimes these things are going on and on and people don't want
+     * to hear it — dig deep for that." So this does not politely ask the TTS
+     * engine to stop; it goes after every route sound can be leaving by, and
+     * each one is independently guarded so a missing module cannot stop the
+     * rest from being silenced.
+     *
+     *   1. ACE's own TTS engine  — the ElevenLabs / GM-proxy audio path.
+     *   2. Browser speechSynthesis — the fallback voice, which lives OUTSIDE
+     *      the TTS engine's own state and kept talking when only step 1 ran.
+     *      This is why "stop" felt like it did nothing: the engine reported
+     *      itself stopped while the browser carried on to the end of the line.
+     *   3. Any loose <audio>/<video> element ACE created.
+     *   4. Sequencer sounds, if it is installed.
+     *   5. Foundry's own audio helper — a narration played through it is not
+     *      the TTS engine's to stop.
+     *
+     * Static so a client can silence itself with no conversation window open.
+     */
+    static silenceEverything(reason = "local") {
+        let killed = [];
+        try { ttsEngine?.stop?.();                     killed.push("ACE TTS"); } catch (_) {}
+        try {
+            // The NARRATOR's audio is a bare `new Audio(url)` held in a module
+            // variable — it is NOT in the DOM, so the element sweep below can
+            // never see it. ace-engine already owns a killer for it and puts it
+            // on the module API; use that rather than reaching into its guts.
+            // This is the one that matters when a narration is "going on and
+            // on" — miss it and the stop button feels broken.
+            const api = game.modules.get("ace-engine")?.api;
+            if (typeof api?.stopAllAudio === "function") { api.stopAllAudio(); killed.push("narration"); }
+        } catch (_) {}
+        try {
+            // The browser voice is its own beast — cancel() twice, because a
+            // queued utterance can start between the cancel and the next tick.
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+                setTimeout(() => { try { window.speechSynthesis.cancel(); } catch (_) {} }, 60);
+                killed.push("browser voice");
+            }
+        } catch (_) {}
+        try {
+            for (const el of document.querySelectorAll("audio, video")) {
+                if (el.paused) continue;
+                el.pause();
+                try { el.currentTime = 0; } catch (_) {}
+                killed.push("media element");
+            }
+        } catch (_) {}
+        try {
+            if (globalThis.Sequencer?.SoundManager?.stop) {
+                globalThis.Sequencer.SoundManager.stop();
+                killed.push("Sequencer sound");
+            }
+        } catch (_) {}
+        try {
+            // Foundry's audio helper. Never call a global bare — if the shape
+            // is not what we expect, say so instead of pretending it worked.
+            const ah = globalThis.game?.audio;
+            if (ah?.playing?.size) {
+                for (const snd of [...ah.playing.values()]) { try { snd.stop(); } catch (_) {} }
+                killed.push("Foundry audio");
+            }
+        } catch (_) {}
+        console.log(`ACE: Engine | STOP AUDIO (${reason}) — silenced: ${killed.length ? [...new Set(killed)].join(", ") : "nothing was playing"}`);
+        return killed;
+    }
+
+    /**
+     * Close this conversation on every PLAYER's screen and leave the GM's open.
+     * (Johnny 2026-08-07 — he wants to keep reading it back after cutting the
+     * players loose.) Distinct from _gmStopAll, which also closes his own.
+     */
+    async _endForPlayers() {
+        ConversationApp.silenceEverything("gm ended for players");
+        game.socket.emit(`module.${MODULE_ID}`, {
+            action:   "aceStopAudio",
+            senderId: game.user.id,
+            who:      game.user.name,
+        });
+        game.socket.emit(`module.${MODULE_ID}`, {
+            action:   "endConversationForPlayers",
+            actorId:  this.actor.id,
+            tokenId:  this.tokenDocument?.id || null,
+            senderId: game.user.id,
+        });
+        // The players are gone, so nobody is holding the conversation open —
+        // free the slot but keep this window on screen.
+        try {
+            const map = npcChatState?.openConversations;
+            if (map?.get?.(this._convoKey) === this) map.delete(this._convoKey);
+        } catch (_) {}
+        this._setInputLocked(true, "");
+        ui.notifications?.info(`Closed "${this.npcName}" on the players' screens. Yours is still open.`);
+    }
+
+    /** Drop the perception listener — an un-removed hook leaks for every window
+     *  the GM ever opens, and they all fire on every scan. */
+    _releasePerceptionHook() {
+        try {
+            if (this._perceptionHook != null) {
+                Hooks.off(`${MODULE_ID}.perceptionScan`, this._perceptionHook);
+                this._perceptionHook = null;
+            }
+        } catch (_) { /* already gone */ }
+    }
+
     async _gmStopAll() {
         ttsEngine.stop();
         game.socket.emit(`module.${MODULE_ID}`, {
@@ -553,16 +998,55 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
     async handlePuppet() {
         // Puppet now uses the shared input field (no separate textarea)
-        const text = this._inputField?.value?.trim();
-        if (!text) return;
+        const raw = this._inputField?.value?.trim();
+        if (!raw) return;
+        // The GM MAY speak as a dead creature — dying words, a ghost, an undead
+        // that talks, or simply narrating through the body. (Johnny's call.)
+        // Noted once so it is never a surprise that the corpse said something.
+        if (this.isDeadNow && !this._deadPuppetNoted) {
+            this._deadPuppetNoted = true;
+            console.log(`${MODULE_ID} | ${this.npcName} is dead — GM is speaking as them deliberately.`);
+        }
         // Stop any in-progress TTS before puppet speaks
         if (ttsEngine.isPlaying) ttsEngine.stop();
         this._inputField.value = "";
+
+        // ── RE-VOICE THE GM'S LINE IN CHARACTER (Johnny 2026-08-07) ─────────
+        // A typed line goes to the speech engine exactly as written, and
+        // "What do you mean?" is four words and one question mark — there is
+        // nothing there to perform, so it lands flat and robotic no matter how
+        // good the voice is. The AI's own lines only sound better because they
+        // are longer and better punctuated. This gives the GM's line the same
+        // treatment: same meaning, same length, his rhythm.
+        //
+        // ⚠️ A LEADING QUOTE MEANS "SAY THIS EXACTLY". Sometimes the GM has
+        // written the precise words they want in the world and nothing may
+        // touch them. `"Get out."` goes through untouched, with no AI call and
+        // no delay.
+        //
+        // ⚠️ THE GM'S LINE IS NEVER LOST. revoiceLine returns the original on
+        // any failure, timeout, empty answer or runaway rewrite — a flat
+        // delivery is a far smaller problem than a line that never got said.
+        let text = raw;
+        const verbatim = /^["“]/.test(raw);
+        if (verbatim) {
+            text = raw.replace(/^["“]\s*/, "").replace(/["”]\s*$/, "").trim() || raw;
+            console.log(`${MODULE_ID} | puppet: verbatim (leading quote) — speaking exactly as typed.`);
+        } else if (QolSafe(() => game.settings.get(MODULE_ID, "revoicePuppetLines"), true)) {
+            this.setThinking(true);
+            try {
+                text = await AIHandler.revoiceLine(this.actor, raw, { speakerName: this.npcName });
+                if (text !== raw) console.log(`${MODULE_ID} | puppet re-voiced: "${raw}" -> "${text}"`);
+            } finally {
+                this.setThinking(false);
+            }
+        }
 
         this.renderMessage("assistant", text);
 
         game.socket.emit(`module.${MODULE_ID}`, {
             action:  "conversationMessage",
+            ...this._speakerPayload(),
             actorId: this.actor.id,
             role:    "assistant",
             content: text,
@@ -573,6 +1057,13 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         // the note on the player path below. (2026-08-07)
         const dialogueOnly = text.replace(/\*(.*?)\*/g, "").trim();
         const _postBody = dialogueOnly || (text.trim() ? `<em>${text.replace(/\*/g, "").trim()}</em>` : "");
+
+        // ── THE GM'S OWN LINE IS SPOKEN IN THE TONGUE TOO (2026-08-07) ──────
+        // This was the half the [SPOKEN] marker never covered at all: Johnny
+        // picked Dwarvish, the chat scrambled correctly, and the voice read his
+        // English out loud anyway. Same helper as the AI path, so the two can
+        // never drift apart again.
+        const _heardPuppet = await this._foreignAudioFor(text);
         if (_postBody) {
             ChatMessage.create({
                 speaker: {
@@ -582,7 +1073,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                     scene: canvas.scene?.id || null
                 },
                 content: `<p>${_postBody}</p>`,
-                flags: { [MODULE_ID]: { isAIConversation: true } }
+                flags: { [MODULE_ID]: { isAIConversation: true }, ...Lang.polyglotFlags(this._chatLanguageFor(_postBody)) }
             });
         }
 
@@ -599,7 +1090,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         const soundFolder = getCreatureSoundCandidates(this.actor);
         const voicePitch  = getVoicePitch(this.actor);
         try {
-            const result = await ttsEngine.speakResponse(text, voiceId, this.actor.name, soundFolder, voicePitch, this._getLiveVoiceSettings());
+            const _puppetSpeech = Lang.buildSpokenText(text, _heardPuppet);
+            const result = await ttsEngine.speakResponse(_puppetSpeech, voiceId, this.actor.name, soundFolder, voicePitch, this._getLiveVoiceSettings());
             if (result === "invalid") {
                 console.warn("ACE: Engine | Puppet: voice invalid, fetching replacement...");
                 await this._setFlagSafe("voiceId", null);
@@ -607,7 +1099,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 voiceId = config.voiceId;
                 this._voiceId = voiceId;
                 this._voiceSettings = config.voiceSettings || {};
-                await ttsEngine.speakResponse(text, voiceId, this.actor.name, soundFolder, voicePitch, this._getLiveVoiceSettings());
+                await ttsEngine.speakResponse(_puppetSpeech, voiceId, this.actor.name, soundFolder, voicePitch, this._getLiveVoiceSettings());
             }
         } catch(err) {
             console.error("ACE: Engine | Puppet speak error:", err);
@@ -996,7 +1488,21 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         recognition.maxAlternatives = 1;
 
         this._recognition  = recognition;
-        this._micFinalText = "";       // survives session cycles — see onresult
+        // ── CONTINUE FROM WHAT IS ALREADY THERE. DO NOT WIPE IT. (2026-08-07) ──
+        // This used to be `= ""`. Because onresult rebuilds the WHOLE box from
+        // `_micFinalText + this session's words`, starting a dictation with an
+        // empty bank meant the first syllable destroyed everything already in
+        // the input — dictated earlier, or typed by hand, it made no
+        // difference. Johnny hit it by pausing mid-sentence: press pause, press
+        // it again, speak, and the sentence he had built vanished and started
+        // over. Nothing about pause was at fault; any second press of the mic
+        // did it.
+        //
+        // Seeding from the live box makes dictation ADDITIVE, which is what
+        // anyone would expect: it picks up where you left off, and typing a
+        // few words then finishing them out loud now works too.
+        const _carry = (this._inputField?.value ?? "").trim();
+        this._micFinalText = _carry ? _carry + " " : "";
         let fatal = false;
         let restarts = 0;
         let heardAnything = false;
@@ -1145,6 +1651,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             // Broadcast to player + spectators as NPC speech
             game.socket.emit(`module.${MODULE_ID}`, {
                 action:  "conversationMessage",
+                ...this._speakerPayload(),
                 actorId: this.actor.id,
                 tokenId: this.tokenDocument?.id || null,
                 role:    "assistant",
@@ -1172,7 +1679,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                         scene: canvas.scene?.id || null
                     },
                     content: `<p>${_postBody}</p>`,
-                    flags: { [MODULE_ID]: { isAIConversation: true, gmInterjection: true } }
+                    flags: { [MODULE_ID]: { isAIConversation: true, gmInterjection: true }, ...Lang.polyglotFlags(this._chatLanguageFor(_postBody)) }
                 });
             }
 
@@ -1221,6 +1728,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         // ── Broadcast the player's message so GM (and other spectators) see it ──
         game.socket.emit(`module.${MODULE_ID}`, {
             action:  "conversationMessage",
+            ...this._speakerPayload(),
             actorId: this.actor.id,
             tokenId: this.tokenDocument?.id || null,
             role:    "user",
@@ -1228,12 +1736,23 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             exclude: game.user.id
         });
 
+        // ── THE GATE: A DEAD CREATURE DOES NOT ANSWER. (2026-08-07) ────────
+        // Checked HERE, at the door every player message comes through, rather
+        // than trusting the window to have been locked in time — a player can
+        // press Send in the same instant the killing blow lands.
+        if (this.isDeadNow) {
+            this._applyDeathLock();
+            console.log(`${MODULE_ID} | GATE: ${this.npcName} is dead — no reply generated.`);
+            this._setInputLocked(game.user.isGM ? false : true, "");
+            return;
+        }
+
         this.setThinking(true);
 
         this._resetInactivityTimer();
 
         try {
-            const response = await AIHandler.getResponse(this.actor, text, this.history, { speakerActor: this.speakingAs });
+            let response = await AIHandler.getResponse(this.actor, text, this.history, { speakerActor: this.speakingAs });
 
             // Hard AI failure (bad/no key, out of credit, provider down, timeout).
             // The GM already received a plain-English toast from surfaceAIFailure.
@@ -1250,6 +1769,13 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             }
 
             console.log("ACE: Engine | Response:", response);
+
+            // ── WHAT IS SAID vs WHAT IS HEARD (2026-08-07) ────────────────
+            // The English stays in chat, where Polyglot decides who may read
+            // it, so a character who knows the tongue still gets the meaning.
+            // Only the AUDIO is rendered into the stand-in language. Null means
+            // "say it in English" — no barrier, Common, or the render failed.
+            const _heard = await this._foreignAudioFor(response);
 
             // Track whether this was the first exchange (for name reveal)
             const isFirstExchange = this.history.length === 0;
@@ -1275,6 +1801,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
             game.socket.emit(`module.${MODULE_ID}`, {
                 action:  "conversationMessage",
+                ...this._speakerPayload(),
                 actorId: this.actor.id,
                 tokenId: this.tokenDocument?.id || null,
                 role:    "assistant",
@@ -1301,16 +1828,39 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             // Emote-only → render the emote itself, italicised, rather than drop it.
             const _postBody = dialogueOnly
                 || (_cleanResponse ? `<em>${_cleanResponse.replace(/\*/g, "")}</em>` : "");
+            // ── TWO SPEAKERS, TWO MESSAGES (2026-08-07) ──────────────────
+            // This used to put the PLAYER's line and the NPC's reply in ONE
+            // chat message and then tag it with the NPC's language. Polyglot
+            // scrambles per message, so it encoded Jeth's own sentence along
+            // with Savid's — a single block of runes containing two different
+            // people's speech, one of whom obviously understood himself.
+            // Johnny's screenshot: "what the hell is that all about?"
+            //
+            // A message can only carry one language, so it can only carry one
+            // speaker. The player's line posts as itself, readable, always.
+            // The NPC's reply posts separately and is the only part that can be
+            // hidden.
             if (_postBody) {
+                const _npcSpeaker = {
+                    alias: this.actor.name,
+                    actor: this.actor.id,
+                    token: this.tokenDocument?.id || null,
+                    scene: canvas.scene?.id || null
+                };
+
+                // 1. What the PLAYER said — their own words, never scrambled.
+                //    They said it; hiding it from them would be nonsense.
                 ChatMessage.create({
-                    speaker: {
-                        alias: this.actor.name,
-                        actor: this.actor.id,
-                        token: this.tokenDocument?.id || null,
-                        scene: canvas.scene?.id || null
-                    },
-                    content: `<p><strong>${playerName}:</strong> ${text}</p><p>${_postBody}</p>`,
-                    flags: { [MODULE_ID]: { isAIConversation: true } }
+                    speaker: { alias: playerName },
+                    content: `<p><strong>${playerName}:</strong> ${text}</p>`,
+                    flags: { [MODULE_ID]: { isAIConversation: true, playerLine: true } }
+                });
+
+                // 2. What the NPC said back — the only part a language can hide.
+                ChatMessage.create({
+                    speaker: _npcSpeaker,
+                    content: `<p>${_postBody}</p>`,
+                    flags: { [MODULE_ID]: { isAIConversation: true }, ...Lang.polyglotFlags(this._chatLanguageFor(_postBody)) }
                 });
             }
 
@@ -1327,7 +1877,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
             // Strip AI tags before sending to TTS — emotes (*action*) are left
             // intact because tts.js handles dialogue vs emote segmentation itself.
-            const ttsText = response
+            const ttsText = Lang.buildSpokenText(response, _heard)
                 .replace(/\[SUBTLE_CHECK:[^\]]+\]/g, "")
                 .replace(/\[DISPOSITION:[^\]]+\]/gi, "")
                 .replace(/\s{2,}/g, " ")
@@ -1370,7 +1920,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             this.renderMessage("system", "Conversation timed out due to inactivity.");
             await this._summarizeSession();
             this._setUILocked(true, "");
-        }, 30 * 60 * 1000);  // 30 minutes — covers normal tabletop pauses (rule lookups, snack breaks, party deliberation)
+        }, CONVERSATION_IDLE_MS);
     }
 
     async _saveMemorySafe(history) { return this._setFlagSafe("memoryLog", history); }
@@ -1487,6 +2037,151 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     /**
+     * GIVE A NAMELESS CREATURE A NAME AND A PAST, THE MOMENT SOMEONE SPEAKS TO IT.
+     *
+     * Johnny, 2026-08-07: "if the characters suddenly talk to a goblin, I want
+     * the AI to name the goblin and write a backstory so it has something to
+     * respond to." He deliberately does NOT pre-name tokens, because there is no
+     * predicting which goblin a party decides to chat with. When they do, that
+     * goblin should stop being furniture and become a person.
+     *
+     * "Archmage" is a statblock label exactly like "Goblin" or "Ogre". Until
+     * someone talks to it, it is nobody. After that, it is somebody — and stays
+     * that somebody for the rest of the campaign, because the bio is written to
+     * the sheet.
+     *
+     * Runs at conversation OPEN, not on the first message, so the generation
+     * happens while the player is still reading the portrait and typing.
+     * queueBioGeneration is already idempotent — it returns immediately when an
+     * ACE bio exists — so a creature is never named twice and a GM-written bio
+     * is never overwritten.
+     *
+     * ⚠️ THE NAME STAYS SECRET. Nothing here touches the nameplate: the players
+     * still see "Goblin". _maybeRevealName below is what paints the real name on
+     * the token, and only after the creature has introduced itself in the
+     * conversation. Johnny chose that explicitly — you learn a name by asking
+     * for it, not by hovering over a token.
+     */
+    async _ensureIdentity() {
+        try {
+            if (!this.actor || this._identityQueued) return;
+            this._identityQueued = true;
+
+            // ── A PLAYER ASKS THE GM (2026-08-07) ────────────────────────
+            // This runs on whichever client opened the conversation, and that
+            // is usually a PLAYER — which is the whole point of the feature:
+            // "if the characters suddenly talk to a goblin, I want the AI to
+            // name the goblin and write a backstory." A player client cannot
+            // create an Actor or write world data; Foundry refuses outright.
+            // So it asks the GM, who runs the identical code path.
+            //
+            // ⚠️ NO SILENT CATCH. If nobody is there to answer, say so — an
+            // unexplained "the goblin has nothing to say" is exactly the kind
+            // of believable lie that wastes an evening.
+            if (!game.user?.isGM) {
+                const tokenDoc = this.tokenDocument ?? this.actor.getActiveTokens?.()[0]?.document ?? null;
+                if (!tokenDoc) return;
+
+                const bioNow = this.actor.system?.details?.biography?.value || "";
+                if (bioNow.includes('class="ace-engine-bio"')) return;   // already somebody
+
+                const { resolveIdentity } = await import("./npc-identity.mjs");
+                if (resolveIdentity(this.actor, tokenDoc).isNamed) return;
+
+                if (!game.users?.activeGM) {
+                    console.warn(`${MODULE_ID} | "${tokenDoc.name}" has no name or history, and no GM is connected to write one. ` +
+                        `It can still talk, but it has nothing personal to talk about. A GM can click the quill on its token later.`);
+                    return;
+                }
+                game.socket.emit(`module.${MODULE_ID}`, {
+                    action: "ensureIdentity",
+                    tokenId: tokenDoc.id,
+                    sceneId: tokenDoc.parent?.id ?? canvas.scene?.id ?? null,
+                    senderId: game.user.id,
+                });
+                console.log(`${MODULE_ID} | "${tokenDoc.name}" is nobody yet — asked the GM to give it a name and a history.`);
+                return;
+            }
+
+            const bio = this.actor.system?.details?.biography?.value || "";
+            if (bio.includes('class="ace-engine-bio"')) return;   // already has a past
+
+            const { resolveIdentity } = await import("./npc-identity.mjs");
+            const id = resolveIdentity(this.actor, this.tokenDocument ?? null);
+            if (id.isNamed) return;                    // already somebody
+
+            const tokenDoc = this.tokenDocument
+                ?? this.actor.getActiveTokens?.()[0]?.document
+                ?? null;
+            if (!tokenDoc) return;
+
+            console.log(`${MODULE_ID} | "${id.name}" has no name or history — inventing both before the conversation starts.`);
+
+            // ── PROMOTE FIRST, GENERATE SECOND (2026-08-07) ──────────────
+            // Johnny: "as soon as somebody talks to someone, that thing becomes
+            // a linked token immediately."
+            //
+            // Nine goblins share one base actor, so a biography written now
+            // would land in this token's private delta — gone the moment the
+            // token is deleted, invisible in the sidebar, unusable next session.
+            // Worse, the rename in bio-generator is deliberately linked-only,
+            // so an unlinked creature could never actually take its new name.
+            //
+            // Promotion runs BEFORE the AI, because contact is what makes a
+            // creature a person, not whether a generation call succeeded. If
+            // the AI is down he still has a real actor and a button to retry.
+            let genToken = tokenDoc;
+            try {
+                const { promoteToNamedActor, isPromoted } = await import("./actor-promotion.mjs");
+                if (!isPromoted(tokenDoc)) {
+                    let factionName = "";
+                    try {
+                        const fid = this.actor.getFlag?.(MODULE_ID, "factionId");
+                        if (fid) {
+                            const { getFaction } = await import("./faction-registry.mjs");
+                            factionName = getFaction(fid)?.name || "";
+                        }
+                    } catch (_) { /* folder nicety only */ }
+
+                    const res = await promoteToNamedActor(tokenDoc, { factionName, reason: "spoken to by a player" });
+                    if (res.promoted && res.actor) {
+                        // Everything downstream must now target the NEW actor.
+                        this.actor = res.actor;
+                        genToken = tokenDoc;   // same token document, now linked
+                    } else if (!res.actor) {
+                        console.warn(`${MODULE_ID} | Promotion did not happen (${res.reason}) — the identity will live on the token only.`);
+                    }
+                }
+            } catch (err) {
+                // A creature that cannot be promoted can still be given a life;
+                // it just will not persist past the token. Never block the chat.
+                console.warn(`${MODULE_ID} | Could not promote this creature to a persistent actor (continuing):`, err);
+            }
+
+            const { queueBioGeneration } = await import("./bio-generator.mjs");
+            // Since 2026-08-08 this resolves when the bio is actually WRITTEN,
+            // not when it is queued — which is what we want here, because the
+            // conversation reads that bio. But a conversation must never be held
+            // hostage by a slow model, so cap the wait: if it overruns, the chat
+            // opens anyway and the history lands when it lands.
+            const _capped = await Promise.race([
+                // onContact — somebody is TALKING to it. This is the lazy half
+                // of "identity on first contact" and must not be gated by the
+                // token-DROP setting.
+                queueBioGeneration(genToken, { onContact: true }),
+                new Promise(res => setTimeout(() => res({ ok: false, error: "timed out" }), 25_000)),
+            ]);
+            if (_capped?.ok === false) {
+                console.warn(`${MODULE_ID} | Identity not ready before the chat opened (${_capped.error ?? "no reason given"}) — continuing without it.`);
+            }
+        } catch (err) {
+            // Never block a conversation over this. A creature with no backstory
+            // can still talk; it just has less to talk about.
+            console.warn(`${MODULE_ID} | Could not generate an identity for this NPC (chat continues):`, err);
+        }
+    }
+
+    /**
      * On the first conversation with a generic NPC (unlinked token), parse the
      * character's name from their bio and rename the canvas token so players
      * and the GM see a real name instead of "Barovian Commoner 02".
@@ -1572,7 +2267,14 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
      */
     _updateNameLabel(name) {
         if (!this._nameLabel || !name) return;
-        const who = this.speakingAs?.name ?? this._playerName ?? game.user.character?.name ?? null;
+        // Same precedence as conversationTitle — the two must never disagree,
+        // and both must prefer a known speaker over the last-resort guess.
+        const who = this._speakerToken?.actor?.name
+                 ?? this._speakerNameHint
+                 ?? this.speakingAs?.name
+                 ?? this._playerName
+                 ?? game.user.character?.name
+                 ?? null;
         this._nameLabel.textContent = (who && who !== name) ? `${name} — speaking with ${who}` : name;
         try {
             if (this.options?.window) this.options.window.title = this._nameLabel.textContent;
@@ -1592,6 +2294,9 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     async close(options = {}) {
+        // Drop the perception listener FIRST — a hook that outlives its window
+        // fires on every future scan, for every window ever opened.
+        this._releasePerceptionHook();
         // Raw history is already saved per-exchange via _saveMemorySafe(),
         // so the underlying conversation data is durable BEFORE close even
         // runs. The slow work below (journal summary AI call, gmDismiss

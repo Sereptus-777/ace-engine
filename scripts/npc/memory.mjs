@@ -10,6 +10,7 @@
 import { AIHandler }       from "./conversation-engine.mjs";
 import { logFactionEvent } from "./faction-memory.mjs";
 import { isAIFailure }     from "./ai-failure.mjs";
+import { getSecret, getSecretVault } from "../settings.mjs";
 
 const MODULE_ID       = "ace-engine";
 const JOURNAL_PREFIX  = "[AI Memory]";
@@ -21,7 +22,7 @@ function getEnvoyAIConfig() {
     try {
         return {
             provider: game.settings.get(MODULE_ID, "aiProvider") || "ollama",
-            apiKey:   game.settings.get(MODULE_ID, "apiKey")     || "",
+            apiKey:   getSecret("apiKey")     || "",
             apiUrl:   game.settings.get(MODULE_ID, "apiUrl")     || "",
             modelName: game.settings.get(MODULE_ID, "modelName") || "",
         };

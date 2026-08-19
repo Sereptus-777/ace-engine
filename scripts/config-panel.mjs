@@ -12,6 +12,7 @@
 // direct flavor is the proven path.
 
 import { getDeprecationFor } from "./remote-catalog.mjs";
+import { getSecret, getSecretVault } from "./settings.mjs";
 
 const MODULE_ID = "ace-engine";
 const { ApplicationV2 } = foundry.applications.api;
@@ -124,7 +125,7 @@ const TABS = [
     },
     {
         id: "combat", label: "Combat", icon: "fa-solid fa-shield-alt",
-        intro: "Initiative reorder arrows, auto-XP on kill, auto-move dead NPCs to the ☠ Fallen folder.",
+        intro: "Initiative reorder arrows, auto-XP on kill, auto-move dead NPCs to the X ☠ Fallen folder.",
         keys: ["initiativeReorder", "autoDistributeXP", "autoCleanupDead"],
     },
     {
@@ -211,14 +212,14 @@ export class AceConfigPanel extends ApplicationV2 {
      */
     _loadApiKeyVault() {
         let stored = {};
-        try { stored = game.settings.get(MODULE_ID, "apiKeysByProvider") || {}; }
+        try { stored = getSecretVault() || {}; }
         catch (_) { stored = {}; }
         const provider = (() => {
             try { return game.settings.get(MODULE_ID, "aiProvider") || ""; }
             catch (_) { return ""; }
         })();
         const apiKey = (() => {
-            try { return game.settings.get(MODULE_ID, "apiKey") || ""; }
+            try { return getSecret("apiKey") || ""; }
             catch (_) { return ""; }
         })();
 

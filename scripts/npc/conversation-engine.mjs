@@ -9,9 +9,12 @@
 import { getFactionContext }                 from "./faction-memory.mjs";
 import { buildFactionConversationContext }   from "./faction-registry.mjs";
 import { SocialProfileEngine }               from "./social-profile.mjs";
-import { surfaceAIFailure, AI_FAILED_REPLY } from "./ai-failure.mjs";
+import { surfaceAIFailure, AI_FAILED_REPLY, isAIFailure } from "./ai-failure.mjs";
 import { resolveIdentity, buildIdentityPrompt }  from "./npc-identity.mjs";
 import { trimHistoryToBudget, getMaxResponseTokens } from "../context-budget.mjs";
+import * as Lang from "./language-barrier.mjs";
+import * as Perceive from "./scene-perception.mjs";
+import { getSecret, getSecretVault } from "../settings.mjs";
 
 // Features that emit a LIST rather than one reply — an entry per item, per
 // loot pile. One shared cap truncates these mid-list, so they get headroom.
@@ -25,7 +28,7 @@ function getEnvoyAIConfig() {
     try {
         return {
             provider: game.settings.get(MODULE_ID, "aiProvider") || "ollama",
-            apiKey:   game.settings.get(MODULE_ID, "apiKey")     || "",
+            apiKey:   getSecret("apiKey")     || "",
             apiUrl:   game.settings.get(MODULE_ID, "apiUrl")     || "",
             modelName: game.settings.get(MODULE_ID, "modelName") || "",
         };
@@ -120,7 +123,7 @@ function _resolveChatProvider() {
                 if (overrideProvider !== main.provider) {
                     apiUrl = _defaultUrlForProvider(overrideProvider) || apiUrl;
                     // Use Chat-specific API key if set (cross-provider needs different auth)
-                    const chatKey = game.settings.get(MODULE_ID, "chatApiKey");
+                    const chatKey = getSecret("chatApiKey");
                     if (chatKey && chatKey.length > 0) apiKey = chatKey;
                 }
             } else {
@@ -238,6 +241,13 @@ export class AIHandler {
         // Use the speaker actor resolved at conversation creation time (passed in).
         // Fallback: GM's selected token → player's owned scene token → game.user.character
         let playerActor = externalSpeaker || null;
+        // ── CAN HE EVEN UNDERSTAND THEM? (2026-08-07) ─────────────────────
+        // Computed here, at the one door every reply comes through, rather
+        // than at a call site somebody could forget. Read from dnd5e's own
+        // language traits, and fails OPEN when either side has none recorded —
+        // a barrier is a hard block on a scene, and blocking one because of an
+        // empty field would be the module inventing a rule out of missing data.
+        let _barrier = null;
         let playerToken = null;
         if (playerActor) {
             playerToken = playerActor.getActiveTokens()?.[0] ?? canvas.tokens?.placeables?.find(t => t.document?.actorId === playerActor.id) ?? null;
@@ -366,7 +376,31 @@ export class AIHandler {
         const speechStyle = this.buildSpeechProfile(intScore, wisScore, chaScore, creatureType);
         const npcState    = this.buildNPCStateNote(isDead, isUndead, isWounded, isAnimal, hasSpeakWithAnimals, npcConditions, hpCurrent, hpMax, creatureType, actor);
         const playerNote  = this.buildPlayerStateNote(playerConditions, playerWounded, playerActor, playerHp, playerHpMax, playerIntScore, playerWisScore, playerChaScore, playerRace, playerClass, playerLevel, playerActiveEffects);
-        const nearbyNote  = this.buildNearbyActorsSummary(token);
+        // ── WHAT HE CAN ACTUALLY PERCEIVE (2026-08-07) ────────────────────
+        // Replaces buildNearbyActorsSummary, which listed every token within 60
+        // feet with NO line-of-sight test — so an NPC knew about a fight through
+        // a stone wall, in a sealed room, around a corner. Johnny: "the NPC
+        // isn't going to know what's going on down the hallway."
+        //
+        // Sight uses the real wall geometry, hearing uses Foundry's separate
+        // sound walls, and what he MAKES of it is gated on his Intelligence —
+        // a dull creature sees someone standing wrong where a learned one sees
+        // Hold Person. All local reads; single-digit milliseconds.
+        let nearbyNote = "";
+        let _scan = null;
+        try {
+            _scan = Perceive.perceive(token, actor);
+            const _changes = Perceive.diff(AIHandler._lastScan?.[actor.id] ?? null, _scan);
+            nearbyNote = Perceive.toPrompt(_scan, _changes);
+            (AIHandler._lastScan ??= {})[actor.id] = _scan;
+            AIHandler._lastGmLine = Perceive.toGmLine(_scan, _changes);
+            Hooks.callAll(`${MODULE_ID}.perceptionScan`, { actorId: actor.id, line: AIHandler._lastGmLine, scan: _scan, changes: _changes });
+        } catch (err) {
+            // A perception failure must never silence an NPC — fall back to the
+            // old summary and SAY the scan failed rather than quietly degrading.
+            console.warn(`${MODULE_ID} | scene perception failed — falling back to the plain nearby list:`, err);
+            nearbyNote = this.buildNearbyActorsSummary(token);
+        }
         const sceneNote   = this.buildSceneNote(scene);
 
         // ── Cross-module: Get reputation context from ACE Engine ─────────
@@ -401,7 +435,35 @@ export class AIHandler {
         // ── Cross-module: Fantasy profanity prompt from ACE Engine ──────
         const profanityPrompt = AIHandler._getProfanityPrompt(sceneName);
 
-        const systemPrompt = `
+        // Resolved now that playerActor is settled. Placed at the TOP of the
+        // prompt below because it must outrank personality, tone and every
+        // other instruction — an NPC who cannot understand you must not answer
+        // your question no matter how chatty its personality is.
+        try {
+            _barrier = Lang.describeBarrier(actor, playerActor);
+            if (!_barrier.understands) {
+                console.log(`${MODULE_ID} | LANGUAGE BARRIER — ${actor.name} cannot understand ${playerActor?.name ?? "the speaker"}. ${_barrier.reason}`);
+            }
+        } catch (err) {
+            // Never let a language lookup stop a reply — fail open and say so.
+            console.warn(`${MODULE_ID} | language barrier check failed (proceeding as understood):`, err);
+            _barrier = null;
+        }
+        // The gesture rules. Only when the barrier is actually up; two creatures
+        // who understand each other just talk.
+        //
+        // ⚠️ The spoken-language instruction that used to be appended here is
+        // GONE. It asked the model to write every line twice behind a [SPOKEN]
+        // marker, and mid-roleplay it simply stopped doing it — the line came
+        // out in plain English every time. Rendering the finished line is now a
+        // separate, deterministic step (AIHandler.renderSpoken), called from
+        // ConversationApp._foreignAudioFor, which also covers the GM's own
+        // puppet lines that the marker never touched. (2026-08-07)
+        const languageDirective = (_barrier && !_barrier.understands)
+            ? `${Lang.gesturePromptFor(actor, playerActor, _barrier)}\n\n`
+            : "";
+
+        const systemPrompt = `${languageDirective}
 ${buildIdentityPrompt(actor, token?.document ?? null)}
 
 ALIGNMENT: ${alignment}
@@ -481,12 +543,169 @@ ${identity.isNamed
 - If the conversation genuinely warrants a skill check from the player (e.g., you are being deceptive and they should roll Insight, or you mention arcane lore they might recognize, or you hint at something hidden they might notice), include this tag ONCE at the END of your response: [SUBTLE_CHECK:skill:dc:flavor text]. Example: [SUBTLE_CHECK:ins:14:Something about this story doesn't quite add up...]. Valid skills: ins, his, arc, rel, nat, prc, inv, sur, med, dec, itm, per, ath, acr, slt, ste, ani. Only use this when genuinely appropriate — do NOT overuse it.
         `.trim();
 
+        // ── THE WORDS NEVER REACH IT (2026-08-07) ─────────────────────────
+        // Johnny proved instructions are not enough: he typed "I am your new
+        // master" at an elf who speaks no Common, and the elf folded his arms
+        // DEFIANTLY — reacting to a meaning he could not have parsed. A model
+        // that can read the sentence will react to the sentence, no matter what
+        // the prompt says about not understanding it.
+        //
+        // So when the barrier is up the line is REPLACED, before the call, with
+        // a description of how it sounded. There is then no path by which the
+        // meaning can leak, because it was never sent.
+        //
+        // ⚠️ HISTORY TOO. Past turns are sent on every call, so masking only the
+        // current line would leak every earlier sentence the player said. The
+        // whole user side of the conversation is masked for a barrier turn.
+        let _input   = input;
+        let _history = history;
+        if (_barrier && !_barrier.understands) {
+            const who = playerActor?.name ?? "Someone";
+            _input = Lang.maskedUtterance(input, who);
+            _history = (history ?? []).map(h =>
+                h?.role === "user" ? { ...h, content: Lang.maskedUtterance(h.content, who) } : h
+            );
+            console.log(`${MODULE_ID} | barrier: player's words withheld from the AI — sent instead: ${_input}`);
+        }
+
         // Pass the Chat-tier override (provider, apiUrl, model, key) down
         // so the fetcher hits the right endpoint with the right model.
-        return await this.callAI(systemPrompt, history, input, provider, apiKey, [], {
+        return await this.callAI(systemPrompt, _history, _input, provider, apiKey, [], {
             modelOverride: chatCfg.modelName,
             urlOverride:   chatCfg.apiUrl,
         });
+    }
+
+    /**
+     * RENDER A SPOKEN LINE IN THE STAND-IN LANGUAGE. (2026-08-07)
+     *
+     * Replaces the `[SPOKEN]` marker, which asked the model to write every line
+     * twice mid-roleplay and was simply forgotten — Johnny heard plain English
+     * every time. One call, one job, nothing for a character actor to remember.
+     *
+     * Only the AUDIO changes. The English stays in chat, where Polyglot decides
+     * who may read it, so a character who genuinely knows the tongue still gets
+     * the meaning. This is purely what the room HEARS.
+     *
+     * @param {string} text          the finished dialogue, English
+     * @param {string|null} langKey  real language key ("hungarian"), or null for invented
+     * @param {string} tongueLabel   the fantasy tongue's name, for flavour ("Dwarvish")
+     * @returns {Promise<string>}    the line as it sounds, or "" if it could not be made
+     */
+    static async renderSpoken(text, langKey, tongueLabel = "another tongue") {
+        const line = String(text ?? "").trim();
+        if (!line) return "";
+        try {
+            const chatCfg = _resolveChatProvider();
+            const { provider, apiKey } = chatCfg;
+
+            const target = langKey
+                ? `real, natural ${langKey.charAt(0).toUpperCase() + langKey.slice(1)}`
+                : `INVENTED words that sound like a consistent, harsh, alien language — no real language`;
+
+            const sys = [
+                `You render a line of dialogue into how it SOUNDS when spoken in ${tongueLabel}.`,
+                `Output the line in ${target}.`,
+                `HARD RULES:`,
+                `- Output ONLY the rendered line. No English, no translation back,`,
+                `  no quotes, no explanation, no notes, no romanisation in brackets.`,
+                `- Keep it the same LENGTH and force as the original.`,
+                `- Keep exclamation marks and question marks so it is spoken with`,
+                `  the same energy.`,
+                `- If the line is a name, keep the name recognisable.`,
+            ].join(String.fromCharCode(10));
+
+            const out = await this.callAI(sys, [], line, provider, apiKey, [], {
+                modelOverride: chatCfg.modelName,
+                urlOverride:   chatCfg.apiUrl,
+            });
+
+            let cleaned = String(out ?? "").trim()
+                .replace(/^["'“”]+|["'“”]+$/g, "")
+                .split(new RegExp("\r?\n"))[0]   // one line only — models like to add notes
+                .trim();
+            if (!cleaned || isAIFailure(cleaned)) {
+                console.warn(`${MODULE_ID} | spoken rendering unavailable — the line will be read in English.`);
+                return "";
+            }
+            console.log(`${MODULE_ID} | spoken as ${langKey ?? "invented"}: "${line}" -> "${cleaned}"`);
+            return cleaned;
+        } catch (err) {
+            console.warn(`${MODULE_ID} | spoken rendering failed — reading the line in English:`, err);
+            return "";
+        }
+    }
+
+    /**
+     * RE-VOICE THE GM'S LINE IN CHARACTER. (Johnny 2026-08-07)
+     *
+     * Why: a GM's puppet line goes to the voice engine exactly as typed, and
+     * "What do you mean?" is four words and one question mark — there is
+     * nothing there for a speech engine to perform, so it lands flat and
+     * robotic no matter how good the voice is. The AI's own lines sound better
+     * purely because they are longer and better punctuated. This gives the GM's
+     * line the same treatment.
+     *
+     * ⚠️ IT RE-VOICES. IT DOES NOT REWRITE. The GM authored the content and
+     * keeps it: same meaning, same intent, same length, no new information, no
+     * answering a question they did not ask. A hostile personality does not get
+     * to turn "what do you mean" into a threat. That constraint is the whole
+     * contract — if it drifts, the feature is worse than useless because the GM
+     * stops trusting what their own NPC says.
+     *
+     * Returns the ORIGINAL text on any failure, timeout or empty answer.
+     * Losing a GM's line mid-scene is far worse than a flat delivery.
+     */
+    static async revoiceLine(actor, text, { speakerName = null } = {}) {
+        const original = String(text ?? "").trim();
+        if (!original) return original;
+        try {
+            const chatCfg = _resolveChatProvider();
+            const { provider, apiKey } = chatCfg;
+            const name = speakerName || actor?.name || "the character";
+
+            const personality = actor?.getFlag?.(MODULE_ID, "personality") || "";
+            const tone        = actor?.getFlag?.(MODULE_ID, "tone") || "";
+
+            const sys = [
+                `You are a dialogue editor. ${name} is about to say a line out loud.`,
+                personality ? `${name}'s personality: ${personality}` : "",
+                tone ? `${name}'s speaking tone: ${tone}` : "",
+                ``,
+                `Rewrite the line SO IT SOUNDS LIKE ${name.toUpperCase()} SAYING IT.`,
+                `HARD RULES — breaking any of these makes the result useless:`,
+                `- Keep the MEANING exactly. Do not answer anything, add information,`,
+                `  change the subject, or introduce opinions the line does not contain.`,
+                `- Keep it the same LENGTH. A four-word line stays about four words.`,
+                `  Never turn a short line into a speech.`,
+                `- You MAY add natural punctuation, a pause, or ONE short *emote in`,
+                `  asterisks* describing how they say it.`,
+                `- Do not add a name tag, quotation marks, or any commentary.`,
+                `- Output ONLY the finished line. Nothing else.`,
+            ].filter(Boolean).join(String.fromCharCode(10));
+
+            const out = await this.callAI(sys, [], original, provider, apiKey, [], {
+                modelOverride: chatCfg.modelName,
+                urlOverride:   chatCfg.apiUrl,
+            });
+
+            const cleaned = String(out ?? "").trim().replace(/^["'“”]+|["'“”]+$/g, "").trim();
+            if (!cleaned) return original;
+            if (isAIFailure(cleaned)) return original;
+
+            // A runaway rewrite is a rewrite, not a re-voice. If it has ballooned
+            // well past the GM's line, the model has started writing its own
+            // dialogue — take the original rather than put words in their mouth.
+            const words = (str) => str.split(/\s+/).filter(Boolean).length;
+            if (words(cleaned) > Math.max(12, words(original) * 3)) {
+                console.warn(`${MODULE_ID} | revoice REJECTED — model ballooned ${words(original)} words into ${words(cleaned)}. Speaking the GM's line as typed.`);
+                return original;
+            }
+            return cleaned;
+        } catch (err) {
+            console.warn(`${MODULE_ID} | revoice failed — speaking the GM's line as typed:`, err);
+            return original;
+        }
     }
 
     // ── Cross-Module: Get reputation context from ACE Engine (via bridge) ──
@@ -1089,9 +1308,14 @@ ${identity.isNamed
 
         const others = canvas.tokens.placeables.filter(t => {
             if (t.id === originToken.id || t.document.hidden) return false;
-            const a = t.center;
-            const b = originToken.center;
-            const distFeet = (Math.hypot(a.x - b.x, a.y - b.y) / gridSize) * gridDist;
+            // ⚠️ Edge-to-edge when ace-qol is present. Centre-to-centre puts a
+            // Large creature a full square further away than it really is, so
+            // earshot quietly excluded big NPCs standing right beside the party.
+            const proper = game.aceQol?.distanceFt;
+            const distFeet = typeof proper === "function"
+                ? proper(t, originToken)
+                : (Math.hypot(t.center.x - originToken.center.x,
+                              t.center.y - originToken.center.y) / gridSize) * gridDist;
             return distFeet <= MAX_RANGE_FEET;
         });
 

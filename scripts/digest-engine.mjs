@@ -24,6 +24,7 @@ const _FP = () =>
  *  itself is fine, only the toast spam is the problem. */
 // Silent uploader moved to the shared, corruption-proof module.
 import { silentUpload as _silentUpload } from "./silent-upload.mjs";
+import { getSecret, getSecretVault } from "./settings.mjs";
 
 
 // ── Extraction Prompt ────────────────────────────────────────
@@ -271,7 +272,7 @@ export class DigestEngine {
           aiOpts.model = dm;
         }
         // Use digest-specific API key if set, otherwise fall back to main key
-        const digestKey = game.settings.get(MODULE_ID, "digestApiKey");
+        const digestKey = getSecret("digestApiKey");
         if (digestKey && digestKey.length > 0) {
           aiOpts.apiKey = digestKey;
         }

@@ -44,6 +44,7 @@ import { activateNpcChat, npcChatState } from "./npc/activate.mjs";
 // paths (AI bio-generator, auto-pipeline, story notes, manual edits)
 // mutate the same actor's biography concurrently. v1.6.3 hardening.
 import { appendToBiography }      from "./bio-writer.mjs";
+import { getSecret, getSecretVault, migrateSecretsToClientScope } from "./settings.mjs";
 
 const MODULE_ID = "ace-engine";
 
@@ -379,9 +380,40 @@ async function migrateFromEnvoy() {
     "elevenLabsModel":         "elevenLabsModel",
   };
 
+  // ⚠️ ONLY MIGRATE WHAT THE USER ACTUALLY CHANGED (2026-08-07).
+  //
+  // game.settings.get() returns the DEFAULT when a setting was never stored, so
+  // the old loop could not tell "the user chose this" from "envoy ships this".
+  // On a fresh install with ace-envoy present — which is every new customer who
+  // buys the shim — it copied envoy's untouched defaults straight over
+  // ace-engine's, silently reverting them.
+  //
+  // Concretely: envoy's tokenDropAI default is "full", so a brand-new world
+  // would have lost the "silent" drop default on its very first boot, and the
+  // GM would have had no idea why every token drop opened a dialog.
+  //
+  // A stored Setting document exists ONLY when something explicitly set the
+  // value, so its presence is the real signal.
+  const _wasExplicitlySet = (namespace, key) => {
+    try {
+      const store = game.settings.storage?.get?.("world");
+      if (!store) return null;                      // cannot tell — caller decides
+      const full = `${namespace}.${key}`;
+      // WorldSettings#getSetting(key, user = null) is the real V13 API and
+      // matches on BOTH key and user. The fallback mirrors that — a world
+      // setting has no user, and matching one that does would be a false
+      // positive that reinstates the very overwrite this exists to prevent.
+      if (typeof store.getSetting === "function") return !!store.getSetting(full);
+      return !!store.find?.(sett => sett.key === full && !sett.user);
+    } catch (_) { return null; }
+  };
+
   let settingsMigrated = 0;
+  let settingsSkipped = 0;
   for (const [from, to] of Object.entries(SETTINGS_MAP)) {
     try {
+      const explicit = _wasExplicitlySet("ace-envoy", from);
+      if (explicit === false) { settingsSkipped++; continue; }   // never touched — leave engine's default alone
       const value = game.settings.get("ace-envoy", from);
       if (value !== undefined && value !== null && value !== "") {
         await game.settings.set(MODULE_ID, to, value);
@@ -389,12 +421,15 @@ async function migrateFromEnvoy() {
       }
     } catch (_) { /* setting doesn't exist on envoy side — skip */ }
   }
+  if (settingsSkipped) {
+    console.log(`${MODULE_ID} | Left ${settingsSkipped} ACE: Envoy setting(s) alone — they were never changed from Envoy's defaults, so ACE: Engine's own defaults stand.`);
+  }
   if (settingsMigrated) {
     console.log(`${MODULE_ID} | Envoy migration: copied ${settingsMigrated} setting(s)`);
   }
 
   // ── 1b) Turn the engine's NPC subsystem ON for migrating Envoy users ──
-  // Auto-XP-on-kill, the ☠ Fallen-folder cleanup, and the faction death-ripple
+  // Auto-XP-on-kill, the X ☠ Fallen-folder cleanup, and the faction death-ripple
   // all live behind the `npcChatEnabled` gate (default OFF). A user upgrading
   // FROM ACE: Envoy had those running; without flipping this they'd silently
   // vanish after the merge. Only fires when real Envoy data was found
@@ -669,6 +704,11 @@ async function _generateElevenLabsAudio(text, apiKey) {
 
 // ── Ready: initialize for ALL users (socket listener first) ────
 Hooks.once("ready", async () => {
+  // 🔴 Move any world-scoped API key into GM-only client storage and blank the
+  // world copy. Until this runs, every player can read the GM's keys.
+  try { await migrateSecretsToClientScope(); }
+  catch (err) { console.warn(`${MODULE_ID} | secret migration failed:`, err); }
+
   if (!_aceEngineEnabled()) {
     console.debug(`${MODULE_ID} | Module disabled — skipping ready subsystems.`);
     return;
@@ -753,13 +793,33 @@ Hooks.once("ready", async () => {
     // app legitimately needs to write).
     if (data?.action === "setFlag" || data?.action === "unsetFlag") {
       if (!game.user.isGM) return;
-      const ALLOWED_FLAG_KEYS = new Set([
-        "memoryLog", "voiceId", "voiceSettings", "voiceAccent", "voiceMuted",
-        "nameRevealed", "personality", "gmNotes", "factionId",
+      // ⚠️ TWO TIERS, BECAUSE THE ALLOWLIST WAS THE ONLY GATE (Grok 2026-08-18).
+      // Any client could write ANY key on this list to ANY actor — including
+      // gmNotes, personality and factionId, which are GM-authored world state,
+      // not conversation byproducts. The old list conflated "a chat exchange
+      // legitimately writes this" with "a human curates this".
+      //
+      // PLAYER_WRITABLE: things a player's own conversation produces.
+      // GM_ONLY: curated state. A payload asking for these is rejected unless a
+      // GM client is the one that sent it — and since Foundry attaches no
+      // trusted sender, "sent it" means the claimed user is a CONNECTED GM.
+      const PLAYER_WRITABLE = new Set([
+        "memoryLog", "voiceMuted", "nameRevealed",
       ]);
-      if (!ALLOWED_FLAG_KEYS.has(data.key)) {
+      const GM_ONLY = new Set([
+        "voiceId", "voiceSettings", "voiceAccent", "personality", "gmNotes", "factionId",
+      ]);
+      if (!PLAYER_WRITABLE.has(data.key) && !GM_ONLY.has(data.key)) {
         console.warn(`${MODULE_ID} | Socket flag op rejected — key "${data.key}" not in allowlist`);
         return;
+      }
+      if (GM_ONLY.has(data.key)) {
+        const claimed = data.userId ? game.users?.get?.(data.userId) : null;
+        if (!claimed?.isGM || !claimed.active) {
+          console.warn(`${MODULE_ID} | Socket flag op REJECTED — "${data.key}" is GM-curated state ` +
+            `and the request claims "${claimed?.name ?? data.userId ?? "nobody"}".`);
+          return;
+        }
       }
       try {
         // Resolve target — unlinked tokens write to the synthetic actor
@@ -795,6 +855,67 @@ Hooks.once("ready", async () => {
     // run summarizeAndSaveSession and write the journal entry. Without
     // this, conversations with NPCs vanish from the journal sidebar
     // even though the player just had them.
+    // ── STOP ALL AUDIO, ON EVERY CLIENT (2026-08-07) ───────────────────────
+    // Anyone can press it — GM or player. The sender has already silenced
+    // itself; this is everybody else. Deliberately does NOT close any window
+    // or touch the conversation: stop means "shut up", not "we're done".
+    // ── AN NPC DIED — LOCK ANY CONVERSATION WITH IT (2026-08-07) ───────────
+    // The death hook is local to the GM's client, so players learn about it
+    // here. Players are locked out; a GM window stays usable so the GM can
+    // still speak as the body if they choose to.
+    if (data?.action === "npcDied") {
+      if (data.senderId === game.user.id) return;   // already handled locally
+      try {
+        for (const [, app] of (npcChatState?.openConversations ?? new Map())) {
+          if (!app || app._isClaim) continue;
+          const hit = (data.actorId && app.actor?.id === data.actorId)
+                   || (data.tokenId && app.tokenDocument?.id === data.tokenId);
+          if (hit) app._applyDeathLock?.();
+        }
+      } catch (err) {
+        console.warn(`${MODULE_ID} | npcDied lock failed:`, err);
+      }
+      return;
+    }
+
+    if (data?.action === "aceStopAudio") {
+      if (data.senderId === game.user.id) return;   // already silenced locally
+      import("./npc/conversation-app.mjs").then(({ ConversationApp }) => {
+        ConversationApp.silenceEverything(`stopped by ${data.who ?? "someone"}`);
+      }).catch(err => console.warn(`${MODULE_ID} | stop-audio load failed:`, err));
+      return;
+    }
+
+    // ── GM CLOSED IT ON THE PLAYERS (2026-08-07) ───────────────────────────
+    // Close this conversation on PLAYER clients only. The GM keeps their own
+    // window so they can read back what was said — which is exactly the
+    // difference between this and gmDismiss below. Unlike gmDismiss it does NOT
+    // require the window to be readOnly: the player's own live window is the
+    // one being closed here.
+    if (data?.action === "endConversationForPlayers") {
+      if (game.user.isGM) return;                   // the GM's window stays
+      try {
+        const map = npcChatState?.openConversations;
+        if (map) {
+          for (const [key, app] of [...map.entries()]) {
+            if (!app || app._isClaim) continue;
+            if (app.actor?.id !== data.actorId) continue;
+            if (data.tokenId && app.tokenDocument?.id && app.tokenDocument.id !== data.tokenId) continue;
+            app._gmForced = true;                   // don't echo a dismiss back
+            try { app.close(); } catch (_) {}
+            map.delete(key);
+          }
+        }
+        import("./npc/conversation-app.mjs").then(({ ConversationApp }) => {
+          ConversationApp.silenceEverything("conversation closed by the GM");
+        }).catch(() => {});
+        ui.notifications?.info("The GM has ended this conversation.");
+      } catch (err) {
+        console.warn(`${MODULE_ID} | endConversationForPlayers failed:`, err);
+      }
+      return;
+    }
+
     if (data?.action === "gmDismiss") {
       // ── First: auto-close any spectator window on THIS client for the
       // ended conversation. Runs for every receiver, but GM clients are
@@ -967,20 +1088,81 @@ Hooks.once("ready", async () => {
         // sees what the NPC said; they just have to click the NPC's
         // chat icon to re-engage.
         if (!game.user.isGM) return;
+
+        // ── CLAIM THE SLOT BEFORE THE WAIT (2026-08-07) ──────────────────────
+        // The "is a window already open?" check above is instant, but BUILDING
+        // one waits on a dynamic import — and the map was only written AFTER
+        // that import resolved. Two messages arriving back to back both looked,
+        // both found the map empty (the first hadn't finished loading yet), and
+        // both built a window. The second overwrote the first in the map, so
+        // the first became an orphan nothing could find, dedupe or close.
+        //
+        // Johnny's console caught it exactly: two "UI Listeners activated for
+        // Vilnius" one millisecond apart, two windows, one convoKey.
+        //
+        // Claim the key synchronously with a placeholder, so the second message
+        // sees it is taken and queues its bubble instead of opening a rival
+        // window. Classic check-then-act across an await — same shape as the
+        // pause button gaining a listener on every render.
+        // ⚠️ Shaped like a real window, because other code iterates this map and
+        // calls into whatever it finds — `_findConvo` in activate.mjs does
+        // `found.app.close().catch(...)` on token deletion, which would throw on
+        // a bare object. The window is only ~milliseconds from existing, but a
+        // placeholder that can crash a consumer is not a placeholder.
+        const _claim = {
+          _isClaim:              true,
+          _pendingSpectatorMsgs: [{ role: data.role, html }],
+          actor,
+          tokenDocument:         tokenDoc,
+          readOnly:              false,
+          close:                 () => Promise.resolve(),
+        };
+        npcChatState?.openConversations?.set?.(convoKey, _claim);
+
         import("./npc/conversation-app.mjs").then(({ ConversationApp }) => {
+          // Who the player is speaking AS — sent with the message so this
+          // window is TOLD instead of guessing. Without it the guess picks the
+          // first player-owned token in canvas order, which on a GM client is
+          // whatever happens to be first (an Artificer's Steel Defender, in the
+          // case that surfaced this). See ConversationApp._speakerPayload.
+          let speakerToken = null;
+          try {
+            if (data.speakerTokenId) {
+              speakerToken = canvas?.tokens?.get?.(data.speakerTokenId)
+                          ?? game.scenes?.find(sc => sc.tokens.get(data.speakerTokenId))?.tokens?.get?.(data.speakerTokenId)
+                          ?? null;
+            }
+            if (!speakerToken && data.speakerActorId) {
+              speakerToken = canvas?.tokens?.placeables?.find(t => t.actor?.id === data.speakerActorId) ?? null;
+            }
+          } catch (_) { speakerToken = null; }
+
           const spec = new ConversationApp(actor, {
             readOnly:      false,
             isOwner:       true,
             tokenDocument: tokenDoc,
+            speakerToken:  speakerToken || undefined,
           });
-          spec._pendingSpectatorMsgs = [{ role: data.role, html }];
+          // Carry over anything that queued against the placeholder while the
+          // import was in flight, then take ownership of the key.
+          spec._pendingSpectatorMsgs = [...(_claim._pendingSpectatorMsgs ?? [])];
+          // Last-resort label when no token could be resolved but the sender
+          // told us the name — better a right name than a wrong creature.
+          if (!speakerToken && data.speakerName) spec._speakerNameHint = data.speakerName;
           npcChatState?.openConversations?.set?.(convoKey, spec);
           Promise.resolve(spec.render(true)).then(() => {
             const pending = spec._pendingSpectatorMsgs ?? [];
             spec._pendingSpectatorMsgs = [];
             for (const m of pending) appendBubble(spec, m.role, m.html);
           }).catch(err => console.warn(`${MODULE_ID} | spectator render failed:`, err));
-        }).catch(err => console.warn(`${MODULE_ID} | spectator window load failed:`, err));
+        }).catch(err => {
+          // The claim must not outlive a failed load, or this conversation can
+          // never open a window again.
+          if (npcChatState?.openConversations?.get?.(convoKey) === _claim) {
+            npcChatState.openConversations.delete(convoKey);
+          }
+          console.warn(`${MODULE_ID} | spectator window load failed:`, err);
+        });
       } catch (err) {
         console.warn(`${MODULE_ID} | conversationMessage handler threw:`, err);
       }
@@ -2177,7 +2359,7 @@ Hooks.once("ready", async () => {
       // these scan by FOLDER LOCATION + name pattern instead.
       //
       // listAceNpcFolderTree() — every NPC actor inside the "ACE NPCs"
-      //   folder + any subfolders (including ☠ Fallen).
+      //   folder + any subfolders (including X ☠ Fallen).
       // listSuspectedJunkNpcs() — root-level NPC actors PLUS the
       //   above, filtered to those whose name looks generic
       //   (matches a known compendium creature pattern: "Goblin",
@@ -2347,6 +2529,83 @@ Hooks.once("ready", async () => {
       getWorldBibleFactions: () =>
         worldBible?._factionIndex ? Array.from(worldBible._factionIndex.values()) : [],
       importLibraryFactions: (opts) => importLibraryFactions(opts),
+
+      // ── Identity on demand + a way to SEE the faction lookup decide ──
+      /**
+       * Give the selected (or supplied) creature a name, a history and a
+       * permanent actor. The same path a conversation and the token-HUD quill
+       * take. Pass {force:true} to rewrite an existing history.
+       */
+      giveThisOneALife: async (tokenOrDoc = null, opts = {}) => {
+        const doc = tokenOrDoc?.document ?? tokenOrDoc
+          ?? canvas.tokens?.controlled?.[0]?.document ?? null;
+        if (!doc) {
+          ui.notifications?.warn("Select a token first, or pass one in.");
+          return null;
+        }
+        const { giveThisOneALife } = await import("./npc/hud-give-a-life.mjs");
+        return giveThisOneALife(doc, opts);
+      },
+
+      /**
+       * Explain, without changing anything, which faction the selected creature
+       * would join and why — every candidate, its score and the reasons behind
+       * it. This is the answer to "why did it invent one when I already have
+       * 440?": run it and read the list.
+       */
+      explainFactionLookup: async (tokenOrDoc = null) => {
+        const doc = tokenOrDoc?.document ?? tokenOrDoc
+          ?? canvas.tokens?.controlled?.[0]?.document ?? null;
+        if (!doc?.actor) {
+          ui.notifications?.warn("Select a token first, or pass one in.");
+          return null;
+        }
+        const lookup = await import("./npc/faction-lookup.mjs");
+        const { resolveCreatureBase, getTemplate, getAllFactions } = await import("./npc/faction-registry.mjs");
+        const creatureBase = resolveCreatureBase(doc.actor);
+        const sceneName = canvas.scene?.name || "";
+        let sceneIntelText = "";
+        try { sceneIntelText = game.modules.get("ace-engine")?.api?.digestLookupContext?.(sceneName, { maxChars: 1500 }) || ""; }
+        catch (_) { /* optional */ }
+
+        const ctx = {
+          creatureBase, sceneName,
+          worldTag: game.world?.title || "",
+          template: getTemplate(creatureBase),
+          sceneIntelText,
+          factionIdsOnScene: lookup.factionIdsOnCurrentScene(doc.id),
+        };
+        const candidates = lookup.findCandidateFactions(ctx);
+        const verdict = lookup.decideFaction(ctx);
+        const total = Object.keys(getAllFactions()).length;
+
+        console.group(`ACE: Engine | Faction lookup for ${doc.name} (a ${creatureBase}) at "${sceneName}"`);
+        console.log(`Registry holds ${total} faction(s). ${candidates.length} could plausibly take this creature.`);
+        console.log(`Verdict: ${verdict.decision.toUpperCase()}${verdict.faction ? ` → "${verdict.faction.name}"` : " (nothing scored high enough)"} — the bar is ${lookup.ADOPT_THRESHOLD}.`);
+        if (candidates.length) console.table(candidates.map(c => ({ faction: c.faction.name, score: c.score, why: c.reasons.join("; ") })));
+        console.groupEnd();
+        return { verdict, candidates, registrySize: total };
+      },
+
+      /** The roster of a faction: which posts are held, and by whom. */
+      showFactionRoster: async (factionId = null) => {
+        const { getAllFactions, getFaction, getTemplate } = await import("./npc/faction-registry.mjs");
+        const { parseStructure, getRoster } = await import("./npc/faction-roster.mjs");
+        const ids = factionId ? [factionId] : Object.keys(getAllFactions());
+        const rows = [];
+        for (const id of ids) {
+          const f = getFaction(id);
+          if (!f?.roster) continue;
+          const roster = getRoster(f);
+          for (const slot of parseStructure(getTemplate(f.creatureBase)?.structure)) {
+            const held = (roster.slots?.[slot.key] || []).map(a => game.actors?.get(a)?.name).filter(Boolean);
+            if (held.length) rows.push({ faction: f.name, post: slot.label, held: held.join(", ") });
+          }
+        }
+        if (!rows.length) console.log("ACE: Engine | No faction has anybody posted to it yet.");
+        else console.table(rows);
+        return rows;
+      },
       openLivingWorldDashboard: () => { const app = new LivingWorldDashboard(); app.render(true); return app; },
 
       /** Set notoriety level ("unknown"|"local"|"regional"|"continental"|"legendary"). */
@@ -2896,7 +3155,7 @@ Hooks.once("ready", async () => {
         try {
           return {
             provider: game.settings.get(MODULE_ID, "aiProvider"),
-            apiKey:   game.settings.get(MODULE_ID, "apiKey"),
+            apiKey:   getSecret("apiKey"),
             model:    game.settings.get(MODULE_ID, "modelName"),
           };
         } catch (_) { return null; }
@@ -4033,6 +4292,61 @@ function _aceOnRenderChatMessage(message, html) {
   });
 }
 
+// ── Chat-card wiring ──────────────────────────────────────────────────────────
+//
+// 🔴 THIS MODULE WAS LOSING BUTTONS. Found in the 2026-08-12 audit.
+//
+// Foundry paints the chat log exactly ONCE. A card that is already in the log
+// when a render handler registers is decorated by NOBODY, permanently — its
+// Save / Apply Condition / Apply Damage buttons are inert for the rest of the
+// session. That is not an edge case: it is every ACE Engine card above the fold
+// for anyone who refreshes mid-game, which is the most common thing a player
+// does. It is invisible from the GM's chair because the GM rarely refreshes and
+// the buttons look identical either way — they highlight on hover, because
+// hover needs no listener.
+//
+// ace-qol solved this on 2026-08-07 and ace-engine kept the hole. It now uses
+// qol's shared SWEEP, passing its own flag namespace so ACE Engine cards are
+// recognised, and falls back to a local sweep if ace-qol is not installed —
+// Engine must not hard-depend on it.
+//
+// ⚠️ THE SWEEP ONLY, NOT qol's full `registerChatCardHandler`. The render hooks
+// are already registered below, at load time, which is earlier and therefore
+// better. Taking the full helper would register them a SECOND time and wire
+// every card's buttons twice.
+//
+// See lesson_cards_drawn_before_the_handler_registered.md.
+Hooks.once("ready", () => {
+  const shared = game.aceQol?.sweepDrawnCards;
+  if (typeof shared === "function") {
+    try {
+      shared(_aceOnRenderChatMessage, { label: "ACE Engine cards", namespace: MODULE_ID });
+      return;
+    } catch (err) {
+      console.warn(`${MODULE_ID} | shared card sweep failed — using the local one.`, err);
+    }
+  }
+
+  // Local equivalent, for a world running ace-engine without ace-qol.
+  const sweep = (reason) => {
+    try {
+      const nodes = document.querySelectorAll("#chat-log [data-message-id], .chat-log [data-message-id]");
+      let touched = 0;
+      for (const node of nodes) {
+        const msg = game.messages?.get(node.dataset.messageId);
+        if (!msg?.flags?.[MODULE_ID]) continue;
+        _aceOnRenderChatMessage(msg, node);
+        touched++;
+      }
+      if (touched) console.log(`${MODULE_ID} | Swept ${touched} already-drawn ACE Engine card(s) (${reason}).`);
+    } catch (err) {
+      console.warn(`${MODULE_ID} | could not sweep already-drawn cards:`, err);
+    }
+  };
+  Hooks.on("renderChatLog", () => sweep("chat log rendered"));
+  sweep("ready");
+});
+
 // v13+ uses renderChatMessageHTML; v12 uses renderChatMessage.
 // Only register the correct one to avoid deprecation warnings on v13.
 Hooks.on("renderChatMessageHTML", _aceOnRenderChatMessage);
@@ -4331,7 +4645,9 @@ async function _aceRollHeal(btn) {
 
 /**
  * Roll a saving throw for targeted/selected tokens.
- * For dnd5e: delegates to actor.rollAbilitySave (posts its own styled card).
+ * For dnd5e 5.x: delegates to actor.rollSavingThrow, which posts its own styled
+ *   card with pass/fail decoration. (4.x called this rollAbilitySave — see the
+ *   guarded fallback below.)
  * For others: posts an ACE result card with pass/fail and optional Apply Condition button.
  */
 async function _aceRollSave(btn) {
@@ -4356,10 +4672,24 @@ async function _aceRollSave(btn) {
     const actor = t.actor ?? t;
     try {
       if (game.system.id === "dnd5e") {
-        // dnd5e posts its own roll card with pass/fail decoration.
-        // fastForward — ACE owns every pause; dnd5e's save-config dialog must
-        // never appear (suite-wide dialog sweep, 2026-07-27).
-        await actor.rollAbilitySave(ability, { targetValue: dc, fastForward: true });
+        // dnd5e posts its own roll card with pass/fail decoration, so the
+        // message config is left alone — only the DIALOG is suppressed, because
+        // ACE owns every pause (suite-wide dialog sweep, 2026-07-27).
+        //
+        // ⚠️ 🔴 THIS BUTTON WAS DEAD. Found in the 2026-08-12 audit. It called
+        // `actor.rollAbilitySave(ability, {targetValue, fastForward})` — the
+        // dnd5e **4.x** name AND the 4.x signature. In 5.x the method is
+        // `rollSavingThrow(config, dialog, message)`; `rollAbilitySave` does not
+        // exist at all, so the call threw for every target and the GM got an
+        // error toast per creature while the button still read "Rolled (N)".
+        // `targetValue` is the 4.x key for the DC — 5.x reads `target`.
+        if (typeof actor.rollSavingThrow === "function") {
+          await actor.rollSavingThrow({ ability, target: dc }, { configure: false });
+        } else if (typeof actor.rollAbilitySave === "function") {
+          await actor.rollAbilitySave(ability, { targetValue: dc, fastForward: true }); // dnd5e 4.x
+        } else {
+          throw new Error("this dnd5e build exposes neither rollSavingThrow nor rollAbilitySave");
+        }
       } else if (game.system.id === "pf2e") {
         const pf2e = { str: "fortitude", dex: "reflex", con: "fortitude", int: "will", wis: "will", cha: "will" };
         await actor.saves?.[pf2e[ability] || "reflex"]?.roll({ dc: { value: dc } });
