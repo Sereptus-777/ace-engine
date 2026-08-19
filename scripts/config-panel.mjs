@@ -13,11 +13,18 @@
 
 import { getDeprecationFor } from "./remote-catalog.mjs";
 import { getSecret, getSecretVault } from "./settings.mjs";
+import { setSecret, setSecretVault, isSecretKey } from "./settings.mjs";
 
 const MODULE_ID = "ace-engine";
 const { ApplicationV2 } = foundry.applications.api;
 
-const SECRET_KEYS = new Set(["apiKey", "digestApiKey", "elevenLabsApiKey"]);
+// ⚠️ MASKING IS DERIVED, NOT DUPLICATED. This used to be a hand-kept list and
+// it had already drifted: "chatApiKey" was missing, so that key rendered as a
+// plain TEXT box and sat on screen in the clear — during a livestream, that is
+// the key gone. isSecretKey() is the single source of truth; only the voice key
+// is added, because it is stored client-side under its own name.
+const _EXTRA_SECRET_KEYS = new Set(["elevenLabsApiKey"]);
+const isMaskedKey = (key) => isSecretKey(key) || _EXTRA_SECRET_KEYS.has(key);
 
 // ── Provider defaults ─────────────────────────────────────────────────────
 // Mirrors AceSettings.PROVIDER_DEFAULTS (kept local to avoid circular import
@@ -228,7 +235,7 @@ export class AceConfigPanel extends ApplicationV2 {
         if (isEmpty && provider && apiKey) {
             stored = { [provider]: apiKey };
             // Persist the migration immediately (best-effort, GM-only)
-            try { game.settings.set(MODULE_ID, "apiKeysByProvider", stored); }
+            try { setSecretVault(stored); }
             catch (_) { /* non-blocking */ }
         }
 
@@ -423,7 +430,7 @@ export class AceConfigPanel extends ApplicationV2 {
                 try { return game.settings.get(MODULE_ID, key); }
                 catch (_) { return meta.default; }
             })();
-            const isPassword = SECRET_KEYS.has(key);
+            const isPassword = isMaskedKey(key);
             const inputHtml = this._buildInput(key, meta, value, isPassword);
             // Per-setting "extras" slot — currently used only for the digest
             // model "🐢 slow" warning. Populated/hidden in _wireEvents.
@@ -1151,7 +1158,9 @@ export class AceConfigPanel extends ApplicationV2 {
                 } else {
                     value = el.value;
                 }
-                await game.settings.set(MODULE_ID, key, value);
+                // ⚠️ Secrets NEVER go to a world setting — route them out.
+                if (isSecretKey(key)) await setSecret(key, value);
+                else await game.settings.set(MODULE_ID, key, value);
                 saved++;
             } catch (err) {
                 console.warn(`ACE: Engine | Config panel — failed to save ${key}:`, err);
@@ -1167,7 +1176,7 @@ export class AceConfigPanel extends ApplicationV2 {
                 if (currentApiKey) vault[currentProvider] = currentApiKey;
                 else delete vault[currentProvider];   // user blanked it intentionally
             }
-            await game.settings.set(MODULE_ID, "apiKeysByProvider", vault);
+            await setSecretVault(vault);
             this._apiKeyVault = vault;
         } catch (err) {
             console.warn("ACE: Engine | Config panel — failed to save apiKeysByProvider:", err);

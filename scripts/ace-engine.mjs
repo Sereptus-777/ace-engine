@@ -48,6 +48,107 @@ import { getSecret, getSecretVault, migrateSecretsToClientScope } from "./settin
 
 const MODULE_ID = "ace-engine";
 
+/**
+ * Authorise a socket payload that claims to act for a PLAYER.
+ *
+ * ⚠️🔴 FOUNDRY ATTACHES NO TRUSTED SENDER TO A MODULE SOCKET. Everything in
+ * the payload, `userId` included, is written by whoever sent it. So "is the
+ * sender a GM?" is not a check — a player types a GM's id into the payload and
+ * passes it. That is exactly how the GM_ONLY tier below was defeated.
+ *
+ * What this CAN establish, and all it claims to:
+ *   - the claimed user exists and is connected
+ *   - the claimed user is NOT a GM (every GM path writes locally; a GM has no
+ *     reason to ask over the socket, so a GM claim is always a forgery)
+ *   - optionally, that the claimed user OWNS the document being written
+ *
+ * A liar is therefore reduced to impersonating another PLAYER. Fails closed:
+ * anything unrecognised is a refusal.
+ *
+ * ⚠️ OWNERSHIP IS OPT-IN, AND THAT IS DELIBERATE. Ownership is the right rule
+ * for a document the player owns (their own character), and the WRONG rule for
+ * an NPC — players do not own NPCs, so demanding it would refuse every honest
+ * NPC-conversation write and silently kill NPC memory. Each call site states
+ * the rule it actually needs instead of inheriting one that sounds strict.
+ *
+ * @param {object} payload   the raw socket payload
+ * @param {string} label     what to name in the console on refusal
+ * @param {object} [opts]
+ * @param {Document} [opts.target]           document being written
+ * @param {boolean} [opts.requireOwnership]  demand OWNER on that document
+ * @returns {User|null}      the authorised user, or null (do not proceed)
+ */
+function _authoriseEnginePlayerSocket(payload, label, { target = null, requireOwnership = false } = {}) {
+  const claimedId = payload?.userId;
+  if (!claimedId) {
+    console.warn(`${MODULE_ID} | ${label} REFUSED — payload names no user.`);
+    return null;
+  }
+  const user = game.users?.get?.(claimedId);
+  if (!user) {
+    console.warn(`${MODULE_ID} | ${label} REFUSED — user "${claimedId}" does not exist.`);
+    return null;
+  }
+  if (user.isGM) {
+    console.warn(`${MODULE_ID} | ${label} REFUSED — claims GM "${user.name}", but every GM path ` +
+      `writes locally. A GM claim on this socket is always forged.`);
+    return null;
+  }
+  if (!user.active) {
+    console.warn(`${MODULE_ID} | ${label} REFUSED — "${user.name}" is not connected.`);
+    return null;
+  }
+  if (requireOwnership && !target?.testUserPermission?.(user, "OWNER")) {
+    console.warn(`${MODULE_ID} | ${label} REFUSED — "${user.name}" does not own ` +
+      `"${target?.name ?? "that document"}".`);
+    return null;
+  }
+  return user;
+}
+
+/**
+ * May this player write a conversation flag onto this actor?
+ *
+ * Ownership cannot be the test (see above), so the rule is stated in terms of
+ * what the feature actually is: a player talks to somebody ELSE'S creature.
+ *
+ * Refused:
+ *   - a character actor the claimant does not own — i.e. writing conversation
+ *     memory onto another player's PC, which is the one target where injected
+ *     text would sit in a rival's sheet
+ *   - a memoryLog that is not the shape a conversation produces, or is large
+ *     enough to be an attempt to stuff the world database
+ *
+ * Not checked, on purpose: distance and line of sight. The player-side UI gates
+ * the icon on both, but the SAVE fires when the window closes, which can
+ * honestly happen after walking away or after the NPC dies. Enforcing range at
+ * save time would eat real saves and look exactly like the memory bug this
+ * handler exists to prevent.
+ */
+function _playerMayWriteConvoFlag(user, target, key, value) {
+  if (target?.type === "character" && !target.testUserPermission(user, "OWNER")) {
+    console.warn(`${MODULE_ID} | Socket ${key} REFUSED — "${user.name}" tried to write onto ` +
+      `"${target.name}", a character they do not own.`);
+    return false;
+  }
+  if (key === "memoryLog") {
+    if (!Array.isArray(value)) {
+      console.warn(`${MODULE_ID} | Socket memoryLog REFUSED — not an array (got ${typeof value}).`);
+      return false;
+    }
+    if (value.length > 400) {
+      console.warn(`${MODULE_ID} | Socket memoryLog REFUSED — ${value.length} entries exceeds the 400 cap.`);
+      return false;
+    }
+    const bytes = (() => { try { return JSON.stringify(value).length; } catch (_) { return Infinity; } })();
+    if (bytes > 262144) {
+      console.warn(`${MODULE_ID} | Socket memoryLog REFUSED — ${bytes} bytes exceeds the 256 KB cap.`);
+      return false;
+    }
+  }
+  return true;
+}
+
 // ── XSS escape helper ───────────────────────────────────────
 function _escapeHtml(str) {
   const div = document.createElement("div");
@@ -804,23 +905,25 @@ Hooks.once("ready", async () => {
       // GM_ONLY: curated state. A payload asking for these is rejected unless a
       // GM client is the one that sent it — and since Foundry attaches no
       // trusted sender, "sent it" means the claimed user is a CONNECTED GM.
+      // ⚠️🔴 THE "GM_ONLY" TIER WAS SECURITY THEATRE (Brock 2026-08-19).
+      // It let a payload through if the CLAIMED user was a connected GM — and
+      // the payload is written by the attacker, so a player just typed the
+      // GM's id and wrote voiceId, personality, gmNotes or factionId on ANY
+      // actor in the world. Worse, the tier protected nothing real: grep says
+      // the ONLY emitter of this action is the player branch of
+      // conversation-app.mjs, because a GM writes flags locally and never
+      // touches the socket. So the whole tier existed purely to be abused.
+      //
+      // It is gone. There is exactly ONE list now, and it is the set of keys
+      // a player's own conversation legitimately produces. Anything else is
+      // refused by name.
       const PLAYER_WRITABLE = new Set([
         "memoryLog", "voiceMuted", "nameRevealed",
       ]);
-      const GM_ONLY = new Set([
-        "voiceId", "voiceSettings", "voiceAccent", "personality", "gmNotes", "factionId",
-      ]);
-      if (!PLAYER_WRITABLE.has(data.key) && !GM_ONLY.has(data.key)) {
-        console.warn(`${MODULE_ID} | Socket flag op rejected — key "${data.key}" not in allowlist`);
+      if (!PLAYER_WRITABLE.has(data.key)) {
+        console.warn(`${MODULE_ID} | Socket flag op REFUSED — "${data.key}" is not player-writable. ` +
+          `GM-curated state is written by the GM client directly, never over a socket.`);
         return;
-      }
-      if (GM_ONLY.has(data.key)) {
-        const claimed = data.userId ? game.users?.get?.(data.userId) : null;
-        if (!claimed?.isGM || !claimed.active) {
-          console.warn(`${MODULE_ID} | Socket flag op REJECTED — "${data.key}" is GM-curated state ` +
-            `and the request claims "${claimed?.name ?? data.userId ?? "nobody"}".`);
-          return;
-        }
       }
       try {
         // Resolve target — unlinked tokens write to the synthetic actor
@@ -837,6 +940,14 @@ Hooks.once("ready", async () => {
           console.warn(`${MODULE_ID} | Socket flag op: target actor not found (actorId=${data.actorId}, tokenId=${data.tokenId})`);
           return;
         }
+        // ⚠️ CHECKED AGAINST THE RESOLVED TARGET, because an unlinked token's
+        // permissions live on the synthetic actor, not the base one. The old
+        // player tier had no target test whatsoever: any client could write
+        // memoryLog onto any actor in the world and stuff arbitrary text into
+        // what an AI is later fed.
+        const _actingUser = _authoriseEnginePlayerSocket(data, `Socket ${data.action}(${data.key})`, { target });
+        if (!_actingUser) return;
+        if (!_playerMayWriteConvoFlag(_actingUser, target, data.key, data.value)) return;
         if (data.action === "setFlag") {
           target.setFlag(MODULE_ID, data.key, data.value).catch(err =>
             console.warn(`${MODULE_ID} | Socket setFlag(${data.key}) failed:`, err)

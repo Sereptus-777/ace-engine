@@ -2469,8 +2469,11 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             // unlinked tokens; null means hit the base actor directly.
             const tokenId = (this.tokenDocument && !this.tokenDocument.actorLink)
                           ? this.tokenDocument.id : null;
+            // ⚠️ userId is REQUIRED now. The GM-side handler refuses a payload
+            // that names nobody — it cannot check a claim that was never made.
             game.socket.emit(`module.${MODULE_ID}`, {
-                action: "unsetFlag", actorId: this.actor.id, tokenId, key
+                action: "unsetFlag", actorId: this.actor.id, tokenId, key,
+                userId: game.user.id
             });
             return;
         }
@@ -2480,7 +2483,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         const tokenId = (this.tokenDocument && !this.tokenDocument.actorLink)
                       ? this.tokenDocument.id : null;
         game.socket.emit(`module.${MODULE_ID}`, {
-            action: "setFlag", actorId: this.actor.id, tokenId, key, value
+            action: "setFlag", actorId: this.actor.id, tokenId, key, value,
+            userId: game.user.id
         });
     }
 

@@ -658,7 +658,11 @@ export class AceSettings {
     s("elevenLabsApiKey", {
       scope: "client",
       name: "ElevenLabs API Key",
-      hint: "API key from elevenlabs.io. ⚠️ Stored in THIS browser only, for THIS world — clearing browser data erases it and NPC voices drop to robotic browser TTS. To set it permanently, put it in modules/ace-engine/config.local.json instead; that file lives on the server, survives cache clears, and overrides this box.",
+      // ⚠️ DO NOT recommend config.local.json here again. Foundry serves that
+      // file over plain HTTP to every connected client, so a key placed in it
+      // is readable by any player with a console. This box is client storage:
+      // it stays in the GM's browser and is never sent to anyone else.
+      hint: "API key from elevenlabs.io. Stored in THIS browser only, for THIS world — clearing browser data erases it and NPC voices drop to browser TTS. Keep it here: it is never sent to your players.",
       type: String,
       default: "",
     });
@@ -1485,7 +1489,7 @@ export class AceSettings {
         let result;
         try {
           const provider = game.settings.get(MODULE_ID, "aiProvider") || "";
-          const apiKey   = game.settings.get(MODULE_ID, "apiKey")     || "";
+          const apiKey   = getSecret("apiKey");   // ⚠️ not the world name
           const apiUrl   = game.settings.get(MODULE_ID, "apiUrl")     || "";
           const model    = game.settings.get(MODULE_ID, "modelName")  || "";
           result = await AceSettings.testConnection(provider, apiKey, apiUrl, model);
@@ -2222,7 +2226,9 @@ export class AceSettings {
                 await game.settings.set(MODULE_ID, "aiProvider", selectedProvider);
                 await game.settings.set(MODULE_ID, "apiUrl", apiUrl);
                 await game.settings.set(MODULE_ID, "modelName", modelName);
-                if (apiKey) await game.settings.set(MODULE_ID, "apiKey", apiKey);
+                // ⚠️ setSecret, NOT settings.set. This line is what re-leaked
+                // the key after a clean migration — see setSecret's note.
+                if (apiKey) await setSecret("apiKey", apiKey);
                 await game.settings.set(MODULE_ID, "setupComplete", true);
               } catch (err) {
                 console.error(`${MODULE_ID} | Wizard: failed to save settings`, err);
@@ -2287,11 +2293,63 @@ export class AceSettings {
     const defaults  = AceSettings.PROVIDER_DEFAULTS[provider] ?? {};
     return {
       provider,
-      apiKey:    game.settings.get(MODULE_ID, "apiKey"),
+      // ⚠️ getSecret, NOT the world name. This is THE read every AI call goes
+      // through (ai-provider.mjs constructs from it), so leaving it on the
+      // world setting meant the "fixed" read path was bypassed by the one
+      // consumer that matters.
+      apiKey:    getSecret("apiKey"),
       apiUrl:    game.settings.get(MODULE_ID, "apiUrl")   || defaults.apiUrl   || "https://api.openai.com",
       modelName: game.settings.get(MODULE_ID, "modelName") || defaults.modelName || "gpt-4o-mini",
     };
   }
+}
+
+
+/**
+ * Write an AI secret. ALWAYS client-scoped, never the world name.
+ *
+ * ⚠️🔴 THE READ PATH WAS FIXED AND THE WRITE PATH UNDID IT (Brock audit,
+ * 2026-08-19). 1.7.80 added getSecret() and a boot migration that blanks the
+ * world copy — and then the setup wizard and config panel kept calling
+ * `game.settings.set(MODULE_ID, "apiKey", …)` directly. So a GM whose world was
+ * cleanly migrated re-leaked their key to every connected player the first time
+ * they pressed Save. The audit comment describing that exact failure sat 2,100
+ * lines above the wizard that caused it.
+ *
+ * A read-side fix to a leak is not a fix. The value has to STOP ARRIVING in
+ * world scope, which means every write goes through here and the world names
+ * are only ever blanked.
+ */
+export async function setSecret(name, value) {
+  const map = {
+    apiKey: "apiKeySecure",
+    chatApiKey: "chatApiKeySecure",
+    digestApiKey: "digestApiKeySecure",
+  };
+  const secure = map[name] ?? name;
+  await game.settings.set(MODULE_ID, secure, value ?? "");
+  // ⚠️ Blank the legacy world name on every write, not just at migration.
+  // Anything that wrote it before this release, or any older client still
+  // running, gets cleaned up the next time the GM saves.
+  if (map[name]) {
+    try {
+      if (game.settings.get(MODULE_ID, name)) await game.settings.set(MODULE_ID, name, "");
+    } catch (_) { /* not registered on this build — fine */ }
+  }
+}
+
+/** Write the per-provider vault. Client-scoped, world copy blanked. */
+export async function setSecretVault(vault) {
+  await game.settings.set(MODULE_ID, "apiKeysByProviderSecure", vault ?? {});
+  try {
+    const legacy = game.settings.get(MODULE_ID, "apiKeysByProvider");
+    if (legacy && Object.keys(legacy).length) await game.settings.set(MODULE_ID, "apiKeysByProvider", {});
+  } catch (_) { /* fine */ }
+}
+
+/** Is this setting key a secret? Used to route generic config-panel writes. */
+export function isSecretKey(name) {
+  return ["apiKey", "chatApiKey", "digestApiKey", "apiKeySecure", "chatApiKeySecure", "digestApiKeySecure"].includes(name);
 }
 
 /**

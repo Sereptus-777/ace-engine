@@ -103,6 +103,14 @@ function _defaultUrlForProvider(provider) {
  *   "provider:model-name"    → cross-provider override (auto-routes URL,
  *                              optionally uses chatApiKey for auth)
  */
+/**
+ * The Chat-tier provider/key/url/model, resolved from the GM's OWN settings.
+ * Exported so the socket router can reproduce EXACTLY the call getResponse
+ * would have made locally, instead of a second, drifting copy of the same
+ * resolution logic.
+ */
+export function resolveChatProvider() { return _resolveChatProvider(); }
+
 function _resolveChatProvider() {
     const main = getEnvoyAIConfig();
     let provider = main.provider;
@@ -991,6 +999,34 @@ ${identity.isNamed
      * pre-v1.6.11 behavior).
      */
     static async callAI(systemPrompt, history, input, provider, apiKey, images = [], opts = {}) {
+        // ⚠️🔴 A PLAYER CLIENT NEVER CALLS A CLOUD PROVIDER. (Brock 2026-08-19.)
+        // This used to fetch api.anthropic.com straight from the player's
+        // browser with the GM's key in an x-api-key header — which only
+        // "worked" because the key was world-scoped and therefore handed to
+        // every player at the table. Closing that leak means the player's
+        // client no longer HAS a key, so without this the whole feature would
+        // simply stop for players and look like a bug.
+        //
+        // Ollama already went through the GM (it lives on the GM's machine).
+        // Now every provider does, for the same reason: the credential and the
+        // outbound request belong on the GM's client, full stop.
+        if (!game.user.isGM) {
+            // ⚠️ callAI's contract is that it RETURNS a string and never throws
+            // — every caller reads the reply straight into a chat bubble with
+            // no catch of its own. The relay rejects on failure, so it is caught
+            // HERE and funnelled through the same surface every other AI failure
+            // uses. Letting it escape would turn a provider hiccup into a dead
+            // conversation window with nothing on screen to explain it.
+            try {
+                return await AIHandler._callAIViaGM(systemPrompt, history, input, images, opts);
+            } catch (err) {
+                return surfaceAIFailure({
+                    provider: "gm-relay",
+                    error: err,
+                    context: opts.context || "npc-chat",
+                });
+            }
+        }
         // Honour the GM's Max Context Tokens setting. NPC chat previously had
         // no size budget at all — only a 20-message cap — so a long roleplay
         // scene could quietly balloon the request. Generators pass an empty
@@ -1240,6 +1276,53 @@ ${identity.isNamed
         const text = json.choices?.[0]?.message?.content;
         if (!text) throw new Error("Ollama returned no content");
         return text;
+    }
+
+    /**
+     * Ask the GM's client to run an AI call and hand back the text.
+     *
+     * ⚠️ WHAT IS DELIBERATELY *NOT* SENT: the API key (the player has none and
+     * a key must never cross a socket), and the endpoint URL. A player-supplied
+     * url override would point the GM's key at a server of the player's
+     * choosing, which turns this relay into a credential-exfiltration tool. The
+     * GM side re-derives provider, url and model from its OWN settings and
+     * ignores anything this payload claims about them.
+     */
+    static _callAIViaGM(systemPrompt, history, input, images = [], opts = {}) {
+        if (!AIHandler._aiSocketListenerRegistered) {
+            AIHandler._aiSocketListenerRegistered = true;
+            game.socket.on(`module.${MODULE_ID}`, (data) => {
+                if (data?.action !== "aiResponse") return;
+                const pending = AIHandler._socketPending.get(data.requestId);
+                if (!pending) return;
+                AIHandler._socketPending.delete(data.requestId);
+                clearTimeout(pending.timeout);
+                if (data.error) pending.reject(new Error(data.error));
+                else pending.resolve(data.text);
+            });
+        }
+        return new Promise((resolve, reject) => {
+            const requestId = foundry.utils.randomID();
+            const TIMEOUT_MS = 180_000;   // matches the Ollama proxy: a cold local model is slow
+            const timeout = setTimeout(() => {
+                AIHandler._socketPending.delete(requestId);
+                reject(new Error(`The GM's client did not answer within ${TIMEOUT_MS / 1000}s — is a GM logged in?`));
+            }, TIMEOUT_MS);
+            AIHandler._socketPending.set(requestId, { resolve, reject, timeout });
+            game.socket.emit(`module.${MODULE_ID}`, {
+                action: "aiRequest",
+                requestId,
+                userId: game.user.id,
+                systemPrompt,
+                history,
+                input,
+                images,
+                // Only the two knobs that describe WHAT was asked, never WHERE
+                // it goes. maxTokens is re-capped on the GM side regardless.
+                context:   opts.context,
+                maxTokens: opts.maxTokens,
+            });
+        });
     }
 
     static _callOllamaViaSocket(messages, images = []) {

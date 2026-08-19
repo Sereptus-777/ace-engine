@@ -33,6 +33,62 @@ function _isAnsweringGM() {
     catch (_) { return !!game.user?.isGM; }
 }
 
+/**
+ * Authorise a payload that claims to be acting for a player.
+ *
+ * ⚠️ Foundry attaches NO trusted sender to a module socket, so `userId` is
+ * written by whoever sent the message. This establishes only that the claim
+ * names a real, connected, NON-GM user — a GM never asks over the socket
+ * because a GM does the work locally, so a GM claim is always forged.
+ */
+function _claimingPlayer(data, label) {
+    const id = data?.userId ?? data?.senderId;
+    const user = id ? game.users?.get?.(id) : null;
+    if (!user)          { console.warn(`${TAG} | ${label} REFUSED — names no real user.`);            return null; }
+    if (user.isGM)      { console.warn(`${TAG} | ${label} REFUSED — claims GM "${user.name}".`);      return null; }
+    if (!user.active)   { console.warn(`${TAG} | ${label} REFUSED — "${user.name}" is offline.`);     return null; }
+    return user;
+}
+
+/**
+ * Spend limiter for anything that costs the GM money.
+ *
+ * ⚠️ THIS IS A BILL, NOT JUST A PERMISSION. Relaying AI calls through the GM
+ * is the only safe place for the credential, but it also means a player's
+ * client decides when the GM's card gets charged. Without a ceiling, a script
+ * in a player's console could run the GM's balance to zero in a minute.
+ *
+ * One in flight per player (a human is waiting on a reply before typing the
+ * next line anyway) and 20 per five minutes, which is far above real roleplay
+ * and far below abuse.
+ */
+const _aiSpend = new Map();   // userId -> { inFlight: boolean, stamps: number[] }
+const AI_WINDOW_MS = 300_000;
+const AI_MAX_PER_WINDOW = 20;
+
+function _maySpendOnAI(user, now) {
+    const rec = _aiSpend.get(user.id) ?? { inFlight: false, stamps: [] };
+    _aiSpend.set(user.id, rec);
+    if (rec.inFlight) {
+        console.warn(`${TAG} | AI relay REFUSED — "${user.name}" already has a request in flight.`);
+        return false;
+    }
+    rec.stamps = rec.stamps.filter(t => now - t < AI_WINDOW_MS);
+    if (rec.stamps.length >= AI_MAX_PER_WINDOW) {
+        console.warn(`${TAG} | AI relay REFUSED — "${user.name}" hit ${AI_MAX_PER_WINDOW} requests in ` +
+            `${AI_WINDOW_MS / 60000} minutes. Ignoring until the window clears.`);
+        return false;
+    }
+    rec.stamps.push(now);
+    rec.inFlight = true;
+    return true;
+}
+
+function _doneSpending(user) {
+    const rec = _aiSpend.get(user.id);
+    if (rec) rec.inFlight = false;
+}
+
 /** Is this message addressed to someone else? */
 function _notForMe(data) {
     if (data?.exclude && data.exclude === game.user.id) return true;
@@ -120,6 +176,61 @@ export function wireNpcSocketRouter() {
                     } catch (err) {
                         console.error(`${TAG} | Could not create an identity on a player's behalf:`, err);
                     }
+                    return;
+                }
+
+                // ── Run an AI call on a player's behalf. ──────────────
+                // The player's client has no API key (keys are GM-only), and
+                // must never have one. It sends the CONTENT of the request;
+                // this side supplies the credential, the endpoint and the model
+                // from the GM's own settings.
+                case "aiRequest": {
+                    if (!_isAnsweringGM()) return;
+                    if (!data.requestId) return;
+                    const user = _claimingPlayer(data, "AI relay");
+                    if (!user) return;
+                    if (!_maySpendOnAI(user, Date.now())) {
+                        game.socket.emit(`module.${MODULE_ID}`, {
+                            action: "aiResponse", requestId: data.requestId,
+                            error: "Too many requests in a row — give it a moment.",
+                        });
+                        return;
+                    }
+                    let payload;
+                    try {
+                        const { AIHandler, resolveChatProvider } = await import("./conversation-engine.mjs");
+                        // ⚠️ PROVIDER, KEY, URL AND MODEL COME FROM HERE, NEVER
+                        // FROM THE PAYLOAD. A player-chosen url would aim the
+                        // GM's credential at a server of the player's choosing.
+                        // This is the same resolution getResponse does locally,
+                        // called rather than re-implemented, so the two cannot
+                        // drift apart.
+                        const cfg = resolveChatProvider();
+                        const text = await AIHandler.callAI(
+                            String(data.systemPrompt ?? ""),
+                            Array.isArray(data.history) ? data.history : [],
+                            String(data.input ?? ""),
+                            cfg.provider,
+                            cfg.apiKey,
+                            Array.isArray(data.images) ? data.images : [],
+                            {
+                                modelOverride: cfg.modelName,
+                                urlOverride:   cfg.apiUrl,
+                                context:   typeof data.context === "string" ? data.context : "npc-chat",
+                                // Re-capped here: the payload asked, it did not decide.
+                                maxTokens: Math.min(Number(data.maxTokens) || 0, 4000) || undefined,
+                            }
+                        );
+                        payload = { action: "aiResponse", requestId: data.requestId, text };
+                    } catch (err) {
+                        // The player is WAITING. Silence reads as a hung module.
+                        console.warn(`${TAG} | AI relay failed for ${user.name}:`, err?.message ?? err);
+                        payload = { action: "aiResponse", requestId: data.requestId,
+                                    error: String(err?.message ?? err) };
+                    } finally {
+                        _doneSpending(user);
+                    }
+                    game.socket.emit(`module.${MODULE_ID}`, payload);
                     return;
                 }
 
