@@ -246,9 +246,10 @@ function _parseNarrativeTimeCues(text) {
   return result;
 }
 
-// ── Local credentials (loaded from config.local.json at startup) ──
-// These take priority over Settings entries so the GM never needs
-// to re-enter keys in the UI.  See config.local.json for instructions.
+// ── Local credentials (LEGACY read path — see the loader for the warning) ──
+// ⚠️ config.local.json is served over HTTP to every connected client. It is
+// NOT a secret store and never was. Kept only so existing installs keep
+// working while the GM moves keys into client-scoped settings.
 export const localCredentials = {};
 
 // ── Global state ───────────────────────────────────────────────
@@ -1589,13 +1590,29 @@ Hooks.once("ready", async () => {
   // our hooks landed (common — the sidebar boots before module ready).
   if (ui.actors?.rendered) _injectCleanupButton(ui.actors);
 
-  // ── Load baked-in credentials from config.local.json (optional) ─
-  // GM-only: players don't need ElevenLabs keys or other credentials.
-  // If the file exists and contains your ElevenLabs key/voice, those
-  // values will be used instead of whatever is in Module Settings.
-  // Existence-check via FilePicker first so we don't 404 in network logs
-  // when the file isn't present (the common case).
-  try {
+  // ── Load baked-in credentials from config.local.json (LEGACY, GM ONLY) ─
+  //
+  // ⚠️🔴 THIS FILE IS PUBLICLY READABLE AND ALWAYS WAS (Grok 2026-08-18).
+  // Foundry serves the entire module directory over HTTP to every connected
+  // client. Any player can type this in their own console and get the key:
+  //
+  //     await (await fetch("modules/ace-engine/config.local.json")).json()
+  //
+  // Nothing in this module can prevent that — the web server hands the file
+  // over before our code is involved. The comment here used to say "GM-only:
+  // players don't need these credentials", and there was NO GM CHECK, so every
+  // client also fetched it automatically at boot.
+  //
+  // Two changes: this loader is now genuinely GM-gated, and when the file is
+  // found with a real key the GM is told, in plain language, that it is
+  // readable by their players and where to put it instead. Client-scoped
+  // settings (see settings.mjs) are the safe home — they are never broadcast.
+  //
+  // Kept as a READ path only so existing installs keep working while the GM
+  // migrates. Do not document this file as a recommended location.
+  if (!game.user?.isGM) {
+    // Players never load credentials. Nothing below concerns them.
+  } else try {
     const FP = foundry.applications?.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
     let fileExists = false;
     try {
@@ -1615,6 +1632,17 @@ Hooks.once("ready", async () => {
         if (elevenLabsModel)                                            localCredentials.elevenLabsModel   = elevenLabsModel.trim();
         if (Object.keys(localCredentials).length) {
           console.log(`${MODULE_ID} | Loaded local credentials from config.local.json (${Object.keys(localCredentials).join(", ")})`);
+          // ⚠️ TELL THE HUMAN. A secret in a web-served directory is not a
+          // secret, and the GM cannot fix what nobody told them about.
+          if (localCredentials.elevenLabsApiKey) {
+            console.warn(`${MODULE_ID} | ⚠️ SECURITY: config.local.json holds a real API key and Foundry ` +
+              `serves it to EVERY connected client. Any player can read it. Move the key into the ` +
+              `module's ElevenLabs setting (GM-only, never broadcast) and delete the file.`);
+            ui.notifications?.error(
+              "ACE Engine: your API key in config.local.json is readable by every player. " +
+              "Move it into the ElevenLabs setting and delete that file.",
+              { permanent: true });
+          }
         }
       }
     }
@@ -1638,7 +1666,8 @@ Hooks.once("ready", async () => {
         console.warn(`${MODULE_ID} | ElevenLabs key MISSING — checked config.local.json, then Module Settings. NPC voices will use robotic browser TTS.`);
         ui.notifications?.warn(
           "ACE: no ElevenLabs key found — NPC voices will be robotic browser TTS. "
-        + "Put your key in modules/ace-engine/config.local.json so it survives browser clears.",
+        + "Add it in the module's ElevenLabs setting. ⚠️ Do NOT use config.local.json — "
+        + "Foundry serves that file to every player.",
           { permanent: true }
         );
       } else if (key) {

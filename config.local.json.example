@@ -1,0 +1,6 @@
+{
+  "_README": "⚠️ DO NOT PUT REAL KEYS IN THIS FILE. Foundry serves the entire module directory over HTTP, so ANY connected player can read it with one line in their browser console: await (await fetch('modules/ace-engine/config.local.json')).json(). Put keys in the module's settings instead — those are client-scoped and never broadcast to players. This file is read-only legacy support so existing installs keep working while you migrate.",
+  "elevenLabsApiKey": "YOUR_KEY_HERE",
+  "elevenLabsVoiceId": "YOUR_VOICE_ID_HERE",
+  "elevenLabsModel": "eleven_multilingual_v2"
+}

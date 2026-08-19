@@ -1,0 +1,49 @@
+{{!-- DARK WRAPPER IS LOAD-BEARING. Foundry's form background is light
+      parchment; ACE's cream text is invisible on it. Everything sits inside
+      this dark container so the brand palette works and nothing is
+      light-on-light. Body 16px minimum — this pops over Foundry's own chrome,
+      where the suite's standing rule is that smaller is not shippable. --}}
+<div class="ace-lang-table">
+
+  <div class="ace-lang-intro">
+    <p><strong>What does a foreign tongue sound like out loud?</strong></p>
+    <p>
+      Chat text is hidden from anyone who cannot read the language. Audio cannot be
+      hidden the same way — so when an NPC speaks a tongue you do not know, the voice
+      says it in a real-world stand-in instead of reading it aloud in English.
+      The chat log still carries the English meaning, so a character who genuinely
+      knows the language can read it.
+    </p>
+    <p class="ace-lang-note">{{ttsNote}}</p>
+    {{#unless enabled}}
+    <p class="ace-lang-warn">
+      <i class="fas fa-triangle-exclamation"></i>
+      This feature is currently switched <strong>off</strong> in the module settings —
+      these choices are saved but will not be used until it is turned back on.
+    </p>
+    {{/unless}}
+  </div>
+
+  <div class="ace-lang-rows">
+    {{#each rows}}
+    <div class="ace-lang-row">
+      <label class="ace-lang-name" for="lang.{{this.key}}">{{this.label}}</label>
+      <select id="lang.{{this.key}}" name="lang.{{this.key}}" class="ace-lang-select">
+        {{#each this.options}}
+        <option value="{{this.key}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
+        {{/each}}
+      </select>
+      {{#unless this.isDefault}}<span class="ace-lang-changed" title="Changed from the shipped default">•</span>{{/unless}}
+    </div>
+    {{/each}}
+  </div>
+
+  <footer class="ace-lang-footer">
+    <button type="button" data-action="resetAll" class="ace-lang-btn-reset">
+      <i class="fas fa-rotate-left"></i> Reset to defaults
+    </button>
+    <button type="submit" class="ace-lang-btn-save">
+      <i class="fas fa-check"></i> Save
+    </button>
+  </footer>
+</div>
