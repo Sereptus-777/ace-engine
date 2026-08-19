@@ -69,6 +69,19 @@ export default [
       // THE rule. Any error here is a guaranteed runtime ReferenceError.
       // Keep this at zero.
       "no-undef": "error",
+      // ⚠️ THE RULE THAT WOULD HAVE CAUGHT HASTE. A duplicate key in an object
+      // literal is silently resolved by JavaScript in favour of the LAST one:
+      // Haste's live copy granted only +2 AC for months because the definition
+      // holding the speed doubling and the Dex-save advantage sat above a second
+      // one with the same key. Added 2026-08-19 after a hand-rolled scanner
+      // produced 26 false positives and 2 real hits - a real parser does this
+      // correctly and for free. Keep at error.
+      "no-dupe-keys": "error",
+      "no-dupe-else-if": "error",
+      "no-unsafe-negation": "error",
+      "no-unreachable": "error",
+      "no-self-assign": "error",
+      "no-constant-condition": "error",
       // WARN, not error: it also flags the legal pattern of a callback
       // referencing a const declared further down the same scope (hook cleanup,
       // drag handlers) — those run after initialisation and are fine. Kept on

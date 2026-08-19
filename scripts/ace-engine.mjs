@@ -2696,11 +2696,11 @@ Hooks.once("ready", async () => {
         return reputationEngine.removeDeed(deedId, game.world.id);
       },
 
-      /** Set faction standing (e.g. "friendly", "hostile"). */
-      setFactionStanding: async (factionId, standing) => {
-        if (!reputationEngine) return;
-        return reputationEngine.setFactionStanding(factionId, standing, game.world.id);
-      },
+      // ⚠️ `setFactionStanding` WAS DEFINED TWICE IN THIS LITERAL. JavaScript
+      // keeps the LAST one silently, so this earlier copy never ran — the same
+      // failure that left Haste granting only +2 AC. The surviving definition
+      // is a few lines below. Removed rather than merged: they did the same
+      // job and the live one is optional-chained.
 
       /** Get faction standing. */
       getFactionStanding: (factionId) => {
@@ -2711,8 +2711,9 @@ Hooks.once("ready", async () => {
       },
 
       // ── Living World: World Library ↔ Registry ──
-      getWorldBibleFactions: () =>
-        worldBible?._factionIndex ? Array.from(worldBible._factionIndex.values()) : [],
+      // ⚠️ `getWorldBibleFactions` was ALSO defined twice here. The surviving
+      // copy (further down, with a try/catch and a size check) is the better
+      // one, so this dead duplicate is gone rather than the live one.
       importLibraryFactions: (opts) => importLibraryFactions(opts),
 
       // ── Identity on demand + a way to SEE the faction lookup decide ──

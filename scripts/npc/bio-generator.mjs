@@ -87,7 +87,18 @@ Hooks.on("drawToken",    _paintFlavorNameplate);
 // GM-only — only the GM has permission to update actor flags world-wide.
 const BIO_INFLIGHT_STALE_MS = 5 * 60 * 1000;  // 5 minutes
 
-Hooks.once("ready", async () => {
+// ⚠️🔴 THIS FILE IS IMPORTED FROM INSIDE `ready`. activate.mjs loads
+// bio-generator eagerly (deliberately, 2026-08-07, so the generic-name detector
+// exists before any token drop) — and activateNpcChat() is itself called from
+// ace-engine.mjs's own ready handler. So a bare `Hooks.once("ready")` at this
+// file's top level registers for an event ALREADY IN PROGRESS and never fires:
+// the stuck-flag recovery below has been dead, and an actor left mid-generation
+// by a crashed session kept `bioInFlight` set forever, which makes the chooser
+// wait on a bio that is never coming.
+//
+// A file that is only ever imported at file-load can use the bare form. One that
+// might be imported later cannot. This is the safe form for both.
+const _sweepStuckBioFlags = async () => {
     if (!game.user.isGM) return;
     try {
         const stuck = game.actors?.filter?.(a => a.getFlag?.(MODULE_ID, "bioInFlight")) ?? [];
@@ -102,7 +113,9 @@ Hooks.once("ready", async () => {
     } catch (err) {
         console.warn(`${TAG} | bioInFlight sweep failed:`, err);
     }
-});
+};
+if (game.ready) _sweepStuckBioFlags();
+else Hooks.once("ready", _sweepStuckBioFlags);
 
 /**
  * Check whether an actor's bioInFlight flag is "live" (currently generating)
