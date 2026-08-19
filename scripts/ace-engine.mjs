@@ -816,8 +816,19 @@ Hooks.once("ready", async () => {
     console.debug(`${MODULE_ID} | Module disabled — skipping ready subsystems.`);
     return;
   }
-  // ── Clean up stray CONFIG.debug.hooks left on by other modules (e.g. chat-images)
-  if (CONFIG.debug?.hooks) CONFIG.debug.hooks = false;
+  // ⚠️ THE CLEANUP THAT USED TO LIVE HERE DID NOTHING USEFUL (2026-08-19).
+  // It read `if (CONFIG.debug?.hooks) CONFIG.debug.hooks = false` and looked
+  // like the problem was handled. It was not, for two reasons:
+  //   1. it ran at `ready` — after canvas draw, token draw, wall refresh and
+  //      lighting, i.e. after the entire flood had already been paid for. A
+  //      hard reload was taking about ten minutes.
+  //   2. it sat below this module's enabled check, so turning ACE Engine off
+  //      also turned the cleanup off.
+  // ace-qol now REFUSES the write outright, via a property setter installed
+  // first thing at init, which does not care which module runs first. See
+  // ace-qol/scripts/hook-debug-guard.mjs. Do not re-add a cleanup here — a
+  // second one that runs too late is worse than none, because it reads as
+  // covered.
 
   // ── Remote model catalog: load bundled JSON + kick off background fetch ──
   // Pulls a fresh model-catalog.json from the ACE GitHub repo once a day
