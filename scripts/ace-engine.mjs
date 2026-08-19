@@ -1314,6 +1314,18 @@ Hooks.once("ready", async () => {
     if (data?.action === "ttsRequest") {
       if (!game.user.isGM) return;
       if (!data.text || !data.voiceId || !data.requestId) return;
+      // ⚠️ ELEVENLABS IS BILLED PER CHARACTER. Unauthed, any client could send
+      // arbitrary text and spend the GM's voice credits in a loop. The claim
+      // must name a real, connected, non-GM user, and the text is capped at a
+      // length a spoken NPC line could plausibly reach.
+      if (!_authoriseEnginePlayerSocket(data, "ttsRequest")) return;
+      if (String(data.text).length > 1200) {
+        console.warn(`${MODULE_ID} | ttsRequest REFUSED — ${String(data.text).length} characters is far past a spoken line.`);
+        game.socket.emit(`module.${MODULE_ID}`, {
+          action: "ttsResponse", requestId: data.requestId, error: "That line is too long to voice.",
+        });
+        return;
+      }
       try {
         // Effective key — file first, then the setting. That precedence now
         // lives in the ONE shared accessor; reading only the raw setting here

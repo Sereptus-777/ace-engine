@@ -163,6 +163,10 @@ export function wireNpcSocketRouter() {
                 // implementation.
                 case "ensureIdentity": {
                     if (!_isAnsweringGM()) return;
+                    // ⚠️ This spends an AI call and writes a name, a history and
+                    // a faction onto a token. Unauthed, any client could make the
+                    // GM generate identities for every token on the map.
+                    if (!_claimingPlayer(data, "ensureIdentity")) return;
                     const scene = game.scenes?.get(data.sceneId) ?? canvas.scene;
                     const tokenDoc = scene?.tokens?.get(data.tokenId);
                     if (!tokenDoc) {
@@ -237,6 +241,22 @@ export function wireNpcSocketRouter() {
                 case "ollamaRequest": {
                     if (!_isAnsweringGM()) return;
                     if (!data.requestId || !Array.isArray(data.messages)) return;
+                    // ⚠️ Same spend limiter as the cloud relay. Local inference
+                    // costs no money but it does occupy the GM's GPU, and an
+                    // unbounded queue of these makes the GM's own client
+                    // unusable mid-session.
+                    {
+                        const _u = _claimingPlayer(data, "ollamaRequest");
+                        if (!_u) return;
+                        if (!_maySpendOnAI(_u, Date.now())) {
+                            game.socket.emit(`module.${MODULE_ID}`, {
+                                action: "ollamaResponse", requestId: data.requestId,
+                                error: "Too many requests in a row — give it a moment.",
+                            });
+                            return;
+                        }
+                        data._spender = _u;
+                    }
                     const { AIHandler } = await import("./conversation-engine.mjs");
                     let payload;
                     try {
@@ -250,6 +270,7 @@ export function wireNpcSocketRouter() {
                         payload = { action: "ollamaResponse", requestId: data.requestId,
                                     error: String(err?.message ?? err) };
                     }
+                    if (data._spender) _doneSpending(data._spender);
                     game.socket.emit(`module.${MODULE_ID}`, payload);
                     return;
                 }
@@ -257,6 +278,10 @@ export function wireNpcSocketRouter() {
                 // ── Summarise a conversation a player just closed. ────────
                 case "summarizeSession": {
                     if (!_isAnsweringGM()) return;
+                    // ⚠️ Spends an AI call and writes a journal entry into the
+                    // campaign record. Both are the GM's, not a player's to
+                    // trigger at will.
+                    if (!_claimingPlayer(data, "summarizeSession")) return;
                     const actor = game.actors.get(data.actorId);
                     if (!actor || !data.history?.length) return;
                     const { summarizeAndSaveSession } = await import("./memory.mjs");

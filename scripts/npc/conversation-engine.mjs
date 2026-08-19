@@ -1361,6 +1361,7 @@ ${identity.isNamed
             game.socket.emit(`module.${MODULE_ID}`, {
                 action: "ollamaRequest",
                 requestId,
+                userId: game.user.id,   // ⚠️ required: the GM refuses a request that names nobody
                 messages,
                 images,  // forwarded so the GM-side handler can include them in the actual fetch
             });

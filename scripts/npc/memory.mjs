@@ -104,6 +104,7 @@ export async function summarizeAndSaveSession(actor, history, playerName) {
     if (!game.user.isGM) {
         game.socket.emit("module.ace-engine", {
             action:     "summarizeSession",
+            userId:     game.user.id,   // ⚠️ required: the GM refuses a request that names nobody
             actorId:    actor.id,
             actorName:  actor.name,
             history,
