@@ -463,6 +463,13 @@ async function onCombatTurn(combat, changed) {
   const trait = findTrait(actor, (t) => REGEN_TRAITS.has(t.key) || /regenerat/i.test(t.key));
   if (!trait) return;
 
+  // ACE QOL runs regeneration through its OverTime engine, which shares the
+  // damage chokepoint. Two heal offers on one turn is worse than one.
+  if (qolOwnsTrait("regeneration")) {
+    console.debug(`${TAG} | Regeneration for ${actor.name} left to ACE QOL (OverTime engine).`);
+    return;
+  }
+
   const regen = parseRegen(trait.text);
   if (!regen) return;
 
@@ -493,6 +500,42 @@ async function onCombatTurn(combat, changed) {
  * 5. Legendary Resistance → on a failed save (dnd5e.rollSavingThrow)
  * ────────────────────────────────────────────────────────────────────────*/
 
+
+/**
+ * Does ACE QOL already own this monster trait at this table?
+ *
+ * ⚠️ TWO MODULES OFFERING THE SAME THING IS WORSE THAN NEITHER (Grok audit
+ * 2026-08-18). Engine and QOL both automate Legendary Resistance and
+ * Regeneration, and Engine's master switch defaults ON. With both installed —
+ * which is the whole point of the suite — a monster failing a save produced
+ * TWO "spend a Legendary Resistance?" prompts, and a regenerating creature
+ * offered its heal twice. Click both and it heals twice.
+ *
+ * QOL is the combat engine and its versions are wired into the save pipeline,
+ * the damage chokepoint and the reaction system. So QOL wins, and Engine
+ * stands down for exactly the traits it duplicates — not for the ones it
+ * uniquely provides (Heated Body, Spider Climb, Pack Tactics, Death Burst).
+ *
+ * ⚠️ Checks that QOL is ACTIVE, not merely installed, and honours QOL's own
+ * setting: if the GM turned QOL's Legendary Resistance off, Engine should NOT
+ * silently take over — the GM asked for it off.
+ */
+function qolOwnsTrait(traitKey) {
+  try {
+    if (!game.modules?.get?.("ace-qol")?.active) return false;
+    switch (traitKey) {
+      case "legendary resistance":
+        // QOL offers this from the save pipeline where it knows the DC and
+        // the whole save context. Stand down whether its toggle is on or off.
+        return true;
+      case "regeneration":
+        return true;
+      default:
+        return false;
+    }
+  } catch (_) { return false; }
+}
+
 async function onSavingThrow(rolls, data) {
   if (!enabled()) return;
   const actor = data?.subject?.actor ?? data?.subject;
@@ -500,6 +543,12 @@ async function onSavingThrow(rolls, data) {
 
   const trait = findTrait(actor, (t) => t.key === "legendary resistance");
   if (!trait) return;
+
+  // ACE QOL offers this from inside the save pipeline — do not prompt twice.
+  if (qolOwnsTrait("legendary resistance")) {
+    console.debug(`${TAG} | Legendary Resistance for ${actor.name} left to ACE QOL (it owns the save pipeline).`);
+    return;
+  }
 
   // Did the save fail? We can't always know the DC; only prompt when it's
   // clearly low. dnd5e stores the target DC on the roll options when set.
