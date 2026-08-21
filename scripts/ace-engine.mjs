@@ -807,6 +807,15 @@ async function _generateElevenLabsAudio(text, apiKey) {
 }
 
 // ── Ready: initialize for ALL users (socket listener first) ────
+// ⚠️ FILE SCOPE. Envoy was deleted before it could clear its own keys out of
+// world storage, where Foundry ships them to every client. Engine is still here,
+// so Engine cleans up. See orphan-sweep.mjs.
+Hooks.once("ready", () => {
+  import("./orphan-sweep.mjs")
+    .then(({ sweepOrphanedEnvoyKeys }) => sweepOrphanedEnvoyKeys())
+    .catch(err => console.warn(`${MODULE_ID} | orphan sweep could not run:`, err));
+});
+
 Hooks.once("ready", async () => {
   try { installSliderGuard(); } catch (_) { /* cosmetic guard, never fatal */ }
   // 🔴 Move any world-scoped API key into GM-only client storage and blank the
