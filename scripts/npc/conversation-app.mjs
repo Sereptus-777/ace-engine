@@ -1382,6 +1382,23 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             btn.title = state === "listening" ? "Listening — click to send now (or press Enter)"
                       : state === "starting"  ? "Starting the microphone..."
                       : "Click to talk";
+            // ⚠️ THE VISIBLE LABEL, NOT JUST THE TOOLTIP. The button read
+            // "Speak" the entire time, including while it was listening, so
+            // the only feedback that anything was happening was a CSS class
+            // and a tooltip nobody hovers mid-sentence. On a control the user
+            // is actively waiting on, the word on the button is the status.
+            const label = btn.querySelector("span");
+            if (label) {
+                label.textContent = state === "listening" ? "Listening"
+                                  : state === "starting"  ? "Starting…"
+                                  : "Speak";
+            }
+            const icon = btn.querySelector("i");
+            if (icon) {
+                icon.className = state === "listening" ? "fas fa-stop"
+                               : state === "starting"  ? "fas fa-spinner fa-spin"
+                               : "fas fa-microphone";
+            }
         }
         if (this._inputField) {
             this._inputField.placeholder =
