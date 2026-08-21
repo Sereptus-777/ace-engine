@@ -4,6 +4,7 @@
 // ============================================================
 
 import { AcePanel }          from "./panel.mjs";
+import { installSliderGuard } from "./slider-guard.mjs";
 import { maySpendOnAI, doneSpending } from "./npc/ai-spend-limit.mjs";
 import { isBioInFlight, openAutoLinkCleanup } from "./npc/bio-generator.mjs";
 import { setSharedElevenLabsKey, getSharedElevenLabsKey, getSharedElevenLabsKeyInfo } from "./npc/shared-credentials.mjs";
@@ -807,6 +808,7 @@ async function _generateElevenLabsAudio(text, apiKey) {
 
 // ── Ready: initialize for ALL users (socket listener first) ────
 Hooks.once("ready", async () => {
+  try { installSliderGuard(); } catch (_) { /* cosmetic guard, never fatal */ }
   // 🔴 Move any world-scoped API key into GM-only client storage and blank the
   // world copy. Until this runs, every player can read the GM's keys.
   try { await migrateSecretsToClientScope(); }

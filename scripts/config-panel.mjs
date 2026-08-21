@@ -113,17 +113,29 @@ const TABS = [
     {
         id: "ai", label: "AI Setup", icon: "fa-solid fa-microchip",
         intro: "Four steps to get ACE talking. Pick a provider, paste its key, choose a model, then press Test — if the test comes back green, you're done.",
-        keys: ["aiProvider", "modelName", "chatModel", "digestModel", "apiKey", "apiUrl", "chatApiKey", "digestApiKey", "gameSystem", "customInstructions", "maxContextTokens", "maxResponseTokens"],
+        keys: ["aiProvider", "modelName", "chatModel", "digestModel", "apiKey", "apiUrl", "chatApiKey", "digestApiKey", "gameSystem", "customInstructions"],
     },
     {
         id: "voice", label: "Voice & TTS", icon: "fa-solid fa-microphone",
         intro: "ElevenLabs for high-quality NPC voices, browser TTS as a free fallback. Set your API key here, pick narrator voices, tune the playback model.",
-        keys: ["voiceProvider", "elevenLabsApiKey", "elevenLabsVoiceId", "elevenLabsFemaleVoiceId", "narratorVoiceOverrideEnabled", "narratorVoiceOverrideId", "elevenLabsModel", "narrationVolume", "browserVoiceName", "browserFemaleVoiceName", "browserVoiceRate", "browserVoicePitch"],
+        // ⚠️ ORDER IS THE UX HERE. What a table actually touches is the key and the
+        // narrator voice; everything else is once-in-fifty-sessions. The browser
+        // fallback voices go LAST because they only exist when ElevenLabs is
+        // absent, and having them up top next to identically-worded "Narrator
+        // Voice" settings is what made this screen unreadable.
+        keys: ["voiceProvider", "elevenLabsApiKey", "elevenLabsVoiceId", "elevenLabsFemaleVoiceId", "elevenLabsModel", "narrationVolume", "browserVoiceName", "browserFemaleVoiceName", "browserVoiceRate", "browserVoicePitch"],
     },
     {
         id: "npc", label: "NPC Chat", icon: "fa-solid fa-comment",
-        intro: "Bio generation, faction assignment, item & loot pipeline, conversation memory. Master switch turns the whole subsystem on/off.",
-        keys: ["npcChatEnabled", "autoGenerateBio", "tokenDropAI", "alwaysRunItemAndLoot", "skipBioForSummons", "autoLinkSummons", "enableSocialProfiles", "enableAutoLink", "npcKnowledgeBudget", "npcIntelligenceScaling", "npcKnowledgeCap", "enableFactions", "factionSpyChance", "factionWildcardChance", "defaultVoiceRegion", "npcWebpFolder"],
+        intro: "Talk to any NPC in their own voice. A bio is a short backstory and personality, so a creature has something of its own to say — ACE Engine writes one the first time it matters.",
+        // ⚠️ Only what a table actually touches. Every raw number moved to
+        // Advanced: people want to install and play, not set budgets.
+        keys: ["npcChatEnabled", "autoGenerateBio", "tokenDropAI", "alwaysRunItemAndLoot", "skipBioForSummons", "autoLinkSummons", "enableAutoLink", "defaultVoiceRegion"],
+    },
+    {
+        id: "advanced", label: "Advanced", icon: "fa-solid fa-sliders",
+        intro: "Numbers and limits. Everything here already has a sensible value and most tables never open this tab — have a quick look so you know what is here, then leave it alone until something specific needs changing.",
+        keys: ["npcKnowledgeBudget", "npcKnowledgeCap", "factionSpyChance", "factionWildcardChance", "npcWebpFolder", "maxContextTokens", "maxResponseTokens"],
     },
     {
         id: "items", label: "Items & Attunement", icon: "fa-solid fa-link",

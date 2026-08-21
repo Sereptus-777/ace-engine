@@ -138,7 +138,7 @@ export class AceSettings {
     // ── RE-VOICE THE GM'S PUPPET LINES ──────────────────────────────────
     s("revoicePuppetLines", {
       name: "ACE Engine — Re-voice my NPC lines",
-      hint: "When you speak as an NPC, run your line through the AI first so it is delivered in that character's rhythm and tone. Your meaning and length are kept — it re-voices, it does not rewrite. Start a line with a quote mark (\") to say it exactly as typed, with no AI and no delay.",
+      hint: "When you speak as an NPC, run your line through ACE Engine first so it is delivered in that character's rhythm and tone. Your meaning and length are kept — it re-voices, it does not rewrite. Start a line with a quote mark (\") to say it exactly as typed, with no AI and no delay.",
       type: Boolean,
       default: true,
     });
@@ -155,7 +155,7 @@ export class AceSettings {
     // ── Module Master Switch ────────────────────────────────
     s("moduleEnabled", {
       name: "ACE Engine — Enabled",
-      hint: "Master on/off switch for the entire module. When OFF, Engine's panel, AI calls, digest/vault/reputation engines, and all subsystems are skipped. Requires a world reload to take effect.",
+      hint: "Turns the whole of ACE Engine off — the panel, NPC chat, narration, memory, everything. Nothing is deleted; switch it back on and it all returns. Needs a world reload either way.",
       type: Boolean,
       default: true,
     });
@@ -505,7 +505,7 @@ export class AceSettings {
     // prompting any more.
     s("systemPrompt", {
       name: "System Prompt (legacy)",
-      hint: "Superseded by Additional AI Instructions. Kept only so an existing customisation can be carried across once.",
+      hint: "Superseded by Additional Instructions. Kept only so an existing customisation can be carried across once.",
       config: false,
       type: String,
       default: "",
@@ -546,7 +546,7 @@ export class AceSettings {
 
     s("maxContextTokens", {
       name: "Max Context Tokens",
-      hint: "How much conversation history rides along with each AI request. Higher = the AI remembers more of a long conversation, but each message costs a little more and takes slightly longer. 7000 matches ACE's long-standing behaviour; raise it for better memory, lower it if you hit rate limits or context errors.",
+      hint: "How much conversation history rides along with each request. Higher = NPCs remember more of a long conversation, but each message costs a little more and takes slightly longer. 7000 matches ACE's long-standing behaviour; raise it for better memory, lower it if you hit rate limits or context errors.",
       type: Number,
       default: 7000,
       range: { min: 500, max: 16000, step: 500 },
@@ -554,7 +554,7 @@ export class AceSettings {
 
     s("maxResponseTokens", {
       name: "Max Response Tokens",
-      hint: "Upper limit on how long an AI reply can be. Higher = the AI can write longer narration and more detailed answers; lower = forces concise responses. Default 2048 fits most table-side use.",
+      hint: "Upper limit on how long a reply can be. Higher = ACE Engine can write longer narration and more detailed answers; lower = forces concise responses. Default 2048 fits most table-side use.",
       type: Number,
       default: 2048,
       range: { min: 256, max: 8192, step: 256 },
@@ -577,7 +577,7 @@ export class AceSettings {
 
     s("enableStoryNotes", {
       name: "Story Notes & Memory Log",
-      hint: "When ON, ACE keeps a persistent campaign log (kills, crits, scene changes, key narrations) and uses it as memory for future AI calls. Disable only if you want a stateless assistant.",
+      hint: "When ON, ACE keeps a persistent campaign log (kills, crits, scene changes, key narrations) and uses it as memory for future replies. Disable only if you want a stateless assistant.",
       type: Boolean,
       default: true,
     });
@@ -606,7 +606,7 @@ export class AceSettings {
     // ── Document Library ────────────────────────────────────
     s("enableDocumentLibrary", {
       name: "Document Library",
-      hint: "When ON, ACE indexes uploaded PDFs / sourcebooks / notes and makes their content searchable so the AI can quote and reference them in answers. When OFF, the Library tab is hidden and the AI relies on training knowledge only.",
+      hint: "When ON, ACE indexes uploaded PDFs / sourcebooks / notes and makes their content searchable so ACE Engine can quote and reference them in answers. When OFF, the Library tab is hidden and the AI relies on training knowledge only.",
       type: Boolean,
       default: true,
     });
@@ -717,14 +717,14 @@ export class AceSettings {
 
     s("elevenLabsVoiceId", {
       scope: "client",
-      name: "Narrator Voice (Male)",
-      hint: "ElevenLabs voice for narration and male NPC speech. Pick a recommended voice or paste a custom Voice ID from elevenlabs.io.",
+      name: "Narrator Voice",
+      hint: "THE narrator voice — used for read-aloud narration and for NPC speech. Already set to a good one; most tables never change it.",
       type: String,
       choices: {
         "o3hzbFqcuIw2MRzP8rQf": "⭐ Default Narrator (deep, dramatic) — Recommended",
         "j9jfwdrw7BRfcR43Qohk": "Narrator Alt (warm, authoritative)",
-        "pNInz6obpgDQGcFmaJgB": "Adam (clear, neutral male)",
-        "nPczCjzI2devNBz1zQrb": "Brian (British male)",
+        "pNInz6obpgDQGcFmaJgB": "Adam (clear, neutral)",
+        "nPczCjzI2devNBz1zQrb": "Brian (British)",
         "IKne3meq5aSn9XLyUdCD": "Charlie (casual Australian)",
         "onwK4e9ZLuTAKqWW03F9": "Daniel (deep British)",
         "TX3LPaxmHKxFdv7VOQHJ": "Liam (young American)",
@@ -735,11 +735,11 @@ export class AceSettings {
 
     s("elevenLabsFemaleVoiceId", {
       scope: "client",
-      name: "Narrator Voice (Female)",
-      hint: "ElevenLabs voice for female NPC speech. Leave blank to always use the male narrator voice.",
+      name: "Alternate Narrator Voice",
+      hint: "Optional second voice, so not every NPC sounds identical. Leave blank to use the narrator voice for everyone.",
       type: String,
       choices: {
-        "":                          "— Use Male Narrator Voice —",
+        "":                          "— Use the narrator voice —",
         "EXAVITQu4vr4xnSDxMaL":    "⭐ Sarah (warm, expressive) — Recommended",
         "Xb7hH8MSUJpSbSDYk0k2":    "Alice (British, gentle)",
         "cgSgspJ2msm6clMCkdW9":    "Jessica (American, confident)",
@@ -750,7 +750,7 @@ export class AceSettings {
 
     s("narratorVoiceOverrideEnabled", {
       scope: "client",
-      name: "Use Custom Narrator Voice ID",
+      name: "Use a custom voice ID instead",
       hint: "Enable this to override the dropdown above with a custom ElevenLabs Voice ID for all narration.",
       type: Boolean,
       default: false,
@@ -758,7 +758,7 @@ export class AceSettings {
 
     s("narratorVoiceOverrideId", {
       scope: "client",
-      name: "Custom Narrator Voice ID",
+      name: "Custom voice ID",
       hint: "Paste any ElevenLabs Voice ID here. Only used when the checkbox above is enabled.",
       type: String,
       default: "",
@@ -766,7 +766,7 @@ export class AceSettings {
 
     s("elevenLabsModel", {
       scope: "client",
-      name: "ElevenLabs Model",
+      name: "Voice quality / model",
       hint: "eleven_multilingual_v2 gives the best quality. eleven_turbo_v2_5 is faster.",
       type: String,
       choices: {
@@ -782,7 +782,7 @@ export class AceSettings {
     // ── Narration Volume (client-scoped — players control this) ──
     s("narrationVolume", {
       scope: "client",
-      name: "Narration Audio Volume",
+      name: "Narration volume",
       hint: "Volume of narration audio from the GM. Each player sets their own level. 0 = muted, 1.0 = full volume.",
       type: Number,
       default: 0.8,
@@ -793,19 +793,26 @@ export class AceSettings {
     s("voiceProvider", {
       scope: "client",
       name: "NPC Voice Provider",
-      hint: "Choose which voice engine to use for NPC speech. ElevenLabs gives premium voices — players don't need their own key; the GM's client generates the audio and streams it to all players. Browser TTS is free, robotic, and offline-only — use it only if no GM is online.",
+      hint: "Where NPC speech comes from. ElevenLabs gives the best voices and players need no key of their own — the GM's client makes the audio and streams it to everyone. The browser voice is free and needs no account; it is what runs until an ElevenLabs key is set up.",
       type: String,
       choices: {
-        elevenlabs: "ElevenLabs (Recommended — GM proxies audio to players)",
-        browser:    "Browser TTS (Free, robotic)",
+        elevenlabs: "ElevenLabs (best quality — needs a key, GM streams it to players)",
+        browser:    "Browser voice (free, no account needed)",
       },
       default: "elevenlabs",
     });
 
     // ── Browser TTS (client-scoped) ─────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    //  FALLBACK VOICES — only ever used when there is no working ElevenLabs
+    //  key. Named "Fallback only —" so they sort and read as the afterthought
+    //  they are: a table with a key will never touch one of these, and having
+    //  them share the word "Narrator" with the real setting is what made this
+    //  screen confusing enough to lose an evening to.
+    // ═══════════════════════════════════════════════════════════════════════
     s("browserVoiceName", {
       scope: "client",
-      name: "Browser Narrator Voice (Male)",
+      name: "Browser Voice",
       hint: "Voice used when ElevenLabs is not configured. Type the exact voice name from your OS. Leave blank for auto-detect.",
       type: String,
       default: "",
@@ -813,8 +820,8 @@ export class AceSettings {
 
     s("browserFemaleVoiceName", {
       scope: "client",
-      name: "Browser Narrator Voice (Female)",
-      hint: "Female voice for browser TTS. Leave blank for auto-detect (picks best available female voice).",
+      name: "Alternate Browser Voice",
+      hint: "Optional second browser voice. Leave blank to use the browser voice for everyone.",
       type: String,
       default: "",
     });
@@ -864,7 +871,7 @@ export class AceSettings {
     });
 
     s("enableDispositionTags", {
-      name: "AI Disposition Auto-Update",
+      name: "NPCs remember how you treat them",
       hint: "When enabled, if the AI determines an NPC's attitude changes during conversation, the token's disposition ring will update automatically.",
       type: Boolean,
       default: true,
@@ -1060,41 +1067,48 @@ export class AceSettings {
 
     s("npcWebpFolder", {
       name: "NPC Conversation WebP Folder",
-      hint: "Foundry-data-relative path to a folder of animated portraits (.webp) for NPCs. Lookup cascade: token name → actor name → creature subtype → creature type, then falls back to the static portrait / token image. Plays only during dialogue (not narrator emotes). Recipe: 512×512, 8-10 fps, 2-4 sec loop, q75-80, <500KB per file. Type/subtype names are lowercase (goblinoid.webp, humanoid.webp, beast.webp, undead.webp, etc.).",
+      hint: "A folder of short animated portraits. When one matches an NPC it plays in the chat window while they talk, instead of a still picture. Leave blank if you do not have any — everything works without it.",
       type: String,
       default: "NPCs/webps/",
     });
 
     s("npcChatEnabled", {
       name: "Enable NPC Chat (FaceTime-style conversations)",
-      hint: "Master toggle for the NPC chat subsystem (bio generation, conversation UI, voice, faction memory). When OFF, none of the NPC chat hooks fire even if engine is enabled.",
+      hint: "Lets you and your players talk to any NPC in a chat window, in that character's own voice. Turn it off and NPCs go back to being silent statblocks — nothing else in ACE Engine is affected.",
       type: Boolean,
       default: false,  // dormant by default — flipped true after migration verified
     });
 
+    // ⚠️ TOGGLE CUT (2026-08-21). Johnny: "there's no use to even have a bio if
+    // you're not going to have the hierarchy, loyalty, disposition, standing,
+    // wealth and circumstances." Right - it is part of what a bio IS, not a
+    // separate feature, and a switch invited people to half-configure it. The
+    // behaviour is unchanged and always on; only the switch is gone. Kept
+    // registered so an existing world that saved a value does not error.
     s("enableSocialProfiles", {
-      name: "NPC Social Profiles",
-      hint: "Generate a 6-dimension social profile (hierarchy, loyalty, disposition, standing, wealth, circumstances) per NPC during bio generation. Rule-based — no extra API calls.",
+      name: "NPC Social Profiles (built in)",
+      config: false,
+      hint: "Part of how a bio is written. No longer a separate switch.",
       type: Boolean,
       default: true,
     });
 
     s("enableAutoLink", {
       name: "Auto-Save NPCs as Persistent Actors",
-      hint: "OFF by default — dropped tokens keep their REAL name (the sheet + every mechanic reads it) and only get a display-only flavor name on the nameplate, which dies with the token. Turn ON only if you want every dropped NPC converted into a new persistent linked actor in your Actors sidebar.",
+      hint: "Off by default. A dropped creature keeps its actor name — an Ogre is still an Ogre on the sheet and in every roll — and only wears its given name on the nameplate: Ogre becomes Grishnak on screen, Bandit becomes Sella Vane. That name goes when the token goes. Turn this on if you want every NPC you drop saved into your Actors sidebar as a permanent character instead.",
       type: Boolean,
       default: false,
     });
 
     s("autoGenerateBio", {
       name: "Auto-generate NPC Biographies",
-      hint: "When a GM drags an NPC token onto a scene, AI generates a backstory based on creature Intelligence. Linked actors save to the actor sheet; unlinked tokens get unique per-instance bios.",
+      hint: "A bio is a short backstory and personality, so a creature has something of its own to say. When you drag an NPC onto a scene, ACE Engine writes one based on how clever the creature is. Named actors keep theirs on the sheet; loose tokens each get their own.",
       type: Boolean,
       default: true,
     });
 
     s("tokenDropAI", {
-      name: "Token Drop AI Level",
+      name: "What happens when you drop an NPC",
       hint: "What happens when you drag an NPC onto a scene. Silent (recommended) = the token just appears — no dialog, no wait, no AI call, nothing your players can see. It is given a name and a history the first time somebody actually talks to it, or whenever you click the quill under its token. Drop nine goblins instantly; the eight that die in combat never cost a thing. Full = faction popup + bio + name + items on every single drop. Bio Only = bio + name, no faction popup. Faction Only = faction popup, no bio or items. Off = vanilla drop, nothing at all.",
       type: String,
       choices: {
@@ -1171,44 +1185,50 @@ export class AceSettings {
 
     s("skipBioForSummons", {
       name: "Skip Bio for Summoned Creatures",
-      hint: "When ON (default), creatures summoned by ACE Forge traps (Mimic Chest, Summoning Rune) and other modules that mark spawns with the shared 'summonedByTrap' flag don't trigger automatic bio generation, voice assignment, or items/loot. Summons are usually generic disposable creatures — bios on them clutter the world. Turn OFF if you want every summon (including transient conjured beasts) to get the full NPC treatment.",
+      hint: "Summoned creatures are usually here for a fight and gone — a swarm of conjured wolves, a trap's guardian. This skips writing them a backstory, giving them a voice and rolling them loot, so they arrive instantly. Turn it off if you want every summon treated like a full character.",
       type: Boolean,
       default: true,
     });
 
     s("autoLinkSummons", {
       name: "Auto-Link Summoned Creatures (Steel Defender, Conjure Animals, etc.)",
-      hint: "When ON (default), any token spawned by the dnd5e Summon activity is automatically linked to its summoner. The system grants the summoning player OWNER permission on the summon's token, slots it into combat at the summoner's initiative -0.01 (with multi-summon stacking: -0.01, -0.02, -0.03), and skips auto-bio. Zero setup required — works for Steel Defender, Iron Defender, familiars, Conjure Animals, anything that goes through the system Summon activity. Turn OFF only if you want to handle ownership and initiative manually, or if you only want the manual 'Link as companion' right-click path to drive behavior.",
+      hint: "Anything a player summons — a Steel Defender, a familiar, conjured animals — becomes theirs to move, and acts right after them in initiative. No setup. Turn this off only if you would rather hand out control and initiative yourself.",
       type: Boolean,
       default: true,
     });
 
     s("npcKnowledgeBudget", {
       name: "NPC Knowledge Budget (Base)",
-      hint: "Base character budget for world knowledge injected into NPC conversation prompts. The budget for an average INT 10 commoner. Higher = NPCs know more about the world but responses may be slower.",
+      hint: "How much your world an ordinary NPC knows — their town, their trade, who runs the place, local rumour. 2,000 is about a page of it and is right for most tables. Higher means NPCs know more but reply a little slower. Cleverer creatures automatically get more than this, dimmer ones less.",
       type: Number,
       default: 2000,
       range: { min: 500, max: 20000, step: 500 },
     });
 
+    // ⚠️ TOGGLE CUT (2026-08-21). A zombie knowing less about the world than a
+    // sage is simply correct, and nobody should be deciding that on a settings
+    // screen. Behaviour stays, always on.
     s("npcIntelligenceScaling", {
-      name: "NPC Intelligence Scaling",
-      hint: "When enabled, an NPC's Intelligence score scales their knowledge budget. High-INT NPCs (sages, wizards, ancient dragons) receive more world knowledge; low-INT creatures (beasts, zombies) receive less.",
+      name: "NPC Intelligence Scaling (built in)",
+      config: false,
+      hint: "Cleverer creatures know more about the world, dimmer ones less. Always on.",
       type: Boolean,
       default: true,
     });
 
     s("npcKnowledgeCap", {
       name: "NPC Knowledge Cap",
-      hint: "Absolute maximum characters of world knowledge any single NPC can receive, regardless of Intelligence. Safety valve to prevent very high-INT NPCs from getting enormous prompts.",
+      hint: "The ceiling, so a dragon or an archmage does not end up with six pages of lore behind every sentence — that gets slow and costs more per reply. Only the cleverest creatures ever come close to it. Most tables never change this.",
       type: Number,
       default: 12000,
       range: { min: 2000, max: 50000, step: 1000 },
     });
 
     s("enableFactions", {
-      name: "Living World Factions",
-      hint: "Every NPC dropped onto a scene is assigned to a named faction — gangs, tribes, garrisons, guilds, settlements, etc. The AI generates faction identity (name, leader, purpose, shared lore) and injects it into both biographies and conversations.",
+      // ⚠️ TOGGLE CUT (2026-08-21) - happens automatically, behind the scenes.
+      name: "Living World Factions (built in)",
+      config: false,
+      hint: "NPCs belong to gangs, guilds, tribes and garrisons, and know their own people. Always on.",
       type: Boolean,
       default: true,
     });
@@ -1228,18 +1248,18 @@ export class AceSettings {
     });
 
     s("factionSpyChance", {
-      name: "Spy/Deserter Chance (1 in N)",
-      hint: "When assigning faction, there is a 1-in-N chance the NPC is secretly from a DIFFERENT faction (spy, deserter, captured, or turncoat). Set to 0 to disable. Does not apply to constructs, undead, or beasts.",
+      name: "Chance an NPC is secretly someone else (1 in X)",
+      hint: "Now and then a creature is not who it appears to be — a spy, a deserter, a turncoat, someone captured and turned. 1 in 25 means roughly one in a decent-sized camp. Set to 0 for none. Never happens to constructs, undead or beasts.",
       type: Number,
-      default: 200,
+      default: 25,
       range: { min: 0, max: 1000, step: 10 },
     });
 
     s("factionWildcardChance", {
-      name: "Wild Card Outsider Chance (1 in N)",
-      hint: "1-in-N chance a dropped NPC is a far-flung outsider from a completely different region of the world — a Calishite merchant in Barovia, a dwarf wandering north. Set to 0 to disable.",
+      name: "Chance an NPC is far from home (1 in X)",
+      hint: "Occasionally someone is a very long way from where they were born — a merchant from the far south, a traveller from another plane entirely. Rare on purpose. Set to 0 for none.",
       type: Number,
-      default: 200,
+      default: 100,
       range: { min: 0, max: 1000, step: 10 },
     });
 

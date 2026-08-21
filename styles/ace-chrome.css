@@ -1,0 +1,166 @@
+/* ─── ACE — shared chrome: scrollbars, dividers, sliders ─────────────────────
+ *
+ * ⚠️ ONE FILE, LOADED BY ALL FOUR MODULES. Johnny asked for the red scrollbars
+ * to go months ago and they kept coming back, because each module styled its
+ * own panels and none of them styled the SCROLLBAR — so Foundry's default red
+ * showed through anywhere a container was ours but its scrollbar was not. A
+ * per-panel fix can always miss the next panel. This targets every ACE root at
+ * once so a new window inherits it for free.
+ *
+ * Chosen by Johnny, 2026-08-21: divider C (labelled rule), scrollbar 2 (gold
+ * thumb in a dark channel), slider X (filled track, value always visible).
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.ace-engine, .ace-qol, .ace-forge, .ace-artificer, .ace-token-art,
+[class*="ace-cfg"], [class*="ace-panel"], [class*="acevs"] {
+  --ace-gold:        #d4af37;
+  --ace-gold-dim:    rgba(212, 175, 55, 0.45);
+  --ace-gold-faint:  rgba(212, 175, 55, 0.22);
+  --ace-track:       rgba(0, 0, 0, 0.45);
+  scrollbar-color: var(--ace-gold) var(--ace-track);   /* Firefox */
+  scrollbar-width: thin;
+}
+
+/* ── Scrollbars — option 2: gold thumb, dark channel ──────────────────────── */
+.ace-engine ::-webkit-scrollbar,
+.ace-qol ::-webkit-scrollbar,
+.ace-forge ::-webkit-scrollbar,
+.ace-artificer ::-webkit-scrollbar,
+.ace-token-art ::-webkit-scrollbar,
+[class*="ace-cfg"] ::-webkit-scrollbar,
+[class*="ace-panel"] ::-webkit-scrollbar,
+[class*="acevs"] ::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;              /* the horizontal bar - the one that stayed red */
+}
+
+.ace-engine ::-webkit-scrollbar-track,
+.ace-qol ::-webkit-scrollbar-track,
+.ace-forge ::-webkit-scrollbar-track,
+.ace-artificer ::-webkit-scrollbar-track,
+.ace-token-art ::-webkit-scrollbar-track,
+[class*="ace-cfg"] ::-webkit-scrollbar-track,
+[class*="ace-panel"] ::-webkit-scrollbar-track,
+[class*="acevs"] ::-webkit-scrollbar-track {
+  background: var(--ace-track);
+  border-radius: 6px;
+}
+
+.ace-engine ::-webkit-scrollbar-thumb,
+.ace-qol ::-webkit-scrollbar-thumb,
+.ace-forge ::-webkit-scrollbar-thumb,
+.ace-artificer ::-webkit-scrollbar-thumb,
+.ace-token-art ::-webkit-scrollbar-thumb,
+[class*="ace-cfg"] ::-webkit-scrollbar-thumb,
+[class*="ace-panel"] ::-webkit-scrollbar-thumb,
+[class*="acevs"] ::-webkit-scrollbar-thumb {
+  background: var(--ace-gold);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.ace-engine ::-webkit-scrollbar-thumb:hover,
+.ace-qol ::-webkit-scrollbar-thumb:hover,
+.ace-forge ::-webkit-scrollbar-thumb:hover,
+.ace-artificer ::-webkit-scrollbar-thumb:hover,
+.ace-token-art ::-webkit-scrollbar-thumb:hover,
+[class*="ace-cfg"] ::-webkit-scrollbar-thumb:hover,
+[class*="ace-panel"] ::-webkit-scrollbar-thumb:hover,
+[class*="acevs"] ::-webkit-scrollbar-thumb:hover {
+  background: #f0c94a;
+  background-clip: padding-box;
+}
+
+/* The little square where the two bars meet - Foundry leaves it red too. */
+.ace-engine ::-webkit-scrollbar-corner,
+.ace-qol ::-webkit-scrollbar-corner,
+.ace-forge ::-webkit-scrollbar-corner,
+.ace-artificer ::-webkit-scrollbar-corner,
+.ace-token-art ::-webkit-scrollbar-corner,
+[class*="ace-cfg"] ::-webkit-scrollbar-corner,
+[class*="ace-panel"] ::-webkit-scrollbar-corner {
+  background: var(--ace-track);
+}
+
+/* ── Dividers — option C: section name left, hairline fills the rest ──────── */
+.ace-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 10px;
+}
+
+.ace-divider > span:first-child {
+  color: var(--ace-gold);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.ace-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--ace-gold-faint);
+}
+
+/* An unlabelled divider between two rows of the same section. */
+.ace-rule {
+  height: 1px;
+  border: 0;
+  margin: 12px 0;
+  background: var(--ace-gold-faint);
+}
+
+/* ── Sliders — option X: filled gold track, value always visible ──────────── */
+.ace-engine input[type="range"],
+.ace-qol input[type="range"],
+.ace-forge input[type="range"],
+.ace-artificer input[type="range"],
+[class*="ace-cfg"] input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.10);
+  outline: none;
+}
+
+.ace-engine input[type="range"]::-webkit-slider-thumb,
+.ace-qol input[type="range"]::-webkit-slider-thumb,
+.ace-forge input[type="range"]::-webkit-slider-thumb,
+.ace-artificer input[type="range"]::-webkit-slider-thumb,
+[class*="ace-cfg"] input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ace-gold);
+  border: 2px solid #0f1014;
+  cursor: pointer;
+}
+
+.ace-engine input[type="range"]::-moz-range-thumb,
+.ace-qol input[type="range"]::-moz-range-thumb,
+.ace-forge input[type="range"]::-moz-range-thumb,
+.ace-artificer input[type="range"]::-moz-range-thumb,
+[class*="ace-cfg"] input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ace-gold);
+  border: 2px solid #0f1014;
+  cursor: pointer;
+}
+
+/* The number beside a slider. It is not optional - a slider whose value you
+ * cannot read is the complaint that started this. */
+.ace-range-value {
+  color: #e8dcb8;
+  font-size: 15px;
+  min-width: 52px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
