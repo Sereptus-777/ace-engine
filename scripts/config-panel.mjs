@@ -113,7 +113,7 @@ const TABS = [
     {
         id: "ai", label: "AI Setup", icon: "fa-solid fa-microchip",
         intro: "Four steps to get ACE talking. Pick a provider, paste its key, choose a model, then press Test — if the test comes back green, you're done.",
-        keys: ["aiProvider", "modelName", "chatModel", "digestModel", "apiKey", "apiUrl", "chatApiKey", "digestApiKey", "gameSystem", "systemPrompt", "maxContextTokens", "maxResponseTokens"],
+        keys: ["aiProvider", "modelName", "chatModel", "digestModel", "apiKey", "apiUrl", "chatApiKey", "digestApiKey", "gameSystem", "customInstructions", "maxContextTokens", "maxResponseTokens"],
     },
     {
         id: "voice", label: "Voice & TTS", icon: "fa-solid fa-microphone",
@@ -628,7 +628,7 @@ export class AceConfigPanel extends ApplicationV2 {
     /** Settings that stay available but shouldn't crowd the main flow. */
     static ADVANCED_AI_KEYS = [
         "apiUrl", "chatModel", "digestModel", "chatApiKey", "digestApiKey",
-        "gameSystem", "systemPrompt", "maxContextTokens", "maxResponseTokens",
+        "gameSystem", "customInstructions", "maxContextTokens", "maxResponseTokens",
     ];
 
     _buildAiSetup() {

@@ -22,6 +22,7 @@ const VISIBLE_IN_MAIN_CONFIG = new Set([
     "gameRulesEdition", // 5e ruleset toggle (2014 / 2024 / Auto) — strategic launch setting
 ]);
 
+export const BASE_SYSTEM_PROMPT_IS_CODE_NOT_A_SETTING = true;
 const DEFAULT_SYSTEM_PROMPT = `You are ACE, an expert AI Game Master assistant for tabletop RPGs running in Foundry VTT.
 
 Your role:
@@ -477,11 +478,44 @@ export class AceSettings {
     });
 
     // ── Prompt & Behavior ───────────────────────────────────
+    //
+    // ⚠️🔴 THE BASE PROMPT IS NOT A SETTING ANY MORE (2026-08-20).
+    // Johnny: "One false move, and the guy that bought this is done. Why is the
+    // system prompt for the AI set up in there? That should never be. That
+    // should be our default, and then, if they want to add instructions, they
+    // can." He is right, and it was worse than editable:
+    //
+    //   1. A customer could delete or mangle the [NARRATION] rules and silently
+    //      break read-aloud, with no way back to a working prompt. The old hint
+    //      literally asked them not to - asking is not a safeguard.
+    //   2. Because the prompt was STORED per world, every improvement we make
+    //      needed a regex migration that string-matches each customer's copy.
+    //      Five of them had already accumulated in ace-engine.mjs, one doing
+    //      prose surgery with `replace(/…[^]*?…/)`. On an edited prompt those
+    //      matches are a coin flip, so an edited world silently stops receiving
+    //      prompt fixes and its AI quietly behaves differently from everyone
+    //      else's - undiagnosable from a support ticket.
+    //
+    // Now: the base prompt lives in CODE, is always current, is never stored
+    // and never migrated. Customers append to it instead. That deletes the
+    // entire migration class permanently.
+    //
+    // The legacy key stays REGISTERED (config:false) purely so the one-time
+    // move below can read what a world already had. Nothing reads it for
+    // prompting any more.
     s("systemPrompt", {
-      name: "System Prompt",
-      hint: "The instructions ACE sends to the AI before every conversation. Sets tone, response style, and what role the AI is playing. Edit to customize ACE's voice — keep the [NARRATION] block rules intact for the read-aloud feature to work.",
+      name: "System Prompt (legacy)",
+      hint: "Superseded by Additional AI Instructions. Kept only so an existing customisation can be carried across once.",
+      config: false,
       type: String,
-      default: DEFAULT_SYSTEM_PROMPT,
+      default: "",
+    });
+
+    s("customInstructions", {
+      name: "Additional AI Instructions",
+      hint: "Optional. Anything you put here is added to ACE's own instructions — it never replaces them, so the narration and read-aloud features cannot be broken by editing this. Good uses: your table's tone, house rules, names to avoid, a content line you do not want crossed. Leave blank for stock behaviour.",
+      type: String,
+      default: "",
     });
 
     s("autoSuggestions", {
@@ -662,9 +696,17 @@ export class AceSettings {
       // file over plain HTTP to every connected client, so a key placed in it
       // is readable by any player with a console. This box is client storage:
       // it stays in the GM's browser and is never sent to anyone else.
-      hint: "API key from elevenlabs.io. Stored in THIS browser only, for THIS world — clearing browser data erases it and NPC voices drop to browser TTS. Keep it here: it is never sent to your players.",
+      hint: "API key from elevenlabs.io. Paste it and NPC voices switch on immediately — the narrator voice and model are already set for you. Stored in THIS browser only, for THIS world; it is never sent to your players.",
       type: String,
       default: "",
+      // ⚠️ SAY WHETHER IT WORKED. Johnny, 2026-08-20: "if they got an
+      // ElevenLabs key, it should be automatically set up. This has got to be
+      // smooth." Everything downstream already defaults correctly - the
+      // narrator voice and the model are both preset - so pasting a key is
+      // genuinely the only step. What was missing is any confirmation: a good
+      // key and a typo'd key both did nothing visible, and the first you knew
+      // of a bad one was a robotic voice mid-session in front of your players.
+      onChange: (value) => { verifyElevenLabsKey(value); },
     });
 
     s("elevenLabsVoiceId", {
@@ -2348,6 +2390,109 @@ export async function setSecretVault(vault) {
 }
 
 /** Is this setting key a secret? Used to route generic config-panel writes. */
+/**
+ * THE prompt ACE sends. Base from code, plus whatever the GM added.
+ *
+ * ⚠️ ONE BUILDER, so the base can never drift per world and a customer can
+ * never delete a rule the software depends on. Additions are appended and
+ * clearly fenced so a model treats them as the GM's preferences rather than as
+ * a replacement for its instructions.
+ */
+export function buildSystemPrompt() {
+  let extra = "";
+  try { extra = (game.settings.get(MODULE_ID, "customInstructions") || "").trim(); } catch (_) {}
+  if (!extra) return DEFAULT_SYSTEM_PROMPT;
+  return DEFAULT_SYSTEM_PROMPT +
+    `
+
+## THIS TABLE'S OWN INSTRUCTIONS
+` +
+    `The GM running this game added the following. Follow it wherever it does not ` +
+    `contradict the rules above.
+
+${extra}`;
+}
+
+/**
+ * Carry a pre-2026-08-20 edited prompt into the additions field, once.
+ * GM only, silent when there is nothing to move.
+ *
+ * ⚠️ WE CANNOT DIFF PROSE, so we do not try to guess which parts were theirs.
+ * The whole old prompt is preserved into the additions box and the GM is told
+ * plainly, so they can trim it to just their own lines. Discarding it silently
+ * would throw away work; leaving it as the base would keep the bug.
+ */
+export async function migrateSystemPromptToAdditions() {
+  if (!game.user?.isGM) return;
+  try {
+    const old = (game.settings.get(MODULE_ID, "systemPrompt") || "").trim();
+    if (!old) return;
+    const existing = (game.settings.get(MODULE_ID, "customInstructions") || "").trim();
+    if (!existing) {
+      await game.settings.set(MODULE_ID, "customInstructions",
+        `[Carried over from your old editable System Prompt on ${new Date().toISOString().slice(0, 10)}. ` +
+        `ACE's own instructions are built in now and always current — you can safely delete anything ` +
+        `below that just repeats them, and keep only your own additions.]
+
+` + old);
+    }
+    await game.settings.set(MODULE_ID, "systemPrompt", "");
+    ui.notifications?.info(
+      "ACE Engine: the System Prompt is now built in and always up to date. Your previous edit was moved " +
+      "to 'Additional AI Instructions' so nothing was lost.", { permanent: true });
+    console.log(`${MODULE_ID} | System prompt moved out of world storage into additions (${old.length} chars).`);
+  } catch (err) {
+    console.warn(`${MODULE_ID} | Could not carry the old system prompt across:`, err);
+  }
+}
+
+/**
+ * Check an ElevenLabs key the moment it is pasted, and say what happened.
+ *
+ * ⚠️ NEVER LOGS OR DISPLAYS THE KEY. Reports only whether it authenticated and
+ * which narrator voice will be used.
+ */
+export async function verifyElevenLabsKey(key) {
+  const k = String(key ?? "").trim();
+  if (!k) {
+    ui.notifications?.info("ElevenLabs key cleared — NPC voices will use the free browser voice.");
+    return false;
+  }
+  ui.notifications?.info("Checking your ElevenLabs key…");
+  try {
+    const res = await fetch("https://api.elevenlabs.io/v1/user", {
+      headers: { "xi-api-key": k },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) {
+      const why = res.status === 401 ? "ElevenLabs rejected that key (401). Check it was copied whole."
+                : res.status === 429 ? "That key is rate-limited or out of quota right now."
+                : `ElevenLabs returned ${res.status} ${res.statusText}.`;
+      ui.notifications?.error(`ACE Engine: ${why} NPC voices stay on the browser voice until this is fixed.`,
+        { permanent: true });
+      console.warn(`${MODULE_ID} | ElevenLabs key check failed: ${res.status}`);
+      return false;
+    }
+    let voiceName = "your configured narrator voice";
+    try {
+      const id = game.settings.get(MODULE_ID, "elevenLabsVoiceId");
+      const vr = await fetch(`https://api.elevenlabs.io/v1/voices/${id}`, {
+        headers: { "xi-api-key": k }, signal: AbortSignal.timeout(15000),
+      });
+      if (vr.ok) voiceName = (await vr.json())?.name ?? voiceName;
+    } catch (_) { /* the key is good; naming the voice is a courtesy */ }
+    ui.notifications?.info(`ACE Engine: ElevenLabs is live. NPC and narration voices will use "${voiceName}".`);
+    console.log(`${MODULE_ID} | ElevenLabs key verified; narrator voice "${voiceName}".`);
+    return true;
+  } catch (err) {
+    ui.notifications?.warn(
+      "ACE Engine: could not reach ElevenLabs to check that key — it may still be fine. " +
+      "If voices stay robotic, check your connection.", { permanent: true });
+    console.warn(`${MODULE_ID} | ElevenLabs key check could not complete:`, err);
+    return false;
+  }
+}
+
 export function isSecretKey(name) {
   return ["apiKey", "chatApiKey", "digestApiKey", "apiKeySecure", "chatApiKeySecure", "digestApiKeySecure"].includes(name);
 }

@@ -1506,6 +1506,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         let fatal = false;
         let restarts = 0;
         let heardAnything = false;
+        this._micDeafRetried = false;   // one automatic recovery per dictation
 
         recognition.onstart = () => {
             if (this._recognition !== recognition) return;
@@ -1521,6 +1522,21 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             if (this._micSilenceCheck) clearTimeout(this._micSilenceCheck);
             this._micSilenceCheck = setTimeout(() => {
                 if (this._recognition !== recognition) return;
+
+                // ⚠️ A LOUD METER IS NOT PROOF THAT DICTATION WORKS, and this
+                // line used to treat it as exactly that: `if loud, return` -
+                // fine. That is the precise case Johnny hit. There are TWO
+                // ways five seconds of nothing can happen and they need
+                // opposite answers:
+                //   quiet meter -> the device is not producing audio at all
+                //   loud  meter -> the device is fine and the RECOGNISER is
+                //                  deaf, which is recoverable
+                // Some setups never even raise "no-speech"; recognition just
+                // sits there. So the positive check lives here too.
+                if (this._meterLoudest > 6 && !heardAnything) {
+                    this._recogniserIsDeaf(recognition);
+                    return;
+                }
                 if (this._meterLoudest > 4) return;          // heard something — fine
                 const dev = this._micSelect?.selectedOptions?.[0]?.textContent ?? "your default microphone";
                 ui.notifications.warn(
@@ -1558,6 +1574,24 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         recognition.onerror = (event) => {
             if (this._recognition !== recognition) return;
             const code = event.error;
+
+            // ⚠️🔴 "no-speech" WHILE THE METER IS LOUD IS NOT TRANSIENT - IT IS
+            // THE BUG (2026-08-20). Johnny: "the speak button does nothing,
+            // even though I can see that it can see my voice." That is exactly
+            // this: the level bar is reading his microphone at full tilt while
+            // recognition reports hearing nothing, and the line below threw
+            // that contradiction away as noise. A dead button and a working one
+            // looked identical from the outside for weeks.
+            //
+            // Two different meanings share one error code:
+            //   quiet meter + no-speech  = they genuinely said nothing. Ignore.
+            //   LOUD meter + no-speech   = the browser's recogniser is not
+            //                              getting the audio we can plainly
+            //                              see. Never ignore that.
+            if (code === "no-speech" && (this._meterLoudest ?? 0) > 6 && !heardAnything) {
+                this._recogniserIsDeaf(recognition);
+                return;
+            }
             if (code === "no-speech" || code === "aborted") return;   // transient
 
             fatal = true;
@@ -1595,6 +1629,58 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         } catch (err) {
             console.error("ACE: Engine | Mic start failed:", err);
             ui.notifications.error("Could not start the microphone. Try again, or type your message.", { permanent: true });
+            this._stopMic({ send: false });
+        }
+    }
+
+    /**
+     * The level meter can hear you and the browser's recogniser cannot.
+     *
+     * ⚠️ WHY THIS HAPPENS, AND WHY THE OLD COMMENT WAS WRONG. This class opens
+     * a getUserMedia stream for the level bar and HOLDS it for the whole
+     * dictation. The comment above that code claimed holding it is "what makes
+     * recognition actually listen to THIS device". That is not true of Chrome:
+     * webkitSpeechRecognition takes no device argument and always uses the
+     * system default. Holding the capture buys nothing - and on Windows, with
+     * an exclusive-mode driver or a virtual device (Wave Link, Voicemeeter, OBS,
+     * NVIDIA Broadcast) or another dictation tool already holding the mic, our
+     * stream is exactly what starves the recogniser.
+     *
+     * So: drop our capture and try once more. If it then works, the meter is
+     * the price and the button is worth more than the bar. Said out loud once,
+     * because silently changing behaviour is how this stayed invisible.
+     */
+    _recogniserIsDeaf(recognition) {
+        // ⚠️ Read the peak NOW. _stopLevelMeter() clears this._meter, and the
+        // getter falls back to 0 - so every log line below would have reported
+        // "peak 0", which is the exact opposite of what happened and would
+        // send the next reader hunting a silent microphone.
+        const peak = this._meterLoudest;
+        if (this._micDeafRetried) {
+            this._stopMic({ send: false });
+            ui.notifications.error(
+                "Your microphone is working - the level bar can see it - but this browser's speech " +
+                "recogniser is getting no audio from it. That is almost always another program holding " +
+                "the microphone exclusively: a dictation tool (Wispr Flow, Dragon), a meeting app, or a " +
+                "virtual device like Wave Link, Voicemeeter, OBS or NVIDIA Broadcast. Close it, or pick " +
+                "the plain hardware microphone in the dropdown. Typing always works.",
+                { permanent: true });
+            console.error(`${MODULE_ID} | Mic: recogniser deaf on both attempts. Meter peak was ` +
+                `${peak}, recognition returned no-speech.`);
+            return;
+        }
+        this._micDeafRetried = true;
+        console.warn(`${MODULE_ID} | Mic: meter peak ${peak} but recognition heard nothing - ` +
+            `releasing our own capture (it may be starving the recogniser) and retrying once.`);
+        ui.notifications.info("Microphone is live but the recogniser heard nothing - releasing the level meter and trying again.");
+        this._stopLevelMeter();          // give the device back
+        try {
+            recognition.stop();
+            setTimeout(() => {
+                if (this._recognition !== recognition) return;
+                try { recognition.start(); } catch (_) { this._stopMic({ send: false }); }
+            }, 250);
+        } catch (_) {
             this._stopMic({ send: false });
         }
     }

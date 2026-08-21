@@ -1879,60 +1879,25 @@ Hooks.once("ready", async () => {
     } catch (_) { /* Envoy may not have the new setting yet */ }
   }
 
-  // ── One-time system prompt migrations ──
+  // ── The system prompt moved into code (2026-08-20) ──────────────────────
+  //
+  // ⚠️ FIVE REGEX MIGRATIONS USED TO LIVE HERE and they are gone for good.
+  // They existed only because the base prompt was stored per world, so every
+  // improvement had to be string-matched into each customer's copy - including
+  // one doing prose surgery with `replace(/…[^]*?…/)`. On any world where the
+  // GM had edited their prompt those matches were a coin flip, which meant an
+  // edited world silently stopped receiving prompt fixes and its AI behaved
+  // differently from everyone else's, undiagnosably.
+  //
+  // The base prompt now lives in settings.mjs as code: always current, never
+  // stored, never migrated. DO NOT ADD ANOTHER MIGRATION HERE - edit the
+  // constant instead, and every world gets it on the next load.
   try {
-    let currentPrompt = game.settings.get(MODULE_ID, "systemPrompt") || "";
-    let changed = false;
-
-    // Migration 1: library awareness
-    if (currentPrompt && !currentPrompt.includes("REFERENCE LIBRARY section is present")) {
-      currentPrompt += `\n\nWhen a REFERENCE LIBRARY section is present in your context, that content has ALREADY been extracted from the GM's uploaded documents (PDFs, text files, etc.). You have it right now — do NOT say "let me retrieve the file" or "give me a moment to access the PDF." Just answer using the reference material provided.`;
-      changed = true;
-    }
-
-    // Migration 2: structured digest + training knowledge awareness
-    if (currentPrompt && !currentPrompt.includes("STRUCTURED REFERENCE DATA")) {
-      currentPrompt += ` When STRUCTURED REFERENCE DATA is present, it contains AI-extracted entities (NPCs, locations, items, encounters, factions, lore) from the GM's sourcebooks — use it directly. For published content (official D&D modules, Pathfinder adventures, etc.), ALSO use your own training knowledge to fill in gaps the reference data does not cover. If neither reference data nor your training covers the question, say so honestly.`;
-      changed = true;
-    }
-
-    // Migration 3: verbatim quoting of room/area descriptions
-    if (currentPrompt && !currentPrompt.includes("quote the relevant text directly")) {
-      currentPrompt += `\n\nWhen the GM asks about a specific room, area, location, or section from an uploaded sourcebook, quote the relevant text directly from the REFERENCE LIBRARY — include the full description, features, creatures, treasure, and any read-aloud text. Do NOT summarize or hedge with "you'd need to check the book." The text IS in your context — present it fully and confidently.`;
-      changed = true;
-    }
-
-    // Migration 4: source conflict resolution (legacy — replaced by Migration 5)
-    if (currentPrompt && !currentPrompt.includes("conflicting information") && !currentPrompt.includes("EDITION CONFLICTS")) {
-      currentPrompt += `\n\nWhen multiple source documents contain conflicting information (different editions, timeline changes, retcons), prefer the most recently uploaded document. GM session notes and campaign-specific content ALWAYS take priority over published sourcebooks. If you notice a conflict, briefly mention it so the GM can decide.`;
-      changed = true;
-    }
-
-    // Migration 5: Fix "most recently uploaded" → edition-based priority
-    //   Old text said prefer newest UPLOAD order — wrong, should be newest EDITION.
-    //   Also replaces the old wall-of-text reference library paragraph with cleaner bullets.
-    if (currentPrompt && currentPrompt.includes("prefer the most recently uploaded document")) {
-      // Remove the old conflict resolution paragraph
-      currentPrompt = currentPrompt.replace(
-        /\n*When multiple source documents contain conflicting information[^]*?briefly mention it so the GM can decide\./,
-        ""
-      );
-      // Remove the old reference library wall-of-text if present (Migrations 1+2 added it)
-      currentPrompt = currentPrompt.replace(
-        /\n*When a REFERENCE LIBRARY section is present[^]*?say so honestly\./,
-        ""
-      );
-      // Add the new clean versions
-      currentPrompt += `\n\n## REFERENCE DATA\n- REFERENCE LIBRARY and STRUCTURED REFERENCE DATA sections contain content already extracted from the GM's documents. Use it directly — NEVER say "let me retrieve the file" or "give me a moment to access the PDF."\n- For published content (official modules, adventures), also use your training knowledge to fill gaps.\n- If neither reference data nor your training covers the question, say so honestly.`;
-      currentPrompt += `\n\n## EDITION CONFLICTS\n- When sources contain conflicting stats or rules from different editions (e.g. AD&D THAC0 vs 5E attack bonuses, descending AC vs ascending AC), ALWAYS use the newest edition (5th Edition / 5E) stats.\n- GM session notes and campaign-specific content ALWAYS override published sourcebooks.\n- If you notice an edition conflict, briefly mention it so the GM can decide.`;
-      changed = true;
-    }
-
-    if (changed) {
-      await game.settings.set(MODULE_ID, "systemPrompt", currentPrompt);
-      console.log(`${MODULE_ID} | Migrated system prompt: added library/digest awareness`);
-    }
-  } catch (_) { /* non-critical — prompt just stays as-is */ }
+    const { migrateSystemPromptToAdditions } = await import("./settings.mjs");
+    await migrateSystemPromptToAdditions();
+  } catch (err) {
+    console.warn(`${MODULE_ID} | System prompt carry-over failed:`, err);
+  }
 
   // ── TTS availability diagnostic ────────────────────────────
   {

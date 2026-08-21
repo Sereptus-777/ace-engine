@@ -5,6 +5,7 @@
 // ============================================================
 
 import { MODULE_ID } from "./ace-engine.mjs";
+import { buildSystemPrompt } from "./settings.mjs";
 import { AceSettings } from "./settings.mjs";
 import { getContextBudgetChars } from "./context-budget.mjs";
 
@@ -232,7 +233,11 @@ When suggesting these features, be natural — weave them into your advice. For 
       return messages;
     }
 
-    const systemPrompt = game.settings.get(MODULE_ID, "systemPrompt");
+    // ⚠️ FROM CODE, NOT FROM STORAGE. buildSystemPrompt() returns ACE's own
+    // instructions plus whatever the GM added. Reading a stored prompt here is
+    // what let a customer break narration and what forced five regex
+    // migrations to exist. See settings.mjs.
+    const systemPrompt = buildSystemPrompt();
     const gameSystem = AceSettings.getGameSystemName();
 
     let fullSystem = systemPrompt;
