@@ -462,9 +462,28 @@ class TTSEngine {
             // key is a perfectly valid free setup — not a fault — so it does NOT
             // earn a toast. The AI Setup screen already shows which voice is
             // active for anyone who wants to know.
+            // ⚠️ SAY IT ON SCREEN, ONCE. This was a console.log with a comment
+            // arguing that a free setup "does NOT earn a toast". That reasoning
+            // holds for somebody who CHOSE the browser voice - and not at all
+            // for somebody whose key stopped resolving, which is what actually
+            // happens: the voice silently turns robotic mid-session and the
+            // only trace is a line in a console nobody has open. Johnny hit
+            // exactly that twice in two days.
+            //
+            // So: if they deliberately picked Browser TTS, stay quiet. If they
+            // are on the default and simply have no working key, tell them.
             if (!this._browserTTSNotified) {
                 this._browserTTSNotified = true;
-                console.log("TTS | No ElevenLabs key — using the free browser voice. Add a key in ACE Engine → AI Setup for premium voices.");
+                let chose = false;
+                try { chose = game.settings.get(MODULE_ID, "voiceProvider") === "browser"; } catch (_) {}
+                if (chose) {
+                    console.log("TTS | Browser voice selected in settings — nothing wrong.");
+                } else {
+                    ui.notifications?.warn(
+                        "ACE: NPC voices have dropped to the robotic browser voice — no working ElevenLabs key was found. " +
+                        "Add or re-check it in ACE Engine → AI Setup.", { permanent: true });
+                    console.warn("TTS | No ElevenLabs key resolved while voiceProvider is 'elevenlabs' — using the browser voice.");
+                }
             }
             await this._speakBrowser(text, pitch);
             return "ok";

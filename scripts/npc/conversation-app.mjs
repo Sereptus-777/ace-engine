@@ -526,6 +526,13 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             this._micBtn.addEventListener("click",    guard("Microphone", () => this.handleMic()));
             this._sendGuard = guard("Send", () => this.handleSend());
             this._initMicPicker();
+            // ⚠️ BEFORE THEY NEED IT, NOT AFTER IT FAILS. Once per browser,
+            // the first time this window opens: prove the mic, the recogniser
+            // and the voice actually work. Non-blocking - the conversation is
+            // usable while it runs.
+            import("./voice-setup.mjs")
+                .then(({ VoiceSetup }) => VoiceSetup.maybePrompt())
+                .catch(err => console.warn(`${MODULE_ID} | voice check could not run:`, err));
             // A creature nobody bothered to name gets one NOW — see below.
             this._ensureIdentity();
             // Measure AFTER the browser has laid the row out, and again once

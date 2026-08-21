@@ -511,6 +511,12 @@ export class AceSettings {
       default: "",
     });
 
+    // Has this browser been through the voice check? Client-scoped: the answer
+    // is about THIS machine's microphone, not the world's.
+    game.settings.register(MODULE_ID, "voiceSetupDone", {
+      scope: "client", config: false, type: Boolean, default: false,
+    });
+
     s("customInstructions", {
       name: "Additional AI Instructions",
       hint: "Optional. Anything you put here is added to ACE's own instructions — it never replaces them, so the narration and read-aloud features cannot be broken by editing this. Good uses: your table's tone, house rules, names to avoid, a content line you do not want crossed. Leave blank for stock behaviour.",

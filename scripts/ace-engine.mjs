@@ -3302,6 +3302,9 @@ Hooks.once("ready", async () => {
       /** Get the shared AI provider configuration (provider, apiKey, model).
        *  Consumer-safe wrapper — avoids raw game.settings.get("ace-engine", ...) calls.
        *  @returns {{ provider: string, apiKey: string, model: string }|null} */
+      /** Re-run the microphone / recogniser / voice check at any time. */
+      voiceCheck: () => import("./npc/voice-setup.mjs").then(({ VoiceSetup }) => VoiceSetup.open()),
+
       getProviderConfig: () => {
         try {
           return {
