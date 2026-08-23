@@ -934,6 +934,25 @@ Hooks.once("ready", () => {
   import("./deed-replay.mjs")
     .then(({ installDeedReplay }) => installDeedReplay())
     .catch(err => console.warn(`${MODULE_ID} | deed replay could not install:`, err));
+
+  // ⚠️ Johnny kept dragging DEAD creatures back onto the map, because the
+  // "X ☠ Fallen" folder sits in the Actors sidebar full of corpses that look
+  // exactly like living NPCs. Renaming it (08-07) stopped it sorting to the top
+  // and did not stop the accident, because the problem was never where it sat.
+  // This refuses the drop at preCreateToken. ALT overrides it deliberately.
+  import("./npc/fallen-guard.mjs")
+    .then(({ installFallenGuard }) => installFallenGuard())
+    .catch(err => console.warn(`${MODULE_ID} | fallen guard could not install:`, err));
+
+  // ⚠️ EVERY CLIENT MUST BE ABLE TO ANSWER "can you hear voices?". This is the
+  // responder for the GM's readiness check. Without it installed on the PLAYERS,
+  // the check reports silence for working clients and the GM chases a fault that
+  // is not there. Johnny, 2026-08-23: "it works on his machine but doesn't work
+  // when the clients connect... this has got to be a carefully executed,
+  // surgical insertion."
+  import("./npc/tts-local.mjs")
+    .then(({ installReadinessResponder }) => installReadinessResponder())
+    .catch(err => console.warn(`${MODULE_ID} | voice readiness responder could not install:`, err));
 });
 
 Hooks.once("ready", async () => {
@@ -1489,6 +1508,57 @@ Hooks.once("ready", async () => {
         });
         return;
       }
+      // ── ⚠️🔴 THE RELAY MUST SERVE WHATEVER PROVIDER THE WORLD USES ──────
+      //
+      // This handler existed only to spend the GM's ElevenLabs key on a
+      // player's behalf. With a self-hosted speech server the relay matters
+      // MORE, not less: a player's browser can never reach a server running on
+      // the GM's machine, so the relay is the ONLY way they hear anything.
+      // Leaving this branch ElevenLabs-only is exactly the "works on my machine"
+      // failure — the GM would hear every voice and the table would hear
+      // nothing, with no error anywhere.
+      //
+      // Same authorisation and the same rate limit apply. A local server costs
+      // no money, but it costs the GM's GPU, and an unbounded loop of requests
+      // would stall their machine mid-session.
+      let _provider = "elevenlabs";
+      try { _provider = game.settings.get(MODULE_ID, "voiceProvider") || "elevenlabs"; } catch (_) { /* default */ }
+
+      if (_provider === "localserver") {
+        import("./npc/tts-local.mjs").then(async ({ synthesize }) => {
+          const result = await synthesize(data.text, data.voiceId, data.voiceSettings ?? {});
+          if (result.status !== "ok") {
+            game.socket.emit(`module.${MODULE_ID}`, {
+              action: "ttsResponse", requestId: data.requestId,
+              error: result.detail || "the GM's local speech server could not produce that line",
+            });
+            return;
+          }
+          const uint8 = new Uint8Array(result.arrayBuffer);
+          const CHUNK = 8192;
+          const parts = [];
+          for (let i = 0; i < uint8.length; i += CHUNK) {
+            parts.push(String.fromCharCode(...uint8.subarray(i, i + CHUNK)));
+          }
+          const base64 = btoa(parts.join(""));
+          const pitch  = data.pitch ?? 1.0;
+          // Spectators first, then the requester, exactly as the ElevenLabs
+          // path does — the requester's promise awaits real playback.
+          game.socket.emit(`module.${MODULE_ID}`, { action: "playAudio", base64, pitch, exclude: data.userId });
+          game.socket.emit(`module.${MODULE_ID}`, {
+            action: "ttsResponse", requestId: data.requestId, ok: true, base64, pitch,
+          });
+        }).catch(err => {
+          console.warn(`${MODULE_ID} | local speech relay failed:`, err);
+          game.socket.emit(`module.${MODULE_ID}`, {
+            action: "ttsResponse", requestId: data.requestId, error: String(err?.message ?? err),
+          });
+        // ⚠️ RELEASE ON EVERY PATH, including this one. A claimed slot that is
+        // never released locks that player out of voice until they reload.
+        }).finally(() => doneSpending(_ttsUser));
+        return;
+      }
+
       try {
         // Effective key — file first, then the setting. That precedence now
         // lives in the ONE shared accessor; reading only the raw setting here
@@ -2882,6 +2952,25 @@ Hooks.once("ready", async () => {
       assignFactionsToExisting: (opts) =>
         import("./npc/faction-assign-existing.mjs")
           .then(m => m.assignFactionsToExisting({ memory: aceMemory, ...opts })),
+      /**
+       * Ask every connected client whether it will actually hear NPC voices,
+       * and show the answer per person. Run it BEFORE a session.
+       */
+      checkVoiceReadiness: () =>
+        import("./npc/voice-readiness-dialog.mjs").then(m => m.openVoiceReadiness()),
+
+      /**
+       * Which local voice stands in for each ElevenLabs voice. Your original
+       * ids are never overwritten, so switching the provider back restores
+       * every voice exactly as it was.
+       */
+      openVoiceMap: () =>
+        import("./npc/voice-map-dialog.mjs").then(m => m.openVoiceMap()),
+
+      /** Fill in a local voice for every ElevenLabs voice that has none yet. */
+      autoMapVoices: (opts) =>
+        import("./npc/voice-map.mjs").then(m => m.autoMap(opts)),
+
       /** Open the GM-only "Where Everybody Stands" screen. */
       openStandings: () => import("./standings-panel.mjs").then(m => m.openStandings()),
 
@@ -2899,6 +2988,22 @@ Hooks.once("ready", async () => {
        */
       harvestFactionOfficers: (opts) =>
         import("./npc/known-leaders.mjs").then(m => m.harvestAllRosters(opts)),
+
+      /**
+       * Two factions with the same name are one faction. Merges them, carrying
+       * roster entries and every creature's factionId flag across BEFORE the
+       * duplicate is removed, and rereads composition from the name.
+       * Pass { dryRun: true } to see what it would do first.
+       */
+      mergeDuplicateFactions: (opts) =>
+        import("./npc/faction-merge.mjs").then(m => m.mergeDuplicateFactions(opts)),
+
+      /**
+       * List every faction whose recorded composition disagrees with its own
+       * name. Reports only; pass { fix: true } to correct them.
+       */
+      auditFactionComposition: (opts) =>
+        import("./npc/faction-merge.mjs").then(m => m.auditFactionComposition(opts)),
 
       /** Re-derive faction compositions, retiring answers from rejected rules. */
       refreshFactionCompositions: (opts) =>

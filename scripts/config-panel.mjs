@@ -810,6 +810,43 @@ export class AceConfigPanel extends ApplicationV2 {
 
     // ─── Event wiring (manual, after _replaceHTML) ───────────────────────
 
+    /**
+     * Put a value into a settings control the way a PERSON would.
+     *
+     * ⚠️🔴 WHY THIS EXISTS. Assigning to .value or .checked in JavaScript fires
+     * NO event. This panel records edits by listening for input and change on
+     * every [data-setting-key] control, and Save writes only what was recorded.
+     * So every place the panel filled a field in code — the slider mirroring
+     * into its number box, the provider swap rewriting the API URL and model,
+     * the deprecation banner replacing a model name — changed what the GM could
+     * SEE and recorded nothing. Save then wrote a diff that did not contain it
+     * and reported success.
+     *
+     * Johnny, 2026-08-23: "I keep changing the PC glow, the size of it, from 1.5
+     * to 0.7, and it says it saved one setting. When I come back, it's still at
+     * 1.5." The deprecation banner was worse: it printed "Click Save Changes to
+     * persist" for a value Save could not see.
+     *
+     * ⚠️ IT ONLY RECORDS A REAL CHANGE. The same code paths also RESTORE a
+     * field to its stored value — repopulating a voice list, rebuilding a model
+     * dropdown on open. Recording those would write fields the GM never touched,
+     * which is the exact behaviour that once erased his API key. So the stored
+     * value is read first and an unchanged assignment stays silent.
+     */
+    _setFieldValue(el, value) {
+        if (!el) return false;
+        el.value = value;
+        const key = el.dataset?.settingKey;
+        if (!key) return false;
+        let stored;
+        try {
+            stored = isSecretKey(key) ? (getSecret(key) || "") : game.settings.get(MODULE_ID, key);
+        } catch (_) { stored = undefined; }
+        if (String(stored ?? "") === String(value ?? "")) return false;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        return true;
+    }
+
     _wireEvents(content) {
         // ── Every edit is recorded; Save writes only these ────────────────
         // A field the user never touched never enters this map, so Save cannot
@@ -886,7 +923,23 @@ export class AceConfigPanel extends ApplicationV2 {
         content.querySelectorAll('input[type="range"][data-slider-for]').forEach(slider => {
             const target = content.querySelector(`#${slider.dataset.sliderFor}`);
             if (!target) return;
-            slider.addEventListener("input", () => { target.value = slider.value; });
+            // ── ⚠️🔴 SETTING .value IN CODE FIRES NO EVENT. (2026-08-23)
+            //
+            // The slider carries no data-setting-key, so it is not in the
+            // recorder loop above. It mirrored its value into the number box
+            // by assignment — and assigning to .value does NOT dispatch input
+            // or change, so the number box's own recorder never ran either.
+            //
+            // Result: dragging ANY slider in this panel changed what you could
+            // see and recorded NOTHING. Save then wrote a diff that did not
+            // contain it and reported success. Johnny, 2026-08-23: "I keep
+            // changing the PC glow, the size of it, from 1.5 to 0.7, and it says
+            // it saved one setting. When I come back, it's still at 1.5."
+            //
+            // Every range setting in ACE Engine was unsaveable by its slider.
+            // The fix is to dispatch the event the assignment skipped, so the
+            // one recorder stays the only writer.
+            slider.addEventListener("input", () => this._setFieldValue(target, slider.value));
             target.addEventListener("input", () => { slider.value = target.value; });
         });
 
@@ -927,6 +980,11 @@ export class AceConfigPanel extends ApplicationV2 {
                         }
                     }
                     const savedForNew = this._apiKeyVault[newProvider] ?? "";
+                    // ALLOW-SILENT: restoring the key already saved for the
+                    // provider just picked. Keys are written from _apiKeyVault
+                    // in _saveAll, never from the diff, so recording this would
+                    // put a value in the diff that the masked-field guard then
+                    // has to defend against. Displaying it is the whole job.
                     apiKeyField.value = savedForNew;
                     if (!savedForNew && (newProvider === "openai" || newProvider === "anthropic" || newProvider === "openrouter")) {
                         ui.notifications?.info(`ACE Engine — no saved ${newProvider} API key. Paste yours and click Save Changes.`);
@@ -939,16 +997,15 @@ export class AceConfigPanel extends ApplicationV2 {
                 if (urlField) {
                     if (urlField.tagName === "SELECT") {
                         const hasOption = Array.from(urlField.options).some(o => o.value === defaults.apiUrl);
-                        if (hasOption) urlField.value = defaults.apiUrl;
-                        else {
+                        if (!hasOption) {
                             const opt = document.createElement("option");
                             opt.value = defaults.apiUrl;
                             opt.textContent = defaults.apiUrl;
-                            opt.selected = true;
                             urlField.prepend(opt);
                         }
+                        this._setFieldValue(urlField, defaults.apiUrl);
                     } else {
-                        urlField.value = defaults.apiUrl;
+                        this._setFieldValue(urlField, defaults.apiUrl);
                     }
                 }
 
@@ -997,11 +1054,9 @@ export class AceConfigPanel extends ApplicationV2 {
                     const opt = document.createElement("option");
                     opt.value = newValue;
                     opt.textContent = `${newValue} (catalog recommendation)`;
-                    opt.selected = true;
                     field.prepend(opt);
-                } else {
-                    field.value = newValue;
                 }
+                this._setFieldValue(field, newValue);
                 // Hide this specific banner immediately.
                 btn.closest(".ace-cfg-deprecation")?.remove();
                 ui.notifications?.info(`Tier "${tierKey}" set to ${newValue}. Click Save Changes to persist.`);
@@ -1216,6 +1271,10 @@ export class AceConfigPanel extends ApplicationV2 {
             if (current && ![...sel.options].some(o => o.value === current)) {
                 sel.appendChild(opt(`${current} (not on your account)`, current));
             }
+            // ALLOW-SILENT: the list was just rebuilt from the account and
+            // this puts the ALREADY SAVED voice back on it. Nothing changed, so
+            // nothing should be recorded — a diff that contains untouched
+            // fields is how a bad render becomes data loss.
             sel.value = current;
         }
         say(`${voices.length} voice${voices.length === 1 ? "" : "s"} loaded from your account.`);
@@ -1295,6 +1354,13 @@ export class AceConfigPanel extends ApplicationV2 {
                 opt.selected = true;
                 modelField.prepend(opt);
             }
+            // ⚠️ SELECTING AN OPTION IN CODE FIRES NOTHING. Swapping provider
+            // repopulates this list and picks that provider's model, which is a
+            // real change the GM asked for by swapping — but Save writes only
+            // what was RECORDED, so without this the new model was displayed and
+            // never saved. _setFieldValue stays silent when the value already
+            // matches what is stored, so the open-time rebuild records nothing.
+            this._setFieldValue(modelField, valueToSelect);
         };
 
         // Static fallback — guarantees the dropdown reflects the *new*

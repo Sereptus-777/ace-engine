@@ -198,8 +198,28 @@ async function _flushBatch() {
         }
 
         // ── Batch confirmation ─────────────────────────────────────────
+        // ── ⚠️🔴 THE POPUP IS THE DEFAULT. IT IS NOT A FALLBACK. (2026-08-23)
+        //
+        // This variable started life as `false` and was only ever turned on by
+        // the GM picking "Show Popup For Each" in the bulk-confirmation dialog.
+        // But that dialog only appears at or above the batch threshold, which
+        // defaults to FIVE. So dropping ONE creature — the most deliberate act
+        // there is — skipped the confirmation, left this false, set
+        // _aceAutoAccept on the token, and the setup dialog auto-accepted
+        // itself without ever being shown.
+        //
+        // Johnny, live, 2026-08-23: "I dropped the goblin, and it didn't give me
+        // any choice whether I wanted to customize it or not. It just renamed
+        // it... I never changed that setting." He had not. The single drop was
+        // the ONE case that could never ask, and it had been that way since the
+        // threshold was written.
+        //
+        // The threshold exists to stop nine dialogs when you drop nine goblins.
+        // It was never meant to silence the one dialog you actually wanted.
+        // So: ASK, unless the GM has explicitly said "Generate All" for a batch
+        // big enough to have been worth asking about.
         const threshold = _batchConfirmThreshold();
-        let popupFallback = false;
+        let popupFallback = true;
         if (threshold > 0 && toProcess.length >= threshold) {
             const decision = await _confirmBatch(toProcess);
             if (!decision) {
@@ -207,9 +227,9 @@ async function _flushBatch() {
                 _processing = false;
                 return;
             }
-            if (decision === "popup") {
-                popupFallback = true; // run each token through the normal popup flow
-            }
+            // "Generate All" is the only answer that suppresses the per-token
+            // dialog, and it is an answer the GM had to give out loud.
+            popupFallback = (decision === "popup");
         }
 
         // ── Serial processing ─────────────────────────────────────────

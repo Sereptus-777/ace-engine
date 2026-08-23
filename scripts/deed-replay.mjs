@@ -34,7 +34,7 @@ const TAG = "ACE: Engine | deed replay";
  * exactly like a world with no history. If none of them answer, that is
  * reported as a failure rather than as "nothing to do".
  */
-function collectDeeds(memory) {
+export function collectDeeds(memory) {
   const tries = [
     ["deed store getAll",  () => memory?.deeds?.getAll?.()],
     ["deed store all",     () => memory?.deeds?.all?.()],

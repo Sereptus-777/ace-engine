@@ -167,6 +167,18 @@ export async function promoteToNamedActor(tokenDocument, opts = {}) {
         return { actor: null, promoted: false, reason: "actor creation failed" };
     }
 
+    // ⚠️ THE ROSTER STILL POINTS AT THE TOKEN. An unlinked creature is listed in
+    // its faction by TOKEN id; it has just been given a brand new actor id and
+    // the token is about to be relinked. Without this the faction silently loses
+    // a member at the exact moment that member became worth keeping.
+    try {
+        const { repointFactionMember } = await import("./faction-registry.mjs");
+        const repaired = await repointFactionMember(tokenDocument.id, created.id);
+        if (repaired) console.log(`${TAG} | Roster entry in "${repaired}" repointed to the new actor.`);
+    } catch (err) {
+        console.warn(`${TAG} | Could not repoint the faction roster entry (non-fatal):`, err);
+    }
+
     try {
         await tokenDocument.update({ actorId: created.id, actorLink: true });
     } catch (err) {

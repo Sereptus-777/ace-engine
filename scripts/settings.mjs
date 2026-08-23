@@ -839,10 +839,58 @@ export class AceSettings {
       hint: "Where NPC speech comes from. ElevenLabs gives the best voices and players need no key of their own — the GM's client makes the audio and streams it to everyone. The browser voice is free and needs no account; it is what runs until an ElevenLabs key is set up.",
       type: String,
       choices: {
-        elevenlabs: "ElevenLabs (best quality — needs a key, GM streams it to players)",
-        browser:    "Browser voice (free, no account needed)",
+        elevenlabs:  "ElevenLabs (best quality — needs a key, GM streams it to players)",
+        localserver: "Local speech server (free, runs on your own machine — GM streams it to players)",
+        browser:     "Browser voice (free, no account needed)",
       },
       default: "elevenlabs",
+    });
+
+    // ⚠️🔴 WORLD-SCOPED ON PURPOSE, AND THE REASON MATTERS.
+    //
+    // A self-hosted speech server runs on ONE machine — normally the GM's. No
+    // player's browser can reach it, and it does not need to: finished audio is
+    // broadcast over the socket as bytes, exactly as ElevenLabs audio already is.
+    //
+    // The address is world-scoped anyway so that every client can SAY what it
+    // sees when the GM runs the readiness check. A client-scoped address would
+    // be blank on every player and the check would report "no address set" for
+    // people whose setup is perfectly correct — a diagnostic that lies is worse
+    // than none.
+    //
+    // It is not a secret (a LAN address), so pushing it to every client costs
+    // nothing. Never put a credential in a world-scoped setting.
+    //
+    // ⚠️ localhost IS RIGHT, AND SWITCHING IT TO A LAN IP IS THE TRAP. Browsers
+    // treat localhost as trustworthy even from an https page; a plain-http LAN
+    // address is blocked as mixed content, silently, on every client but the
+    // GM's. See tts-local.mjs.
+    // ⚠️ THE ORIGINAL VOICE IDS ARE NEVER OVERWRITTEN. This is a SEPARATE map
+    // from an ElevenLabs voice id to a local one, consulted only while a local
+    // provider is selected. Rewriting each actor's own voiceId would destroy the
+    // ElevenLabs id and make switching back impossible — a migration that cannot
+    // be reversed is data loss with a friendly name. World-scoped so the GM maps
+    // once and every client resolves the same voice. Not a secret.
+    s("voiceMap", {
+      scope: "world",
+      name: "Voice Map",
+      hint: "Which local voice stands in for each ElevenLabs voice. Built for you automatically; edit it in ACE Engine → Voice Map.",
+      type: Object,
+      default: {},
+      config: false,
+    });
+
+    s("localTtsUrl", {
+      scope: "world",
+      name: "Local Speech Server Address",
+      hint: "Where your own speech server is listening, e.g. http://localhost:8123. Only the GM's machine talks to it — players are sent the finished audio, so they need nothing installed. Use ACE Engine → Voice & TTS → Check Every Client before a session to confirm the whole table will hear it.",
+      type: String,
+      default: "http://localhost:8123",
+      onChange: () => {
+        import("./npc/tts-local.mjs")
+          .then(({ forgetProbe }) => forgetProbe())
+          .catch(() => { /* module not loaded yet; next probe is fresh anyway */ });
+      },
     });
 
     // ── Browser TTS (client-scoped) ─────────────────────────

@@ -10,7 +10,7 @@ import { AIHandler }                                             from "./convers
 import { isAIFailure }                                           from "./ai-failure.mjs";
 import { writeBiography }                                        from "../bio-writer.mjs";
 import { processTokenFaction, buildFactionBioContext,
-         resolveCreatureBase }                                   from "./faction-registry.mjs";
+         resolveCreatureBase, getAllFactions }                   from "./faction-registry.mjs";
 import { SocialProfileEngine }                                   from "./social-profile.mjs";
 import npcProfileJournal                                         from "./npc-profile-journal.mjs";
 import { resolveSpecies, hasPersonalName, setGenericNameProbe } from "./npc-identity.mjs";
@@ -1325,7 +1325,32 @@ async function _buildPrompt(tokenDocument, factionResult = {}, socialProfile = n
         if (uniqueNames.length) {
             avoidList = `\nDo NOT use names similar to these existing characters: ${uniqueNames.join(", ")}. Pick something distinctly different.`;
         }
-        nameInstruction = `\nCRITICAL — NAMING REQUIRED: "${name}" is a GENERIC LABEL, not a real name. You MUST give this NPC a unique personal name. Your response MUST begin with exactly this format on the very first line:\nNAME: Firstname Lastname\nThen write the biography below that line. Do NOT use "${name}" as the NPC's name anywhere in the bio — replace it with the name you chose.${namingHint}${avoidList}\n`;
+        // ── ⚠️🔴 THE NAME IS ALREADY DECIDED BY THE TIME WE GET HERE ────────
+        //
+        // This used to say "your response MUST begin with NAME: Firstname
+        // Lastname", and when the model ignored that — which it did constantly —
+        // ACE read the finished prose and crowned the most frequent proper noun.
+        // That produced "Mind Flayers" (the faction, named three times) and
+        // "Phandelver" (the town, in a bio the prompt had demanded be almost
+        // entirely about where the creature came from).
+        //
+        // Johnny, 2026-08-23: "why is it writing a bio and then guessing the
+        // name? This can't be this fragile."
+        //
+        // Naming is now its own request whose entire answer is a name
+        // (namer.mjs), run BEFORE this prompt is built. The name arrives here as
+        // a fact. The biography cannot disagree with it, because it came first,
+        // and there is nothing left to parse out of the prose afterwards.
+        const chosen = tokenDocument._aceChosenName || "";
+        nameInstruction = chosen
+            ? `\nThis NPC's name is "${chosen}". It is already decided — use it throughout the biography. `
+              + `Do NOT invent a different name and do NOT start with a NAME: line. `
+              + `"${name}" is the generic statblock label; never use it as the name.\n`
+            // No name was chosen (naming was skipped or unavailable). Write the
+            // bio WITHOUT a name rather than inviting one we would have to fish
+            // back out. The GM names it from the Customize dialog.
+            : `\nThis NPC has no personal name. Refer to them as "the ${String(name).toLowerCase()}" throughout. `
+              + `Do NOT invent a name and do NOT start with a NAME: line.\n`;
         personalityInstruction = `\nAfter the biography, add TWO lines:\nPERSONALITY: [1-2 sentence description of how this NPC speaks, their mannerisms, speech patterns, and demeanor]\nTONE: [one word from this list ONLY: formal, casual, cryptic, cheerful, grim, sarcastic, threatening, nervous, stoic, theatrical]\n`;
     } else if (isUnlinked) {
         // Proper name ("Thordina Ironforge") → keep the name, don't rename
@@ -1426,7 +1451,32 @@ ${personalityInstruction}`;
     // ── Canon biography: existing lore from adventure module or GM ───────
     // This is the MOST important context — the AI must expand on it, never contradict.
     if (canonBio) {
-        userMsg += `\n\nEXISTING CANON BIOGRAPHY — this is established lore from the adventure module or GM notes. Your biography MUST be 100% consistent with every fact stated here. Expand and enrich this information with additional details, personality, and backstory, but NEVER contradict, change, or ignore any of these facts:\n"${canonBio}"`;
+        // ── ⚠️🔴 A MONSTER ENTRY DESCRIBES A KIND, NOT A PERSON (2026-08-23).
+        //
+        // Johnny: "why isn't our engine reading the original bio of these things
+        // so it understands what the fuck it is? It says Crookshanks mark the
+        // rank and file of a raid rabble... if it would have read the original
+        // bio, it would know that that's not his name."
+        //
+        // We DID feed it in. We fed it in MISLABELLED. Calling a monster manual
+        // entry "EXISTING CANON BIOGRAPHY - established lore" tells the model
+        // every proper noun in it is a fact about THIS INDIVIDUAL, so it wrote
+        // "Currently, Goblin Crookshank finds himself at the East Mine" and
+        // treated a RANK held by hundreds of goblins as one goblin's name.
+        //
+        // A statblock whose NAME is a generic label is a species entry. Say so,
+        // and the same text becomes what it always was: a description of what
+        // this creature IS, which is exactly the context that was missing.
+        const canonIsSpecies = _isGenericName(name, creatureType);
+        if (canonIsSpecies) {
+            userMsg += `\n\nWHAT THIS CREATURE IS — from its own statblock entry. This describes the KIND of creature, not this individual:\n"${canonBio}"\n`
+                + `Use it to understand what this creature is, how its kind live, fight, and are regarded by others. `
+                + `EVERY NAME-LIKE WORD ABOVE IS A TYPE, RANK, OR ROLE SHARED BY ALL OF THEM. It is NOT this individual's name `
+                + `and you must NOT reuse any of it as the name you choose. Nothing above is a personal history: it is true of `
+                + `every one of its kind. Write THIS one as a specific individual whose own story is consistent with what its kind are.`;
+        } else {
+            userMsg += `\n\nEXISTING CANON BIOGRAPHY — this is established lore from the adventure module or GM notes. Your biography MUST be 100% consistent with every fact stated here. Expand and enrich this information with additional details, personality, and backstory, but NEVER contradict, change, or ignore any of these facts:\n"${canonBio}"`;
+        }
     }
 
     // ── Origin context: where is this NPC from? (set by NPC Identity Dialog) ─
@@ -1684,7 +1734,10 @@ ${statBlock}`;
     // generating. Long context windows cause the AI to forget the system prompt
     // NAME: instruction buried thousands of tokens earlier.
     if (!isNonSentient && isUnlinked && (!canonBio || /\s*[#]?\s*\d+\s*$/.test(name)) && _isGenericName(name, creatureType)) {
-        userMsg += `\n\nREMEMBER: Your response MUST start with "NAME: [Unique Personal Name]" on the very first line. "${name}" is a generic label — do NOT use it as the NPC's name. Pick a culturally appropriate name that fits the setting.`;
+        const chosen = tokenDocument._aceChosenName || "";
+        userMsg += chosen
+            ? `\n\nREMEMBER: this NPC is named "${chosen}". Use that name. Do NOT write a NAME: line and do NOT invent a different name. "${name}" is a generic statblock label and is not their name.`
+            : `\n\nREMEMBER: this NPC has no personal name. Do NOT invent one and do NOT write a NAME: line.`;
     }
 
     return { systemPrompt, userMsg, tokenImage };
@@ -1874,6 +1927,80 @@ async function _generateBio(tokenDocument) {
         }
     } catch (err) { console.debug("ACE: Engine | bio-generator canon bio extraction non-fatal:", err); }
 
+    // ── ⚠️🔴 NAME FIRST, BIOGRAPHY SECOND (2026-08-23) ───────────────────
+    //
+    // This is the whole architectural fix. The name is decided by its own
+    // request, whose entire answer IS a name, before a single word of biography
+    // exists. It is then handed to the bio prompt as a fact.
+    //
+    // The old order was the reverse — write the story, then work out who it was
+    // about by counting proper nouns — and every failure this week came from it:
+    // a goblin named after the faction he served, then a goblin named after the
+    // town the GM had typed in a box. There is now nothing to infer.
+    //
+    // ⚠️ THE NAMER GETS THREE THINGS AND NOTHING ELSE: what it is, what it does,
+    // which gender. No faction, no scene, no location, no biography — those were
+    // exactly the inputs that poisoned the old guess.
+    try {
+        const nameOf = actor?.name || "";
+        const cType  = actor?.system?.details?.type?.value || "";
+        const NO_NAME_TYPES = new Set(["beast", "ooze", "plant", "swarm", "construct"]);
+        const wantsName = !NO_NAME_TYPES.has(String(cType).toLowerCase())
+            && _isGenericName(nameOf, cType)
+            && !tokenDocument._aceSkipRename;
+
+        if (wantsName) {
+            const namer = await import("./namer.mjs");
+            const { gender, source: genderSource } = await namer.resolveAndRecordGender(actor, tokenDocument);
+
+            // Species. ⚠️ resolveSpecies ALREADY EXISTS in npc-identity.mjs and
+            // already honours the GM's speciesOverride first, then dnd5e's
+            // custom/subtype/type fields, then the base actor's name. I started
+            // writing a second one and stopped: building beside an engine that
+            // already does the job is the exact habit Johnny called out on
+            // 08-11. Grep for the capability, not the feature name.
+            //
+            // The override is what answers "this isn't a goblin, it's a
+            // hobgoblin" — the GM is looking at the creature and ACE is reading
+            // a label, so the GM wins.
+            const { resolveSpecies } = await import("./npc-identity.mjs");
+            const species = resolveSpecies(actor, tokenDocument)
+                || String(nameOf).toLowerCase().replace(/\s*\(.*$/, "").split(/\s+/)[0]
+                || cType;
+
+            const role = (() => {
+                try { return actor.getFlag(MODULE_ID, "factionRole") || ""; } catch (_) { return ""; }
+            })();
+
+            // Kin, purely as a style anchor, so a warband reads like one culture.
+            // ⚠️ Their NAMES only. The faction's own name is never sent — that is
+            // how "Mind Flayers" got in — and the validator bars it regardless.
+            const kin = [];
+            try {
+                for (const t of canvas.scene?.tokens ?? []) {
+                    if (t.id === tokenDocument.id || kin.length >= 3) continue;
+                    const n = t.actor?.getFlag?.(MODULE_ID, "flavorName") || t.name;
+                    if (n && !_isGenericName(n, cType)) kin.push(n);
+                }
+            } catch (_) { /* style anchors are optional */ }
+
+            const taken  = namer.takenNames();
+            const barred = await namer.barredNames();
+            const result = await namer.generateName({
+                species, role, gender, kin, taken, barred,
+                creatureType: cType,
+            });
+            tokenDocument._aceChosenName = result.name;
+            console.log(`${TAG} | "${nameOf}" will be named "${result.name}" `
+                + `(${species}${role ? `, ${role}` : ""}, ${gender} — ${genderSource}; from the ${result.source}). `
+                + `The biography is written AFTER this, and is told the name.`);
+        }
+    } catch (err) {
+        // ⚠️ NEVER LET NAMING KILL THE BIOGRAPHY. An unnamed creature with a good
+        // bio is a small problem; no bio at all is a broken feature.
+        console.warn(`${TAG} | Naming failed for ${actor?.name}; the biography will be written without a name:`, err);
+    }
+
     //── Build prompt and call AI ─────────────────────────────────────────
     const { systemPrompt, userMsg, tokenImage } = await _buildPrompt(tokenDocument, factionResult, socialProfile, canonBio);
     let images = tokenImage ? [tokenImage] : [];
@@ -1920,137 +2047,37 @@ async function _generateBio(tokenDocument) {
     let generatedName = null;
     let generatedPersonality = null;
 
-    // Extract NAME: line if present — only use it for generic names that we asked to rename.
-    // If the AI returns a NAME: line for a proper-named NPC (shouldn't happen), strip it but don't rename.
-    // Non-sentient types (beast, ooze, plant, swarm) NEVER get renamed.
+    // ⚠️ The scene name-scan that stood here moved into namer.takenNames(),
+    // flavour-name coverage and all. It is needed BEFORE the biography now,
+    // not after it, because the name is chosen first.
+
+    // ── ⚠️🔴 226 LINES OF NAME-GUESSING WERE DELETED HERE (2026-08-23) ──────
     //
-    // Flexible regex:
-    //   • Accepts NAME: at the start OR at the start of any line within the
-    //     first ~300 chars (some AI responses lead with a one-sentence intro
-    //     then drop the NAME: line on its own line below).
-    //   • Allows leading whitespace, markdown code fences, or blank lines.
-    // ── Taken names on this scene — REAL names AND flavor nameplates ──────
-    // The old dedup only compared real token names ("Ogre" vs "Ogre (1)"), so a
-    // generated name could still collide with a neighbour's FLAVOR name — that is
-    // exactly how two ogres both ended up as "Grulgar Stonearm" (root-caused
-    // 2026-07-26). Collect every name any creature on the scene is wearing:
-    // real token names, base actor names, and flavor nameplates (the token's own
-    // AND its base actor's). Used by BOTH naming paths below.
-    const takenNames = new Set();
-    try {
-        for (const t of canvas.scene?.tokens ?? []) {
-            if (t.id === tokenDocument.id) continue;
-            for (const n of [
-                t.name,
-                t.actor?.name,
-                t.actor?.getFlag?.(MODULE_ID, "flavorName"),
-                game.actors.get(t.actorId)?.getFlag?.(MODULE_ID, "flavorName"),
-            ]) {
-                const clean = (n || "").trim().toLowerCase();
-                if (clean) takenNames.add(clean);
-            }
-        }
-    } catch (err) { console.warn(`${TAG} | Name dedup scene scan failed:`, err); }
+    // What stood here read the finished biography and tried to work out who it
+    // had been about: a NAME: line if the model bothered, otherwise a scan that
+    // counted proper nouns and crowned the most frequent. Around it had grown
+    // exclusion lists for factions, places, scene names, species words, plurals
+    // and singulars, each one added the day it failed in play.
+    //
+    // It named a goblin "Mind Flayers" and, the next night, "Phandelver".
+    // Johnny: "This can't be this fragile. Let'''s figure something else out."
+    //
+    // The name is now decided BEFORE this request is sent (see namer.mjs and the
+    // naming step in _generateBio) and the prompt is told it as a fact. There is
+    // nothing to extract, so there is nothing to exclude. The exclusion lists
+    // went with it.
+    const chosenName = tokenDocument._aceChosenName || "";
+    if (chosenName) generatedName = chosenName;
 
-    const nameMatch = bioText.slice(0, 400).match(/(?:^|\n)\s*(?:```\w*\s*)?NAME:\s*(.+?)(?:\r?\n|$)/i);
-    if (nameMatch) {
-        const name = tokenDocument.actor?.name || "";
-        const creatureType = tokenDocument.actor?.system?.details?.type?.value || "";
-        const NO_RENAME = new Set(["beast", "ooze", "plant", "swarm"]);
-        if (!NO_RENAME.has((creatureType || "").toLowerCase()) && _isGenericName(name, creatureType) && !tokenDocument._aceSkipRename) {
-            let candidate = nameMatch[1].trim()
-                .replace(/^["']+|["']+$/g, "")  // strip quotes
-                .replace(/\*+/g, "")             // strip markdown bold
-                .trim();
-
-            if (takenNames.has(candidate.toLowerCase())) {
-                // Name collision — append a distinguishing suffix that is itself
-                // FREE (a 15-goblin scene can collide repeatedly; random retry
-                // could land on an already-taken suffix). Numbered fallback if
-                // all seven are burned.
-                const suffixes = ["the Bold", "the Elder", "the Younger", "the Scarred", "the Silent", "the Red", "the Pale"];
-                const free = suffixes.find(s => !takenNames.has(`${candidate} ${s}`.toLowerCase()));
-                candidate = free ? `${candidate} ${free}`
-                    : `${candidate} ${2 + suffixes.filter(s => takenNames.has(`${candidate} ${s}`.toLowerCase())).length}`;
-                console.warn(`${TAG} | Duplicate name detected — renamed to "${candidate}"`);
-            }
-
-            generatedName = candidate;
-        }
-        bioText = bioText.slice(nameMatch[0].length).trim();
-    } else {
-        // ── Fallback: AI didn't produce a NAME: line for a generic NPC ──
-        // The AI is supposed to start its response with "NAME: Firstname Lastname"
-        // but gpt-4o-mini routinely buries the personal name mid-bio:
-        //   "This goblin hails from the Amberfang Tribe… Griknik grew up…"
-        // The old fallback only looked at the FIRST SENTENCE — which here
-        // starts with "This goblin", so it extracted "This" and either
-        // produced a garbage rename or no rename at all.
-        //
-        // New approach: scan the WHOLE bio for proper-noun candidates,
-        // prefer ones in subject position (followed by an action verb),
-        // and fall back to most-frequent capitalized word. Reject common
-        // false positives (pronouns, articles, the generic creature name).
-        const actorName = tokenDocument.actor?.name || "";
-        const creatureType = tokenDocument.actor?.system?.details?.type?.value || "";
-        if (_isGenericName(actorName, creatureType) && !tokenDocument._aceSkipRename) {
-            const NO_RENAME = new Set(["beast", "ooze", "plant", "swarm"]);
-            if (!NO_RENAME.has((creatureType || "").toLowerCase())) {
-                const REJECT = new Set([
-                    "this", "that", "these", "those", "the", "a", "an", "in", "on", "at",
-                    "for", "with", "and", "but", "or", "if", "when", "where", "how", "why",
-                    "who", "what", "it", "he", "she", "they", "we", "you", "i", "his", "her",
-                    "their", "its", "him", "them", "us", "as", "by", "of", "to", "from",
-                    "before", "after", "during", "biography", "name", "personality", "tone",
-                    "while", "though", "although", "however", "despite", "since", "until",
-                    "currently", "presently", "today", "now", "later", "soon", "haunted",
-                    "nervous", "stoic", "casual", "formal", "cryptic", "cheerful", "grim",
-                ]);
-                const genericBase = actorName
-                    .replace(/\s*[#]?\s*\d+\s*$/, "")
-                    .replace(/\s*\([^)]*\)\s*/g, "")
-                    .trim().toLowerCase();
-                const isCandidate = (s) => {
-                    const lower = s.toLowerCase();
-                    if (REJECT.has(lower)) return false;
-                    if (lower === genericBase) return false;
-                    if (genericBase && (lower.startsWith(genericBase + " ") || genericBase.includes(lower))) return false;
-                    // Never adopt a name ANY scene creature already wears (real OR
-                    // flavor) — the proper-noun scan otherwise plucks a scene-mate's
-                    // name straight out of the bio text (the Grulgar bug, 2026-07-26).
-                    if (takenNames.has(lower)) return false;
-                    return true;
-                };
-
-                // Strip any HTML in case it slipped in, collapse whitespace
-                const plainText = bioText.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
-
-                // Pass 1: high-confidence — proper noun followed by a biographical verb
-                const subjectRe = /\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+){0,2})\s+(?:is|was|grew|hails|came|comes|lived|fled|joined|left|escaped|served|rose|rises|fell|fights|fought|leads|led|seeks|sought|wields|wielded|carries|carried|guards|guarded|hunts|hunted|stalks|stalked|wanders|wandered|believes|believed|knows|knew|remembers|remembered|earned|earns|spent|spends|holds|held|trained|trains|once|now|still)\b/g;
-                // Pass 2: any 1-3 word proper noun anywhere
-                const properNounRe = /\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+){0,2})\b/g;
-
-                const collect = (re) => {
-                    const counts = new Map();
-                    for (const m of plainText.matchAll(re)) {
-                        const w = m[1].trim();
-                        if (!isCandidate(w)) continue;
-                        counts.set(w, (counts.get(w) ?? 0) + 1);
-                    }
-                    return counts;
-                };
-
-                const subjectHits = collect(subjectRe);
-                const allHits = subjectHits.size ? subjectHits : collect(properNounRe);
-
-                if (allHits.size) {
-                    // Most-frequent candidate wins; ties broken by length (longer = more specific)
-                    const best = [...allHits.entries()]
-                        .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0][0];
-                    generatedName = best;
-                    console.log(`${TAG} | Extracted name "${best}" from bio text via proper-noun scan (AI skipped NAME: line; subject-pass=${subjectHits.size > 0})`);
-                }
-            }
+    // ⚠️ A MODEL MAY STILL EMIT A NAME: LINE OUT OF HABIT. Strip it so it never
+    // reaches the biography text, but NEVER read a name out of it. The name is
+    // already settled and the model does not get a vote.
+    const strayName = bioText.slice(0, 400).match(/(?:^|\n)\s*(?:```\w*\s*)?NAME:\s*(.+?)(?:\r?\n|$)/i);
+    if (strayName) {
+        bioText = bioText.replace(strayName[0], "").trim();
+        const offered = strayName[1].trim().replace(/^["'\s]+|["'\s]+$/g, "");
+        if (chosenName && offered && offered.toLowerCase() !== chosenName.toLowerCase()) {
+            console.log(`${TAG} | The model offered "${offered}" despite being told the name is "${chosenName}". Ignored.`);
         }
     }
 
@@ -2198,6 +2225,14 @@ async function _generateBio(tokenDocument) {
                 const _isLabel = !hasPersonalName(actor.name, _species);
 
                 if (_isLabel) {
+                    // ⚠️ CAPTURE THE OLD NAME BEFORE THE UPDATE. The log below
+                    // read actor.name AFTER the rename had already been applied,
+                    // so it printed 'RENAMED "Mind Flayers" → "Mind Flayers"'
+                    // and concealed what the creature had actually been called.
+                    // A log that reports the outcome as the intention is worse
+                    // than no log: it makes a real defect unreadable.
+                    const _wasNamed = actor.name;
+
                     // Keep what it WAS, so the sidebar search can still find it
                     // by species/statblock name once the row says "Thalgar".
                     await actor.setFlag(MODULE_ID, "originalName", actor.name);
@@ -2215,7 +2250,7 @@ async function _generateBio(tokenDocument) {
                         try { await tokenDocument.update({ name: generatedName, displayName: 50 }); }
                         catch (tokErr) { console.warn(`${TAG} | Token rename failed (non-fatal):`, tokErr); }
                     }
-                    console.log(`${TAG} | Linked actor RENAMED "${actor.name}" → "${generatedName}" (was a ${_species || "generic"} label; searchable by "${_species}" and the original name).`);
+                    console.log(`${TAG} | Linked actor RENAMED "${_wasNamed}" → "${generatedName}" (was a ${_species || "generic"} label; searchable by "${_species}" and the original name).`);
                 } else {
                     // Already personally named — never overwrite the GM's choice.
                     await actor.setFlag(MODULE_ID, "flavorName", generatedName);

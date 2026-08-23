@@ -338,6 +338,11 @@ const _CREATURE_HINTS = [
     [/\b(demons?|balors?|mariliths?)\b/i, "quasit"],
     [/\b(constructs?|golems?)\b/i, "golem"],
     [/\b(vampires?|lich|liches|wights?|ghouls?|zombies?|skeletons?|undead|wraiths?|spectres?|specters?)\b/i, "undead"],
+    // ADDED 2026-08-22 after a faction literally named "Mind Flayers" was
+    // recorded as being made of GOBLINS, because no hint claimed the name and
+    // its composition fell through to whatever creature happened to be dropped.
+    [/\b(mind ?flayers?|illithids?|ulitharids?)\b/i, "aberration"],
+    [/\b(beholders?|aboleths?|aberrations?)\b/i, "aberration"],
 ];
 // Words that mean "we fight these", not "we are these". A description is where
 // a faction names its ENEMIES, so any creature word near one of these is the
@@ -689,11 +694,183 @@ export async function deleteFaction(factionId) {
         }
     }
 
+    // ⚠️ AND THE UNLINKED ONES. A wandering monster keeps its flags in the
+    // token delta, not on a world actor, so a sweep of game.actors alone leaves
+    // every creature on every scene pointing at a faction that no longer
+    // exists. That is exactly the dangling-flag state that made eight creatures
+    // invisible to the reputation sweep.
+    for (const scene of (game.scenes ?? [])) {
+        for (const token of (scene.tokens ?? [])) {
+            if (token.actorLink) continue;              // handled above
+            try {
+                if (token.actor?.getFlag?.(MODULE_ID, "factionId") !== factionId) continue;
+                await token.actor.unsetFlag(MODULE_ID, "factionId");
+                await token.actor.unsetFlag(MODULE_ID, "factionRole").catch(() => {});
+                freed.push(`${token.name} (${scene.name})`);
+            } catch (err) {
+                console.warn(`${TAG} | could not release ${token?.name} from ${name}:`, err);
+            }
+        }
+    }
+
     delete data[factionId];
     await _serializedSave(data);
     console.log(`${TAG} | Deleted faction: ${name}`
         + (freed.length ? ` — released ${freed.length}: ${freed.join(", ")}` : ""));
     return { name, freed };
+}
+
+/**
+ * Register a faction that is being adopted from a NAMED source — scene
+ * intelligence, the world digest, or anything else that hands us a name that is
+ * meant to be canonical.
+ *
+ * ⚠️ WHY THIS EXISTS, AND IT COST A LIVE BUG. There were FIVE places that
+ * created a faction and only ONE of them checked whether that name already
+ * existed. The four that did not all minted a fresh random id, so accepting a
+ * canonical name the world already knew produced a SECOND faction sitting
+ * beside the real one, invisible in a list of hundreds.
+ *
+ * ⚠️ AND THE SECOND FAULT IS WORSE. Those four sites stamped the DROPPED
+ * CREATURE'S species onto the new faction. Drop a goblin at a mine, accept the
+ * canonical name "Mind Flayers", and you get a faction called Mind Flayers made
+ * of GOBLINS. It then matched every goblin in the world perfectly, because the
+ * matcher was doing exactly what it was told. Proven live 2026-08-22: a goblin
+ * was auto-assigned to it and renamed after it.
+ *
+ * A named faction's composition comes from ITS OWN NAME, the way every other
+ * identity in ACE does. The dropped creature is only the fallback for a name
+ * that says nothing about species.
+ *
+ * @param {object} candidate — the faction to register; `id` is ignored
+ * @param {object} [opts]
+ * @param {string} [opts.sceneName] — recorded as presence when adopting
+ * @param {string} [opts.droppedBase] — the dropped creature's base, used only as a fallback
+ * @returns {Promise<{faction:object, id:string, adopted:boolean}>}
+ */
+export async function registerNamedFaction(candidate, opts = {}) {
+    const { sceneName = "", droppedBase = "" } = opts;
+    const wanted = String(candidate?.name || "").trim();
+
+    // ── Already there? Join it. ──────────────────────────────────────────
+    if (wanted) {
+        const target = _normaliseFactionName(wanted);
+        for (const [id, existing] of Object.entries(_load())) {
+            if (_normaliseFactionName(existing?.name) !== target) continue;
+            if (sceneName) {
+                try {
+                    const { rememberPresence } = await import("./faction-lookup.mjs");
+                    await rememberPresence(id, sceneName);
+                } catch (_) { /* presence is a nicety, not the point */ }
+            }
+            console.log(`${TAG} | "${wanted}" already exists — joined it instead of creating a duplicate.`);
+            return { faction: { ...existing, id }, id, adopted: true };
+        }
+    }
+
+    // ── The name decides what it is made of. ─────────────────────────────
+    const fromName = inferCreatureBase({ name: wanted });
+    const faction = {
+        ...candidate,
+        id: foundry.utils.randomID(),
+        creatureBase: fromName || droppedBase || candidate?.creatureBase || "commoner",
+        members: Array.isArray(candidate?.members) ? candidate.members : [],
+        presence: sceneName ? [sceneName] : (candidate?.presence ?? []),
+        created: candidate?.created ?? Date.now(),
+        lastActive: Date.now(),
+    };
+    await saveFaction(faction);
+    console.log(`${TAG} | Registered "${faction.name}" (${faction.id})`
+        + ` — composed of ${faction.creatureBase}`
+        + (fromName ? " (read from its name)" : " (from the creature that was dropped)"));
+    return { faction, id: faction.id, adopted: false };
+}
+
+/**
+ * One spelling of a faction name, so two callers can agree it is the same one.
+ * Trailing punctuation, a leading "the" and casing are all noise.
+ */
+function _normaliseFactionName(name) {
+    return String(name || "")
+        .toLowerCase()
+        .replace(/^the\s+/, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+}
+
+/**
+ * Move a creature from one faction's roster to another's.
+ *
+ * ⚠️ WHY THIS EXISTS. Setting the `factionId` flag is only HALF of joining a
+ * faction. The other half is the roster — the faction's own `members` list.
+ * `assignToFaction` has always written both, but the Customize NPC dialog wrote
+ * only the flag, so changing the drop-down moved the creature's allegiance in
+ * one place and left it standing in the old faction's ranks forever.
+ *
+ * Live consequence, found 2026-08-22: a goblin auto-assigned on drop was
+ * changed by hand to a different tribe and kept showing as a Mind Flayer,
+ * because the Mind Flayers still listed him and the new tribe never did. Two
+ * records of the same fact, only one of them updated, is not a display bug.
+ *
+ * Both ids are optional, so this covers joining (no old), leaving (no new) and
+ * moving. It writes ONCE, whatever the combination.
+ *
+ * @param {string} memberId — actor id for a linked creature, token id for an unlinked one
+ * @param {string|null} fromFactionId
+ * @param {string|null} toFactionId
+ * @returns {Promise<{left: string|null, joined: string|null}>} names, for logging
+ */
+export async function moveFactionMember(memberId, fromFactionId, toFactionId) {
+    if (!memberId || fromFactionId === toFactionId) return { left: null, joined: null };
+
+    const data = _load();
+    let left = null;
+    let joined = null;
+    let dirty = false;
+
+    const from = fromFactionId ? data[fromFactionId] : null;
+    if (from && Array.isArray(from.members)) {
+        const before = from.members.length;
+        from.members = from.members.filter((m) => m !== memberId);
+        if (from.members.length !== before) { left = from.name; dirty = true; }
+    }
+
+    const to = toFactionId ? data[toFactionId] : null;
+    if (to) {
+        if (!Array.isArray(to.members)) to.members = [];
+        if (!to.members.includes(memberId)) { to.members.push(memberId); joined = to.name; dirty = true; }
+    }
+
+    if (dirty) await _serializedSave(data);
+    return { left, joined };
+}
+
+/**
+ * Repoint a roster entry from one id to another, in whatever faction holds it.
+ *
+ * ⚠️ An UNLINKED creature is listed by TOKEN id. Promoting it to a persistent
+ * actor gives it a brand new actor id and relinks the token, so the roster
+ * entry left behind points at nothing — the faction quietly loses a member the
+ * moment that member becomes important enough to keep.
+ *
+ * @param {string} oldId
+ * @param {string} newId
+ * @returns {Promise<string|null>} the faction name that was repaired, if any
+ */
+export async function repointFactionMember(oldId, newId) {
+    if (!oldId || !newId || oldId === newId) return null;
+
+    const data = _load();
+    for (const faction of Object.values(data)) {
+        if (!Array.isArray(faction?.members)) continue;
+        const at = faction.members.indexOf(oldId);
+        if (at === -1) continue;
+        if (faction.members.includes(newId)) faction.members.splice(at, 1);
+        else                                 faction.members[at] = newId;
+        await _serializedSave(data);
+        return faction.name ?? null;
+    }
+    return null;
 }
 
 /**
@@ -1439,6 +1616,20 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
     const creatureType = (actor.system?.details?.type?.value || "humanoid").toLowerCase();
     const creatureSubtype = (actor.system?.details?.type?.subtype || "").toLowerCase();
 
+    // What ACE thinks this creature is, pre-filled into the correction box so
+    // the GM only has to touch it when ACE got it wrong.
+    //
+    // ⚠️ resolveSpecies ALREADY EXISTS and already reads the GM's override
+    // first, then dnd5e's custom/subtype/type fields, then the base actor's
+    // name. Do not write a second one.
+    let detectedSpecies = "";
+    try {
+        const { resolveSpecies } = await import("./npc-identity.mjs");
+        detectedSpecies = resolveSpecies(actor, tokenDoc) || creatureSubtype || creatureType;
+    } catch (_) {
+        detectedSpecies = creatureSubtype || creatureType;
+    }
+
     // Resolve role chips for this creature
     const chips = ROLE_CHIPS[creatureBase] ?? ROLE_CHIPS[creatureType] ?? ROLE_CHIPS._default;
     const defaultRole = _getDefaultRole(creatureBase, cr);
@@ -1771,7 +1962,30 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 </label>
               </div>
               <div style="font-size:0.85em; color:#666; margin-top:4px; line-height:1.4;">
-                Auto = AI reads the portrait (requires vision-capable model). Pick a gender to lock it before bio generation.
+                Auto = ACE decides from the portrait and the statblock, then writes the answer down so the voice matches the name. Pick one to lock it.
+              </div>
+            </div>
+
+            <!-- What it is — the naming input the GM can correct -->
+            <!--
+              ⚠️ THIS IS ONE OF THE THREE THINGS THE NAMER GETS, and the only one
+              ACE can get wrong on its own. Johnny, 2026-08-23: "we could even
+              have a dropdown or a correction area, where we could say, hey, no,
+              this isn't a fucking goblin. This is a hobgoblin. You got that
+              wrong, buddy."
+              Pre-filled with what ACE worked out, so it is a CORRECTION SURFACE
+              and never a requirement. Naming still works when this dialog is
+              never opened, which it usually is not.
+            -->
+            <div style="margin-bottom:14px;">
+              <div style="font-size:1em; text-transform:uppercase; letter-spacing:0.05em; color:#8b6914; font-weight:bold; margin-bottom:6px;">
+                <i class="fas fa-paw"></i> What It Is
+              </div>
+              <input type="text" name="speciesOverride" value="${foundry.utils.escapeHTML(String(detectedSpecies || ""))}"
+                     placeholder="goblin, hobgoblin, drow, human..."
+                     style="width:100%; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#222; font-size:1em;">
+              <div style="font-size:0.85em; color:#666; margin-top:4px; line-height:1.4;">
+                Used to pick a fitting name. ACE read this off the statblock &mdash; correct it if it is wrong and the name will match.
               </div>
             </div>
 
@@ -1828,6 +2042,16 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                         // Read gender override (auto / male / female / androgynous)
                         const genderOverride = html.find('input[name="genderOverride"]:checked').val() || "auto";
 
+                        // What the GM says this creature is. Only recorded when
+                        // it DIFFERS from what ACE detected, so an untouched box
+                        // never writes a flag — a field nobody edited must not
+                        // become stored data.
+                        const typedSpecies = String(html.find('input[name="speciesOverride"]').val() ?? "").trim();
+                        const speciesOverride =
+                            (typedSpecies && typedSpecies.toLowerCase() !== String(detectedSpecies || "").toLowerCase())
+                                ? typedSpecies
+                                : "";
+
                         // Parse faction choice
                         let factionId = null;
                         let isNew = false;
@@ -1841,7 +2065,7 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                             factionId = factionChoice;
                         }
 
-                        resolve({ factionId, isNew, role, origin, originCustom, autoLink, rename, genderOverride });
+                        resolve({ factionId, isNew, role, origin, originCustom, autoLink, rename, genderOverride, speciesOverride });
                     }
                 },
                 skip: {
@@ -1885,6 +2109,24 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 const factionSelect = el.querySelector('select[name="factionChoice"]');
                 const infoPanel = el.querySelector('.ace-faction-info');
                 if (!factionSelect) return;
+
+                // ── ⚠️🔴 FILTERING A MENU MUST NEVER UN-CHOOSE WHAT WAS CHOSEN.
+                //
+                // This function replaces the whole option list. It never put the
+                // GM's current pick back, so the select silently fell to
+                // whatever now sat first — the top-scoring recommendation.
+                //
+                // Johnny, live 2026-08-23: "I picked the faction first, the
+                // Cragmaw whatever, and then I went and changed it from a local
+                // to elsewhere. Soon as I did that, it went back to Mind
+                // Flayers." Changing the ORIGIN silently discarded his FACTION.
+                // That is what started the whole Mind Flayers hunt.
+                //
+                // Captured here, restored at the end, and re-added to the list
+                // if the new filter dropped it. An explicit choice outranks a
+                // filter every time.
+                const chosenBefore = factionSelect.value;
+                const chosenLabel  = factionSelect.selectedOptions?.[0]?.textContent ?? "";
 
                 // Determine caps and scoring adjustments per origin
                 const isLocal = (origin === "this_scene" || origin === "nearby");
@@ -2001,10 +2243,28 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 factionSelect.style.setProperty('color', '#111', 'important');
                 factionSelect.style.setProperty('color-scheme', 'light', 'important');
 
-                // Update info panel for first option
-                const firstVal = factionSelect.value;
-                const firstMeta = newMeta[firstVal] || newMeta["__none__"];
-                if (infoPanel) infoPanel.innerHTML = _buildFactionInfoHtml(firstMeta);
+                // ── Put the GM's choice back ─────────────────────────────
+                if (chosenBefore) {
+                    const stillThere = [...factionSelect.options].some(o => o.value === chosenBefore);
+                    if (!stillThere) {
+                        // The new filter no longer lists it. Keep it anyway,
+                        // clearly marked, rather than overriding a decision the
+                        // GM already made.
+                        const grp = document.createElement("optgroup");
+                        grp.label = "Your choice";
+                        const opt = document.createElement("option");
+                        opt.value = chosenBefore;
+                        opt.textContent = chosenLabel || chosenBefore;
+                        grp.appendChild(opt);
+                        factionSelect.prepend(grp);
+                    }
+                    factionSelect.value = chosenBefore;
+                }
+
+                // Update the info panel for whatever is now actually selected.
+                const shownVal = factionSelect.value;
+                const shownMeta = newMeta[shownVal] || _factionMeta[shownVal] || newMeta["__none__"];
+                if (infoPanel) infoPanel.innerHTML = _buildFactionInfoHtml(shownMeta);
             }
 
             // ── Role chip selection highlighting ──
@@ -3101,7 +3361,6 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
               ui.notifications.info(`🃏 Wild Card — ${actor.name} is a far-flung outsider from ${pick.name}!`);
               // Create the faction in the local registry
               faction = {
-                id: foundry.utils.randomID(),
                 name: pick.name,
                 type: pick.type || template.type,
                 tier: pick.type || template.type,
@@ -3198,8 +3457,7 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                 // Create from scene intel
                 const canon = sceneIntel?.canonicalFactions?.[pick.canonIdx];
                 if (canon) {
-                    faction = {
-                        id: foundry.utils.randomID(),
+                    const candidate = {
                         name: canon.name,
                         type: canon.type || template.type,
                         tier: canon.type || template.type,
@@ -3211,16 +3469,22 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                         created: Date.now(), lastActive: Date.now(),
                         source: canon.source || "scene_intelligence",
                     };
-                    await saveFaction(faction);
-                    factionId = faction.id;
-                    ui.notifications?.info(`Canonical faction registered: ${faction.name}`);
+                    // ⚠️ NEVER `saveFaction` A NAMED FACTION DIRECTLY. This path takes a name
+                    // the world already knows, so it must join an existing entry rather than
+                    // mint a duplicate, and its composition must come from that NAME and not
+                    // from whichever creature happened to be dropped. See registerNamedFaction.
+                    const reg = await registerNamedFaction(candidate, { sceneName, droppedBase: creatureBase });
+                    faction   = reg.faction;
+                    factionId = reg.id;
+                    ui.notifications?.info(reg.adopted
+                        ? `Joined existing faction: ${faction.name}`
+                        : `Canonical faction registered: ${faction.name}`);
                 } else { isNew = true; }
             } else if (pick.source === "world_digest" && pick.worldIdx !== undefined) {
                 // Create from world graph
                 const wf = worldDigestFactions?.[pick.worldIdx];
                 if (wf) {
-                    faction = {
-                        id: foundry.utils.randomID(),
+                    const candidate = {
                         name: wf.name,
                         type: wf.type || template.type,
                         tier: wf.type || template.type,
@@ -3234,9 +3498,16 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                         _regionId: wf.region || wf._regionId || "",
                         isCanonical: true,
                     };
-                    await saveFaction(faction);
-                    factionId = faction.id;
-                    ui.notifications?.info(`World faction registered: ${faction.name}`);
+                    // ⚠️ NEVER `saveFaction` A NAMED FACTION DIRECTLY. This path takes a name
+                    // the world already knows, so it must join an existing entry rather than
+                    // mint a duplicate, and its composition must come from that NAME and not
+                    // from whichever creature happened to be dropped. See registerNamedFaction.
+                    const reg = await registerNamedFaction(candidate, { sceneName, droppedBase: creatureBase });
+                    faction   = reg.faction;
+                    factionId = reg.id;
+                    ui.notifications?.info(reg.adopted
+                        ? `Joined existing faction: ${faction.name}`
+                        : `World faction registered: ${faction.name}`);
                 } else { isNew = true; }
             } else if (pick.source === "none") {
                 // "No Faction" selected
@@ -3266,6 +3537,11 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                 if (result.genderOverride && result.genderOverride !== "auto") {
                     await tokenDoc.actor.setFlag(MODULE_ID, "genderOverride", result.genderOverride);
                 }
+                // The GM correcting the species is the single most useful thing
+                // he can tell the namer, so it must survive the dialog closing.
+                if (result.speciesOverride) {
+                    await tokenDoc.actor.setFlag(MODULE_ID, "speciesOverride", result.speciesOverride);
+                }
                 return { faction: null, isSpy: false, spyFaction: null, role: result.role || "" };
             } else if (result.isNew) {
                 isNew = true;
@@ -3285,6 +3561,9 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                     if (result.genderOverride && result.genderOverride !== "auto") {
                         await tokenDoc.actor.setFlag(MODULE_ID, "genderOverride", result.genderOverride);
                     }
+                    if (result.speciesOverride) {
+                        await tokenDoc.actor.setFlag(MODULE_ID, "speciesOverride", result.speciesOverride);
+                    }
                 } catch (err) { console.debug("ACE: Engine | faction-registry origin/autoLink flag save non-fatal:", err); }
             }
 
@@ -3292,8 +3571,7 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                 const canonIdx = parseInt(result.factionId.split(":")[1], 10);
                 const canon = sceneIntel?.canonicalFactions?.[canonIdx];
                 if (canon) {
-                    faction = {
-                        id: foundry.utils.randomID(),
+                    const candidate = {
                         name: canon.name,
                         type: canon.type || template.type,
                         tier: canon.type || template.type,
@@ -3305,11 +3583,17 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                         created: Date.now(), lastActive: Date.now(),
                         source: canon.source || "scene_intelligence",
                     };
-                    await saveFaction(faction);
-                    factionId = faction.id;
-                    role = result.role;
-                    ui.notifications?.info(`Canonical faction registered: ${faction.name}`);
-                    console.log(`${TAG} | Created canonical faction from scene intel: ${faction.name} (${faction.id})`);
+                    // ⚠️ NEVER `saveFaction` A NAMED FACTION DIRECTLY. This path takes a name
+                    // the world already knows, so it must join an existing entry rather than
+                    // mint a duplicate, and its composition must come from that NAME and not
+                    // from whichever creature happened to be dropped. See registerNamedFaction.
+                    const reg = await registerNamedFaction(candidate, { sceneName, droppedBase: creatureBase });
+                    faction   = reg.faction;
+                    factionId = reg.id;
+                    role      = result.role;
+                    ui.notifications?.info(reg.adopted
+                        ? `Joined existing faction: ${faction.name}`
+                        : `Canonical faction registered: ${faction.name}`);
                 } else {
                     isNew = true;
                     role = result.role;
@@ -3318,8 +3602,7 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                 const worldIdx = parseInt(result.factionId.split(":")[1], 10);
                 const worldFaction = worldDigestFactions?.[worldIdx];
                 if (worldFaction) {
-                    faction = {
-                        id: foundry.utils.randomID(),
+                    const candidate = {
                         name: worldFaction.name,
                         type: worldFaction.type || template.type,
                         tier: worldFaction.type || template.type,
@@ -3333,11 +3616,17 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                         _regionId: worldFaction.region || worldFaction._regionId || "",
                         isCanonical: true,
                     };
-                    await saveFaction(faction);
-                    factionId = faction.id;
-                    role = result.role;
-                    ui.notifications?.info(`World faction registered: ${faction.name}`);
-                    console.log(`${TAG} | Created world digest faction: ${faction.name} (${faction.id}) from ${faction._regionId || "unknown region"}`);
+                    // ⚠️ NEVER `saveFaction` A NAMED FACTION DIRECTLY. This path takes a name
+                    // the world already knows, so it must join an existing entry rather than
+                    // mint a duplicate, and its composition must come from that NAME and not
+                    // from whichever creature happened to be dropped. See registerNamedFaction.
+                    const reg = await registerNamedFaction(candidate, { sceneName, droppedBase: creatureBase });
+                    faction   = reg.faction;
+                    factionId = reg.id;
+                    role      = result.role;
+                    ui.notifications?.info(reg.adopted
+                        ? `Joined existing faction: ${faction.name}`
+                        : `World faction registered: ${faction.name}`);
                 } else {
                     isNew = true;
                     role = result.role;
@@ -3397,27 +3686,16 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
         // ALREADY in the registry. Without this test each of those became a
         // duplicate sitting next to the real entry. Also catches the model
         // taking the explicit EXISTING: escape hatch.
-        const wantedName = identity.useExistingName || identity.name;
-        let adopted = null;
-        try { adopted = _lookup?.findFactionByName?.(wantedName) ?? null; } catch (_) { adopted = null; }
-
-        if (adopted) {
-            faction   = adopted.faction;
-            factionId = adopted.id;
-            isNew     = false;
-            try { await _lookup.rememberPresence(factionId, sceneName); } catch (_) { /* non-fatal */ }
-            ui.notifications?.info(`Joined existing faction: ${faction.name}`);
-            console.log(`${TAG} | The generator named "${wantedName}", which already exists — joined it instead of creating a duplicate.`);
-        } else if (identity.useExistingName) {
-            // It named something that is not actually in the registry. Treat the
-            // name as an invention rather than losing the answer entirely.
-            console.log(`${TAG} | The generator pointed at "${identity.useExistingName}", which is not in the registry — creating it.`);
-            identity.name = identity.useExistingName;
-        }
+        // ⚠️ THE GUARD USED TO LIVE HERE AND ONLY HERE, and it leaned on `_lookup`
+        // being loaded — a module import inside a try, so a failure turned the
+        // whole collision test into a silent pass. The four OTHER creation sites
+        // in this function had no test at all, which is how a second faction
+        // called "Mind Flayers" came to exist beside the real one. There is now
+        // one door: registerNamedFaction, which reads the registry directly.
+        if (identity.useExistingName) identity.name = identity.useExistingName;
 
         if (isNew) {
-            faction = {
-                id: foundry.utils.randomID(),
+            const candidate = {
                 name: identity.name,
                 type: template.type,
                 tier: template.type,  // Power factions use their type as tier
@@ -3440,11 +3718,14 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                 lastActive: Date.now(),
             };
 
-            await saveFaction(faction);
-            factionId = faction.id;
+            const reg = await registerNamedFaction(candidate, { sceneName, droppedBase: creatureBase });
+            faction   = reg.faction;
+            factionId = reg.id;
+            isNew     = !reg.adopted;
 
-            ui.notifications?.info(`New faction created: ${faction.name} (${template.type})`);
-            console.log(`${TAG} | Created new faction: ${faction.name} (${faction.id}) — recorded at ${sceneName || "an unnamed scene"}.`);
+            ui.notifications?.info(reg.adopted
+                ? `Joined existing faction: ${faction.name}`
+                : `New faction created: ${faction.name} (${template.type})`);
         }
     } else if (factionId) {
         faction = getFaction(factionId);

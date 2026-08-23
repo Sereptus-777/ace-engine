@@ -10950,3 +10950,34 @@ body.ace-engine-hide-tah #token-hud .bar2 {
   white-space: normal;
   line-height: 1.35;
 }
+
+/* ─── Fallen creatures read as fallen ──────────────────────────────────────
+   Johnny, 2026-08-23: "I'm pulling dead guys back onto the scene... They're
+   fallen, they're dead."
+
+   The real protection is the drop refusal in fallen-guard.mjs. This is so a
+   corpse also LOOKS like one before he reaches for it, because a guard that
+   only speaks up after the mistake is a worse experience than one that makes
+   the mistake unlikely.
+
+   Deliberately dim rather than hidden: he still needs to find, read and edit
+   his dead. Contrast is kept above the readable floor rather than fading the
+   row to nothing. */
+#actors .directory-item.actor.ace-fallen-row,
+.directory .directory-item.actor.ace-fallen-row {
+  opacity: 0.62;
+  filter: grayscale(0.85);
+  cursor: not-allowed;
+}
+#actors .directory-item.actor.ace-fallen-row:hover,
+.directory .directory-item.actor.ace-fallen-row:hover {
+  opacity: 0.92;
+  filter: grayscale(0.5);
+}
+#actors .directory-item.actor.ace-fallen-row .entry-name::after,
+.directory .directory-item.actor.ace-fallen-row .entry-name::after {
+  content: " ☠";
+  color: #b04a4a;
+  font-weight: bold;
+  opacity: 0.9;
+}

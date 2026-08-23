@@ -161,8 +161,71 @@ function _warnBrowserFallback() {
     );
 }
 
-function _ttsMode() {
+/** Which voice provider the world is set to. */
+export function _voiceProvider() {
+    try { return game.settings.get(MODULE_ID, "voiceProvider") || "elevenlabs"; }
+    catch (_) { return "elevenlabs"; }
+}
+
+/**
+ * ⚠️🔴 SAY WHY THE LOCAL SERVER IS OUT, ONCE, ON SCREEN.
+ *
+ * The two ways a self-hosted speech server fails are both invisible: the server
+ * is not running, or the browser refused the request before it left the page.
+ * Both surface as the same generic fetch failure, so the reason is worked out
+ * in tts-local.mjs and repeated here verbatim rather than being flattened into
+ * "voice unavailable". A GM who is told "HTTPS blocks a plain http LAN address"
+ * fixes it in a minute; a GM told "voice failed" loses an evening.
+ */
+let _warnedLocalServer = false;
+function _warnLocalServerUnreachable(reason) {
+    if (_warnedLocalServer || !game.user?.isGM) return;
+    _warnedLocalServer = true;
+    console.warn(`${MODULE_ID} | Local speech server unavailable: ${reason}`);
+    ui.notifications?.warn(`ACE: the local speech server is not usable — ${reason}`, { permanent: true });
+}
+
+/**
+ * Decide which TTS path this client should take.
+ *   "local"   — generate on THIS client, broadcast the audio to everyone else.
+ *   "proxy"   — ask the GM to generate; we play the audio it sends back.
+ *   "browser" — free browser speechSynthesis (robotic), only if chosen.
+ *   "refuse"  — cannot produce the chosen voice; say so rather than play a robot.
+ *
+ * ⚠️🔴 THIS IS WHERE "IT WORKS ON MY MACHINE" WOULD LIVE (2026-08-23).
+ *
+ * For ElevenLabs, "does this client hold a key" is a fair test of whether it can
+ * generate. For a SELF-HOSTED server that test is meaningless and the natural
+ * substitute — "am I the GM" — is worse, because it is an assumption. A GM whose
+ * server is not running would be told to generate and would fail silently, and a
+ * player who genuinely can reach a shared server would be needlessly relayed.
+ *
+ * So for the local provider the question is answered by PROOF: this client
+ * generates only if it has actually reached the server. Everything else is
+ * relayed through the GM, which is safe because the relay already broadcasts
+ * finished audio as bytes — a player never needs to reach the server at all.
+ *
+ * Async because proving it requires a request. The result is cached per session.
+ */
+async function _ttsMode() {
     if (_userPickedBrowser()) return "browser";
+
+    if (_voiceProvider() === "localserver") {
+        let ready = { ok: false, reason: "the local speech module could not be loaded" };
+        try {
+            const { probe } = await import("./tts-local.mjs");
+            ready = await probe();
+        } catch (err) {
+            console.warn(`${MODULE_ID} | local speech module failed to load:`, err);
+        }
+        if (ready.ok) return "local";
+        if (!game.user.isGM && _gmAvailable()) return "proxy";
+        // ⚠️ The GM cannot reach their OWN server, or no GM is connected. Both
+        // are real faults with real fixes, and neither is "play a robot".
+        _warnLocalServerUnreachable(ready.reason);
+        return "refuse";
+    }
+
     const hasLocalKey = !!_getElevenLabsKey();
     if (hasLocalKey) return "local";
     if (!game.user.isGM && _gmAvailable()) return "proxy";
@@ -407,6 +470,19 @@ class TTSEngine {
     }
 
     async _fetch(text, voiceId, voiceSettings = {}) {
+        // ⚠️ ONE SWITCH, AT THE ONLY PLACE THAT TOUCHES A PROVIDER. Everything
+        // past this method — decoding, volume normalisation, pitch, the socket
+        // broadcast, the GM relay, creature sounds — is provider-agnostic and
+        // must stay that way. Adding a provider is adding a branch HERE and
+        // nothing else. Building a parallel speak path beside this one is the
+        // habit Johnny called out on 08-11 and it would double every bug.
+        if (_voiceProvider() === "localserver") {
+            // A local voice is a NAME on that server, not an ElevenLabs id, and
+            // an empty one is legitimate: most local engines have a default.
+            const { synthesize } = await import("./tts-local.mjs");
+            return synthesize(text, voiceId, voiceSettings);
+        }
+
         const apiKey = _getElevenLabsKey();
         if (!apiKey) return { status: "nokey" };
         if (!voiceId) return { status: "novoice" };
@@ -527,7 +603,7 @@ class TTSEngine {
     async speak(text, voiceId, voiceSettings = {}, pitch = 1.0) {
         if (!text?.trim()) return "empty";
 
-        const mode = _ttsMode();
+        const mode = await _ttsMode();
 
         if (mode === "browser") {
             // Console note only, once per session. Playing without an ElevenLabs
@@ -560,6 +636,15 @@ class TTSEngine {
             if (!_userPickedBrowser()) return _refuseRobot("nokey");
             await this._speakBrowser(text, pitch);
             return "ok";
+        }
+
+        // ⚠️ REFUSE MEANS SAY SO, NOT PLAY A ROBOT. The chosen provider cannot
+        // produce this line on this client and no relay is available. The reason
+        // was already put on screen by the mode resolver; going quiet here is
+        // what the whole "a wrong answer delivered confidently" rule forbids.
+        if (mode === "refuse") {
+            if (_userPickedBrowser()) { await this._speakBrowser(text, pitch); return "ok"; }
+            return _refuseRobot("error", "the local speech server could not be reached from this client");
         }
 
         if (mode === "proxy") {

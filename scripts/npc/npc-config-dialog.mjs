@@ -311,9 +311,35 @@ export class AIConfigDialog extends HandlebarsApplicationMixin(ApplicationV2) {
             await this.actor.setFlag(MODULE_ID, "secretLore",        fd.get("secretLore")  || "");
             // ⚠️ unsetFlag when cleared, so "no faction" really is none rather
             // than an empty string the matcher would have to interpret.
+            //
+            // ⚠️ AND THE ROSTER MOVES WITH THE FLAG. Belonging is recorded in two
+            // places: this flag, and the faction's own member list. This dialog
+            // used to write only the flag, so a creature auto-assigned on drop
+            // and corrected here kept showing up under the faction he had just
+            // been taken out of, because that faction still listed him and the
+            // new one never did. Changing one of two records is not a change.
             const chosenFaction = fd.get("factionId") || "";
+            const previousFaction = this.actor.getFlag(MODULE_ID, "factionId") || "";
             if (chosenFaction) await this.actor.setFlag(MODULE_ID, "factionId", chosenFaction);
             else               await this.actor.unsetFlag(MODULE_ID, "factionId");
+
+            if (chosenFaction !== previousFaction) {
+                try {
+                    const { moveFactionMember } = await import("./faction-registry.mjs");
+                    // Linked creatures are listed by actor id, unlinked by token id.
+                    const memberId = this.actor.isToken ? this.actor.token?.id : this.actor.id;
+                    const { left, joined } = await moveFactionMember(
+                        memberId, previousFaction || null, chosenFaction || null,
+                    );
+                    console.log(`${TAG} | ${this.actor.name}: roster updated`
+                        + (left   ? ` — removed from ${left}`  : "")
+                        + (joined ? ` — added to ${joined}`    : "")
+                        + (!left && !joined ? " — no roster held this creature" : ""));
+                } catch (err) {
+                    ui.notifications?.error(`Faction changed, but the roster could not be updated: ${err?.message ?? err}`);
+                    console.error(`${TAG} | Roster update failed:`, err);
+                }
+            }
             await this.actor.setFlag(MODULE_ID, "voiceId",           fd.get("voiceId")     || "");
             await this.actor.setFlag(MODULE_ID, "conversationRange", parseInt(fd.get("conversationRange")) || 30);
             await this.actor.setFlag(MODULE_ID, "chatDisabled",      fd.get("chatDisabled") === "on");

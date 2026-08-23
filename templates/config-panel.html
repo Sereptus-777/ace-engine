@@ -86,7 +86,10 @@
                                    min="{{rangeMin}}"
                                    max="{{rangeMax}}"
                                    step="{{rangeStep}}"
-                                   oninput="document.getElementById('ace-cfg-{{key}}').value = this.value" />
+                                   {{!-- Assigning .value fires no event, so the number box's
+                                         recorder never ran and Save could not see the drag.
+                                         Dispatch the input event the assignment skipped. --}}
+                                   oninput="const t=document.getElementById('ace-cfg-{{key}}'); t.value=this.value; t.dispatchEvent(new Event('input',{bubbles:true}));" />
                             <input type="number"
                                    id="ace-cfg-{{key}}"
                                    data-setting-key="{{key}}"
