@@ -22,6 +22,7 @@ const _FP = () =>
 // Silent uploader moved to the shared, corruption-proof module (the old
 // per-file copy raced with the other engines' copies and broke notifications).
 import { silentUpload as _silentUpload } from "./silent-upload.mjs";
+import { STORE_LIMIT, trimToSentence } from "./text-limits.mjs";
 
 // ── Base Class ──────────────────────────────────────────────
 
@@ -774,7 +775,7 @@ export class NpcStore extends CategoryStore {
     const key = name?.toLowerCase?.().trim() ?? "";
     const rec = this._data.npcs[key];
     if (!rec || !text) return;
-    rec.notes.push({ t: Math.floor(Date.now() / 1000), txt: text.slice(0, 300) });
+    rec.notes.push({ t: Math.floor(Date.now() / 1000), txt: trimToSentence(text, STORE_LIMIT.npcNote) });
     if (rec.notes.length > 50) rec.notes.shift();
     this._dirty = true;
   }
@@ -1016,7 +1017,7 @@ export class WorldStore extends CategoryStore {
     if (!text) return;
     this._data.worldNotes.push({
       t:        Math.floor(Date.now() / 1000),
-      txt:      text.slice(0, 500),
+      txt:      trimToSentence(text, STORE_LIMIT.worldNote),
       s:        scene ?? "",
       category: category ?? "note",
     });
@@ -1182,6 +1183,14 @@ export class HistoryStore extends CategoryStore {
   }
 
   get recordCount() { return this._data.events?.length ?? 0; }
+
+  /**
+   * Every recorded event, read-only.
+   * ⚠️ Added because the combat-memory backfill needed the log and the only way
+   * in was `_data.events`. A consumer forced to reach through an underscore is
+   * a missing accessor, not a clever consumer.
+   */
+  get events() { return Array.isArray(this._data.events) ? this._data.events : []; }
 
   _serialize() {
     return {
@@ -1363,7 +1372,7 @@ export class DeedStore extends CategoryStore {
     const id = `deed_${Math.floor(Date.now() / 1000)}_${Math.random().toString(36).slice(2, 5)}`;
     const record = {
       id,
-      text:      deed.text.slice(0, 300),
+      text:      trimToSentence(deed.text, STORE_LIMIT.deed),
       magnitude,
       scene:     (deed.scene ?? "").slice(0, 100),
       day,
@@ -1371,6 +1380,13 @@ export class DeedStore extends CategoryStore {
       timestamp: Math.floor(Date.now() / 1000),
       pcs:       Array.isArray(deed.pcs) ? deed.pcs.slice(0, 10) : [],
       source:    (deed.source ?? "manual:gm").slice(0, 30),
+      // ⚠️ A DEED HAD NO NOTION OF GOOD OR BAD, AND NO FACTION (added 2026-08-21).
+      // Which is why 187 recorded deeds moved the party's reputation by exactly
+      // nothing: the ladder was wired to kills and to nothing else. You cannot
+      // reward heroism you never labelled as heroism, or work out who should be
+      // grateful when nobody recorded who it was for.
+      valence:   ["heroic", "villainous", "neutral"].includes(deed.valence) ? deed.valence : "neutral",
+      factionId: (deed.factionId ?? "").slice(0, 64),
     };
 
     this._data.deeds.push(record);

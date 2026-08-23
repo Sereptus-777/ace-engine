@@ -18,6 +18,8 @@ const TAG = "ACE: Engine | Propagation";
 const STANDING_LADDER = ["revered", "friendly", "neutral", "suspicious", "hostile", "hated"];
 const NEUTRAL_INDEX = STANDING_LADDER.indexOf("neutral"); // 2
 
+import { speciesPropagates } from "./npc/faction-composition.mjs";
+
 function _api() { return game.modules.get(MODULE_ID)?.api ?? null; }
 
 /** Read a boolean setting, defaulting to true if it isn't registered yet. */
@@ -93,12 +95,22 @@ export async function propagateCombatEvent({ factionId, magnitude } = {}) {
     // 1. The victim's own faction — their kin was slain.
     worsen.set(factionId, steps);
 
-    // 2. Kin — same creature family ("word among their kind").
-    if (victim.creatureBase) {
+    // 2. Kin — word among their own kind.
+    //
+    // ⚠️ BOTH SIDES MUST BE DEFINED BY THE SPECIES. This used to fire on any
+    // shared creatureBase, which is how nine of Johnny's organisations, tagged
+    // "undead" because their descriptions said they FIGHT undead, came to hate
+    // his party for killing vampires. Now the species has to actually be the
+    // faction's identity, on the victim's side AND the hearer's: "Orc Legion"
+    // qualifies, "Royal Guard of Damara" never does, whatever it is made of.
+    //
+    // A dead human guard reaches the Damaran crown through allies and superiors
+    // below, not by every human on the continent taking it personally.
+    if (speciesPropagates(victim)) {
       for (const kin of findMatchingFactions(victim.creatureBase, victim.worldTag)) {
-        if (kin.id && kin.id !== factionId && !worsen.has(kin.id)) {
-          worsen.set(kin.id, Math.max(1, steps - 1));
-        }
+        if (!kin.id || kin.id === factionId || worsen.has(kin.id)) continue;
+        if (!speciesPropagates(kin)) continue;
+        worsen.set(kin.id, Math.max(1, steps - 1));
       }
     }
 

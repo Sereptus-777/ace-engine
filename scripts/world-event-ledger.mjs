@@ -197,6 +197,13 @@ export class WorldEventLedger {
       summary:   summary.slice(0, 400),
       source:    (e.source ?? "manual:gm").slice(0, 40),
       scene:     (e.scene ?? "").slice(0, 120),
+      // ⚠️ THESE TWO DECIDE WHETHER THE EVENT EVER MOVES ANYTHING, and this
+      // record used to drop them both on the floor. propagateDeed exits on its
+      // first line for anything with no valence, so an event stored without one
+      // is an event that can never have a consequence. 82 real deeds in
+      // Johnny's world reached the ledger and died here.
+      valence:   ["heroic", "villainous", "neutral"].includes(e.valence) ? e.valence : "neutral",
+      factionId: String(e.factionId ?? "").slice(0, 64),
       nouns: {
         victim:   e.victim ? String(e.victim).slice(0, 120) : "",
         location: (e.location ?? e.scene ?? "").slice(0, 120),

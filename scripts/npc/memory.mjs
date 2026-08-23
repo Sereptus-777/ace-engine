@@ -11,6 +11,7 @@ import { AIHandler }       from "./conversation-engine.mjs";
 import { logFactionEvent } from "./faction-memory.mjs";
 import { isAIFailure }     from "./ai-failure.mjs";
 import { getSecret, getSecretVault } from "../settings.mjs";
+import { STORE_LIMIT, trimToSentence } from "../text-limits.mjs";
 
 const MODULE_ID       = "ace-engine";
 const JOURNAL_PREFIX  = "[AI Memory]";
@@ -287,13 +288,27 @@ function _pushToAceEngine(actor, history, playerName, summary, extractedDeeds = 
         if (!api) return;
 
         const scene = canvas?.scene?.name ?? "";
-        const brief = (summary ?? "").slice(0, 200);
+        // ⚠️🔴 THIS CHOPPED EVERY CONVERSATION MID-WORD (fixed 2026-08-21).
+        // 138 of 178 recorded conversations in Johnny's campaign end in the
+        // middle of a sentence, some mid-word, because this cut the summary at
+        // 200 characters. The logger it feeds allows 500, so the 200 was
+        // arbitrary and threw away most of what the model had written. Five
+        // months of campaign history is permanently clipped and cannot be
+        // recovered; from here it keeps the whole thought.
+        //
+        // And it now cuts at a SENTENCE, never mid-word. A record ending
+        // "where a sacred artifa" is not a shorter record, it is a broken one.
+        const brief = trimToSentence(summary ?? "", STORE_LIMIT.conversation);
         api.logNote?.(`[NPC Conversation] ${playerName} spoke with ${actor.name}${scene ? ` at ${scene}` : ""}. ${brief}`);
 
         api.logConversationEncounter?.({
             actor,
             playerName,
-            summary: (summary ?? "").slice(0, 300),
+            // ⚠️ A SECOND, SEPARATE 300-CHARACTER CUT on the same conversation,
+            // twelve lines below the 200-character one. Neither knew about the
+            // other, which is what happens when a limit is typed inline instead
+            // of declared once.
+            summary: trimToSentence(summary ?? "", STORE_LIMIT.encounter),
             history
         });
         console.log(`ACE: Engine | Logged conversation data for ${actor.name}`);

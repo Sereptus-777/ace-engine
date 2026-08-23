@@ -13,7 +13,7 @@
 
 import { getDeprecationFor } from "./remote-catalog.mjs";
 import { getSecret, getSecretVault } from "./settings.mjs";
-import { setSecret, setSecretVault, isSecretKey } from "./settings.mjs";
+import { setSecret, setSecretVault, isSecretKey, fetchElevenLabsVoices } from "./settings.mjs";
 
 const MODULE_ID = "ace-engine";
 const { ApplicationV2 } = foundry.applications.api;
@@ -108,12 +108,33 @@ const PROVIDER_GUIDE = {
 
 // ─── Tab → Setting Key Map ────────────────────────────────────────────────
 // Single source of truth for which setting belongs in which tab.
+//
+// A tab has TWO key lists. `keys` is what a table actually touches and shows
+// straight away. `advancedKeys` is the numbers and limits, tucked into a
+// collapsed "Advanced settings" block at the bottom of that same tab.
+//
+// ⚠️ THERE IS NO LONGER A GLOBAL ADVANCED TAB, and there should never be one
+// again. Everything on it turned out to be NPC settings, sitting a whole tab
+// away from the NPC screen they belong to - plus the two token limits, which
+// were ALSO already inside AI Setup's own advanced block. The same two
+// settings appeared on two different screens, so whichever one you edited,
+// the other looked wrong. Advanced belongs INSIDE the thing it is advanced
+// about. Johnny, 2026-08-21: "probably every tab should have an advanced
+// panel."
+const ADVANCED_AI_KEYS = [
+    "apiUrl", "chatModel", "digestModel", "chatApiKey", "digestApiKey",
+    "gameSystem", "customInstructions", "maxContextTokens", "maxResponseTokens",
+];
+
+/** Everything a tab owns, open or collapsed. Search and Reset must use this. */
+const tabKeys = (tab) => [...(tab?.keys ?? []), ...(tab?.advancedKeys ?? [])];
 
 const TABS = [
     {
         id: "ai", label: "AI Setup", icon: "fa-solid fa-microchip",
         intro: "Four steps to get ACE talking. Pick a provider, paste its key, choose a model, then press Test — if the test comes back green, you're done.",
-        keys: ["aiProvider", "modelName", "chatModel", "digestModel", "apiKey", "apiUrl", "chatApiKey", "digestApiKey", "gameSystem", "customInstructions"],
+        keys: ["aiProvider", "modelName", "apiKey"],
+        advancedKeys: ADVANCED_AI_KEYS,
     },
     {
         id: "voice", label: "Voice & TTS", icon: "fa-solid fa-microphone",
@@ -123,7 +144,16 @@ const TABS = [
         // fallback voices go LAST because they only exist when ElevenLabs is
         // absent, and having them up top next to identically-worded "Narrator
         // Voice" settings is what made this screen unreadable.
-        keys: ["voiceProvider", "elevenLabsApiKey", "elevenLabsVoiceId", "elevenLabsFemaleVoiceId", "elevenLabsModel", "narrationVolume", "browserVoiceName", "browserFemaleVoiceName", "browserVoiceRate", "browserVoicePitch"],
+        // Five things a table actually sets: where the voice comes from, the
+        // key, the narrator, an optional second voice, and how loud it is.
+        keys: ["voiceProvider", "elevenLabsApiKey", "elevenLabsVoiceId", "elevenLabsFemaleVoiceId", "narrationVolume"],
+        // ⚠️ The two custom-voice-id settings were REGISTERED AND SURFACED
+        // NOWHERE - same bug the backup keys had. They are reachable now. They
+        // also matter far less since the pickers list the GM's own voices, but
+        // a GM who has the override switched on needs to be able to find it,
+        // because while it is on the narrator dropdown is being ignored.
+        advancedKeys: ["elevenLabsModel", "narratorVoiceOverrideEnabled", "narratorVoiceOverrideId",
+                       "browserVoiceName", "browserFemaleVoiceName", "browserVoiceRate", "browserVoicePitch"],
     },
     {
         id: "npc", label: "NPC Chat", icon: "fa-solid fa-comment",
@@ -131,11 +161,11 @@ const TABS = [
         // ⚠️ Only what a table actually touches. Every raw number moved to
         // Advanced: people want to install and play, not set budgets.
         keys: ["npcChatEnabled", "autoGenerateBio", "tokenDropAI", "alwaysRunItemAndLoot", "skipBioForSummons", "autoLinkSummons", "enableAutoLink", "defaultVoiceRegion"],
-    },
-    {
-        id: "advanced", label: "Advanced", icon: "fa-solid fa-sliders",
-        intro: "Numbers and limits. Everything here already has a sensible value and most tables never open this tab — have a quick look so you know what is here, then leave it alone until something specific needs changing.",
-        keys: ["npcKnowledgeBudget", "npcKnowledgeCap", "factionSpyChance", "factionWildcardChance", "npcWebpFolder", "maxContextTokens", "maxResponseTokens"],
+        // Every one of these came off the old global Advanced tab. All five are
+        // NPC settings and always were - how much a creature is allowed to know,
+        // how often a faction throws up a spy or a wildcard, and where the
+        // portrait art lives.
+        advancedKeys: ["npcKnowledgeBudget", "npcKnowledgeCap", "factionSpyChance", "factionWildcardChance", "npcWebpFolder"],
     },
     {
         id: "items", label: "Items & Attunement", icon: "fa-solid fa-link",
@@ -206,6 +236,8 @@ export class AceConfigPanel extends ApplicationV2 {
         // on Save Changes. Initialized in _renderHTML.
         this._apiKeyVault          = {};
         this._lastProviderForVault = null;
+        // ⚠️ SAVE WRITES A DIFF, NOT THE SCREEN (2026-08-21). See _saveAll.
+        this._pendingChanges       = {};
     }
 
     // ─── Render lifecycle ────────────────────────────────────────────────
@@ -242,14 +274,12 @@ export class AceConfigPanel extends ApplicationV2 {
             catch (_) { return ""; }
         })();
 
-        // One-time migration: seed the map from the live apiKey if empty
+        // If the store has nothing yet but a key is readable from an older
+        // name, show it. ⚠️ IN MEMORY ONLY - opening a panel must never write
+        // to storage. The boot migration is what persists this, once, and a
+        // write here would fire on every open including from a second GM.
         const isEmpty = !stored || Object.keys(stored).length === 0;
-        if (isEmpty && provider && apiKey) {
-            stored = { [provider]: apiKey };
-            // Persist the migration immediately (best-effort, GM-only)
-            try { setSecretVault(stored); }
-            catch (_) { /* non-blocking */ }
-        }
+        if (isEmpty && provider && apiKey) stored = { [provider]: apiKey };
 
         this._apiKeyVault          = { ...stored };
         this._lastProviderForVault = provider || null;
@@ -292,9 +322,13 @@ export class AceConfigPanel extends ApplicationV2 {
             // button inline — so the standalone banner/action blocks that used
             // to sit here are NOT emitted for it (duplicate data-action nodes
             // would break the querySelector-based wiring).
+            // The AI tab builds its own advanced block inside its guided flow.
+            // Every other tab gets one here, collapsed, at the bottom of its own
+            // settings - so "advanced" is always advanced about the thing you
+            // are already looking at.
             const settingsHtml = activeTab.id === "ai"
                 ? this._buildAiSetup()
-                : this._buildSettingsHTML(activeTab);
+                : this._buildSettingsHTML(activeTab) + this._buildAdvancedBlock(activeTab);
             paneHtml = `
                 <div class="ace-cfg-pane" data-tab="${activeTab.id}">
                     <header class="ace-cfg-pane-header">
@@ -340,7 +374,7 @@ export class AceConfigPanel extends ApplicationV2 {
         const q = query.toLowerCase();
         const results = [];
         for (const tab of TABS) {
-            for (const key of (tab.keys ?? [])) {
+            for (const key of tabKeys(tab)) {
                 const fullKey = `${MODULE_ID}.${key}`;
                 const meta = game.settings.settings.get(fullKey);
                 if (!meta) continue;
@@ -431,23 +465,62 @@ export class AceConfigPanel extends ApplicationV2 {
             chatModel:   { big: "Chat Model",   sub: "— NPC Conversations (speed-tier)" },
             digestModel: { big: "Digest Model", sub: "— Extraction Model" },
         };
-        for (const key of tab.keys) {
+        for (const key of tabKeys(tab)) {
             const fullKey = `${MODULE_ID}.${key}`;
             const meta = game.settings.settings.get(fullKey);
             if (!meta) {
                 console.warn(`ACE: Engine | Config panel — setting "${key}" not registered, skipping.`);
                 continue;
             }
-            const value = (() => {
-                try { return game.settings.get(MODULE_ID, key); }
-                catch (_) { return meta.default; }
+            // ⚠️🔴 A SECRET IS NEVER READ FROM ITS WORLD NAME (2026-08-21).
+            // This read `game.settings.get(MODULE_ID, "apiKey")` for every key
+            // including the secrets - and the migration deliberately BLANKS the
+            // world copy once the real value is safe in client storage. So the
+            // whole round trip destroyed the key:
+            //
+            //   1. paste the key, Save  -> written to apiKeySecure, world copy
+            //                              blanked. Test Connection goes green,
+            //                              because the test reads it properly.
+            //   2. close and reopen     -> this line reads the BLANKED world
+            //                              copy and renders an empty box.
+            //   3. Save again           -> the empty box is written back, which
+            //                              wipes apiKeySecure. Key gone.
+            //
+            // The ElevenLabs key survived all of this because it is registered
+            // client-scoped under its own name, so a plain get returns the real
+            // value. That difference is the whole reason one key vanished and
+            // the other did not.
+            //
+            // ⚠️ I FIXED EXACTLY THIS IN ACE FORGE and wrote a comment there
+            // saying a blank box "invites them to paste the key straight back
+            // into world scope" - and never applied it here. Same bug, same
+            // week, one module across.
+            const stored = (() => {
+                try {
+                    if (isSecretKey(key)) return getSecret(key) || "";
+                    return game.settings.get(MODULE_ID, key);
+                } catch (_) { return meta.default; }
             })();
+            // An edit the user has made but not yet saved wins, so typing in the
+            // search box mid-edit does not silently throw the edit away.
+            const value = this._pendingChanges[key] ?? stored;
             const isPassword = isMaskedKey(key);
             const inputHtml = this._buildInput(key, meta, value, isPassword);
             // Per-setting "extras" slot — currently used only for the digest
             // model "🐢 slow" warning. Populated/hidden in _wireEvents.
+            const VOICE_PICKERS = ["elevenLabsVoiceId", "elevenLabsFemaleVoiceId"];
             const extras = key === "digestModel"
                 ? `<div class="ace-cfg-extras" data-digest-warning style="grid-column:1 / -1; display:none;"></div>`
+                : VOICE_PICKERS.includes(key)
+                ? `<div class="ace-cfg-extras" style="grid-column:1 / -1; display:flex; gap:8px; align-items:center;">
+                       <button type="button" class="ace-cfg-plainbtn" data-action="previewVoice" data-target="${key}">
+                           <i class="fa-solid fa-play"></i> Hear it
+                       </button>
+                       <button type="button" class="ace-cfg-plainbtn" data-action="refreshVoices">
+                           <i class="fa-solid fa-rotate"></i> Load my ElevenLabs voices
+                       </button>
+                       <span class="ace-cfg-hint" data-voice-status></span>
+                   </div>`
                 : "";
             const featured = opts.plainLabels ? null : FEATURED_LABELS[key];
             const featuredClass = featured ? " ace-cfg-row--featured" : "";
@@ -638,10 +711,7 @@ export class AceConfigPanel extends ApplicationV2 {
     // the LAYOUT changes here — no settings were dropped in the rebuild.
 
     /** Settings that stay available but shouldn't crowd the main flow. */
-    static ADVANCED_AI_KEYS = [
-        "apiUrl", "chatModel", "digestModel", "chatApiKey", "digestApiKey",
-        "gameSystem", "customInstructions", "maxContextTokens", "maxResponseTokens",
-    ];
+    static ADVANCED_AI_KEYS = ADVANCED_AI_KEYS;
 
     _buildAiSetup() {
         const provider = (() => {
@@ -699,6 +769,22 @@ export class AceConfigPanel extends ApplicationV2 {
         `;
     }
 
+    /**
+     * The collapsed "Advanced settings" block at the foot of a tab. Renders
+     * nothing at all when a tab has no advanced keys, so adding one later is
+     * just a line in TABS.
+     */
+    _buildAdvancedBlock(tab) {
+        const keys = tab?.advancedKeys ?? [];
+        if (!keys.length) return "";
+        return `
+            <details class="ace-ai-advanced ace-cfg-advanced">
+                <summary>Advanced settings<span class="ace-ai-advanced-sub"> — numbers and limits for ${this._esc(tab.label)}</span></summary>
+                <div class="ace-ai-advanced-body">${this._buildSettingsHTML({ keys }, { plainLabels: true })}</div>
+            </details>
+        `;
+    }
+
     /** The plain-English card under the provider picker. Swapped live on change. */
     _buildProviderNote(provider) {
         const g = PROVIDER_GUIDE[provider] ?? PROVIDER_GUIDE.custom;
@@ -725,6 +811,24 @@ export class AceConfigPanel extends ApplicationV2 {
     // ─── Event wiring (manual, after _replaceHTML) ───────────────────────
 
     _wireEvents(content) {
+        // ── Every edit is recorded; Save writes only these ────────────────
+        // A field the user never touched never enters this map, so Save cannot
+        // write it. That is the whole protection, and it protects every setting
+        // on the panel rather than only the ones I remembered to special-case.
+        for (const el of content.querySelectorAll("[data-setting-key]")) {
+            const record = () => {
+                const key = el.dataset.settingKey;
+                if (!key) return;
+                if (el.type === "checkbox") this._pendingChanges[key] = el.checked;
+                else if (el.type === "number" || el.type === "range") {
+                    const v = Number(el.value);
+                    this._pendingChanges[key] = Number.isNaN(v) ? 0 : v;
+                } else this._pendingChanges[key] = el.value;
+            };
+            el.addEventListener("input", record);
+            el.addEventListener("change", record);
+        }
+
         // ── Search input ── re-renders on each keystroke to filter across
         // all tabs. Focus and caret position are restored after re-render so
         // typing stays smooth.
@@ -962,6 +1066,13 @@ export class AceConfigPanel extends ApplicationV2 {
         content.querySelector('[data-action="testConnection"]')?.addEventListener("click", () => this._testConnection(content));
         // Refresh Models (AI tab only) — wired in step #7 with live model fetch
         content.querySelector('[data-action="refreshModels"]')?.addEventListener("click", () => this._refreshModels(content));
+        content.querySelector('[data-action="refreshVoices"]')?.addEventListener("click", () => this._refreshVoices(content, false));
+        for (const b of content.querySelectorAll('[data-action="previewVoice"]')) {
+            b.addEventListener("click", () => this._previewVoice(content, b.dataset.target));
+        }
+        // Fill the pickers from the GM's own account as soon as the tab opens,
+        // quietly - a dropdown that only lists stock voices is the bug.
+        if (this._activeTab === "voice") this._refreshVoices(content, true);
 
         // ── Digest model slowness warning (highly visible) ───────────────
         // Local digest extraction takes 10–30 minutes per book vs ~30 seconds
@@ -1041,6 +1152,94 @@ export class AceConfigPanel extends ApplicationV2 {
     }
 
     // ─── Refresh Models — force live re-fetch from provider's API ────────
+    /**
+     * Fill the narrator / alternate voice pickers with the voices on the GM's
+     * OWN ElevenLabs account.
+     *
+     * ⚠️ THE STOCK LIST STAYS as the tail of the dropdown, and the currently
+     * saved voice is ALWAYS present even when the fetch fails or the id is not
+     * on the account any more. A picker that silently drops the value it is
+     * showing is how a setting changes itself behind the user's back.
+     */
+    async _refreshVoices(content, quiet = true) {
+        const selects = [...content.querySelectorAll('[data-setting-key="elevenLabsVoiceId"], [data-setting-key="elevenLabsFemaleVoiceId"]')]
+            .filter(el => el.tagName === "SELECT");
+        if (!selects.length) return;
+        const status = content.querySelector("[data-voice-status]");
+        const say = (t) => { if (status) status.textContent = t; };
+
+        say("Loading your voices…");
+        const { ok, voices, error } = await fetchElevenLabsVoices();
+        if (!ok || !voices.length) {
+            say(error ? `Could not load your voices: ${error}` : "No voices found on your account.");
+            // ⚠️ Loud only when they asked. Opening a tab must not throw a
+            // toast at somebody who has not set a key up yet.
+            if (!quiet) ui.notifications?.warn(`ACE Engine — ${error ?? "no voices returned"}. The built-in voices are still available.`);
+            return;
+        }
+
+        for (const sel of selects) {
+            const current = sel.value;
+            const isAlternate = sel.dataset.settingKey === "elevenLabsFemaleVoiceId";
+            const stock = [...sel.options].map(o => ({ value: o.value, label: o.textContent }));
+            sel.innerHTML = "";
+
+            // ⚠️ document.createElement, not `new Option`. Option is a genuine
+            // browser global, but the lint does not know it, and the one thing
+            // we never do is widen the globals list to quieten a rule - a false
+            // entry there hid two live bugs in August.
+            const opt = (label, value) => {
+                const o = document.createElement("option");
+                o.value = value;
+                o.textContent = label;
+                return o;
+            };
+
+            if (isAlternate) sel.appendChild(opt("— Use the narrator voice —", ""));
+
+            const group = document.createElement("optgroup");
+            group.label = "Your ElevenLabs voices";
+            for (const v of voices) {
+                group.appendChild(opt(v.category === "cloned" ? `${v.name} (yours)` : v.name, v.id));
+            }
+            sel.appendChild(group);
+
+            const legacy = document.createElement("optgroup");
+            legacy.label = "Built-in suggestions";
+            for (const o of stock) {
+                if (!o.value || voices.some(v => v.id === o.value)) continue;
+                legacy.appendChild(opt(o.label, o.value));
+            }
+            if (legacy.children.length) sel.appendChild(legacy);
+
+            // Never lose the saved value, even if it is not on the account.
+            if (current && ![...sel.options].some(o => o.value === current)) {
+                sel.appendChild(opt(`${current} (not on your account)`, current));
+            }
+            sel.value = current;
+        }
+        say(`${voices.length} voice${voices.length === 1 ? "" : "s"} loaded from your account.`);
+    }
+
+    /** Speak a sample line in whichever voice is selected right now. */
+    async _previewVoice(content, key) {
+        const sel = content.querySelector(`[data-setting-key="${key}"]`);
+        const voiceId = sel?.value || "";
+        if (!voiceId) {
+            ui.notifications?.info("Pick a voice first.");
+            return;
+        }
+        const { ttsEngine } = await import("./npc/tts.mjs");
+        const line = key === "elevenLabsFemaleVoiceId"
+            ? "This is the alternate voice. Not every character need sound the same."
+            : "This is your narrator. The road ahead is dark, and something is waiting on it.";
+        // ⚠️ speak() honours the no-robot rule, so a bad key or a dead voice id
+        // says why instead of previewing in Windows speech synthesis - which
+        // would make a broken voice sound like it worked.
+        try { await ttsEngine.speak(line, voiceId); }
+        catch (err) { ui.notifications?.error(`ACE Engine — could not play that voice: ${err?.message ?? err}`); }
+    }
+
     async _refreshModels(content) {
         const provider    = content.querySelector('[data-setting-key="aiProvider"]')?.value || "ollama";
         const currentModel = content.querySelector('[data-setting-key="modelName"]')?.value || "";
@@ -1147,30 +1346,76 @@ export class AceConfigPanel extends ApplicationV2 {
 
     async _saveAll() {
         if (!this.element) return;
-        let saved = 0, failed = 0;
 
-        // Capture the API key field BEFORE the generic save loop so we can
-        // also write it into the per-provider vault. The vault stays in sync
-        // with the active `apiKey` setting; it's used by the provider swap
-        // logic on next open.
-        const apiKeyField   = this.element.querySelector('[data-setting-key="apiKey"]');
+        // ⚠️🔴 SAVE WRITES WHAT CHANGED. NOT WHAT IS ON SCREEN. (2026-08-21)
+        //
+        // This used to walk every field in the panel and write all of them on
+        // every Save. That sounds harmless and is not: it means any field that
+        // renders wrongly, for any reason at all, gets that wrongness committed
+        // the moment the GM presses Save on something completely unrelated. It
+        // destroyed Johnny's API key exactly that way - the key box rendered
+        // empty because of a bad read, and Save faithfully wrote the emptiness
+        // over a perfectly good key.
+        //
+        // ACE Forge has always saved a diff and has never had this class of bug.
+        // Johnny, 2026-08-21: "whatever Forge is doing, then do it in the
+        // engine." So: a field the user never touched is never written, and a
+        // display bug can no longer become a data-loss bug.
+        const entries = Object.entries(this._pendingChanges);
         const providerField = this.element.querySelector('[data-setting-key="aiProvider"]');
-        const currentApiKey   = apiKeyField?.value ?? "";
-        const currentProvider = providerField?.value ?? "";
+        const provider = providerField?.value || (() => {
+            try { return game.settings.get(MODULE_ID, "aiProvider"); } catch (_) { return ""; }
+        })();
 
-        for (const el of this.element.querySelectorAll("[data-setting-key]")) {
-            const key = el.dataset.settingKey;
-            if (!key) continue;
+        // Nothing typed and no provider swap left pending: say so and stop.
+        if (!entries.length && !Object.keys(this._apiKeyVault).length) {
+            ui.notifications.info("ACE Engine — no changes to save.");
+            this.close();
+            return;
+        }
+
+        let saved = 0, failed = 0;
+        for (const [key, value] of entries) {
+            // The provider key is written once, below, straight into the store
+            // it actually lives in. Writing it here as well is what created a
+            // second copy in the first place.
+            if (key === "apiKey") continue;
             try {
-                let value;
-                if (el.type === "checkbox") value = el.checked;
-                else if (el.type === "number" || el.type === "range") {
-                    value = Number(el.value);
-                    if (Number.isNaN(value)) value = 0;
-                } else {
-                    value = el.value;
+                // ⚠️🔴 A PANEL SAVE MAY NEVER EMPTY A KEY THAT HAS A VALUE.
+                //
+                // 2026-08-22, the twelfth time Johnny lost his ElevenLabs key:
+                // browser storage still held the setting, and its value was an
+                // EMPTY STRING. Something in this panel recorded a blank for a
+                // masked field and the save wrote it out.
+                //
+                // I removed the old "was it touched" guard when Save became a
+                // diff, reasoning that an untouched field can never be in the
+                // diff. That reasoning was wrong. It protects against a field
+                // nobody interacted with; it does NOT protect against a stray
+                // input or change event carrying an empty value — autofill, a
+                // re-render, a password manager, a focus bounce. Any one of
+                // those puts "" in the diff legitimately.
+                //
+                // So the rule is now absolute and needs no reasoning about
+                // events: this panel cannot blank a key that currently holds
+                // one. Clearing a key deliberately is rare and can be done
+                // knowingly; losing one silently has cost eleven evenings.
+                if (isMaskedKey(key) && !String(value ?? "").trim()) {
+                    let existing = "";
+                    try {
+                        existing = isSecretKey(key)
+                            ? (getSecret(key) || "")
+                            : (game.settings.get(MODULE_ID, key) || "");
+                    } catch (_) { existing = ""; }
+                    if (existing) {
+                        console.warn(`ACE: Engine | Refused to erase "${key}" — the box was empty but a key is stored. ` +
+                                     `Nothing was changed.`);
+                        ui.notifications?.warn(
+                            `ACE Engine kept your saved ${key === "elevenLabsApiKey" ? "ElevenLabs" : "API"} key. ` +
+                            `The box was blank, and blanking is never treated as "delete it".`);
+                        continue;
+                    }
                 }
-                // ⚠️ Secrets NEVER go to a world setting — route them out.
                 if (isSecretKey(key)) await setSecret(key, value);
                 else await game.settings.set(MODULE_ID, key, value);
                 saved++;
@@ -1180,20 +1425,31 @@ export class AceConfigPanel extends ApplicationV2 {
             }
         }
 
-        // Persist the per-provider key vault. Merge in-memory swaps + the
-        // currently-visible key for the currently-selected provider.
+        // ── The provider keys, in the single place they live ──────────────
+        // Merges what is stored, any key stashed while swapping providers, and
+        // the one currently typed. One write, one home, no active-key copy.
         try {
-            const vault = { ...this._apiKeyVault };
-            if (currentProvider) {
-                if (currentApiKey) vault[currentProvider] = currentApiKey;
-                else delete vault[currentProvider];   // user blanked it intentionally
+            const vault = { ...getSecretVault(), ...this._apiKeyVault };
+            if (Object.prototype.hasOwnProperty.call(this._pendingChanges, "apiKey") && provider) {
+                const typed = String(this._pendingChanges.apiKey ?? "").trim();
+                if (typed) { vault[provider] = typed; saved++; }
+                // ⚠️ Same absolute rule as the masked fields above: a blank box
+                // never deletes a stored key. This line used to `delete` the
+                // vault entry with a comment saying the user meant it, which is
+                // the assumption that lost the AI key this morning.
+                else if (vault[provider]) {
+                    console.warn(`ACE: Engine | Refused to erase the ${provider} key — the box was empty but a key is stored.`);
+                    ui.notifications?.warn(`ACE Engine kept your saved ${provider} key. A blank box is never treated as "delete it".`);
+                }
             }
             await setSecretVault(vault);
             this._apiKeyVault = vault;
         } catch (err) {
-            console.warn("ACE: Engine | Config panel — failed to save apiKeysByProvider:", err);
+            console.warn("ACE: Engine | Config panel — failed to save API keys:", err);
+            failed++;
         }
 
+        this._pendingChanges = {};
         ui.notifications.info(`ACE Engine — saved ${saved} setting${saved === 1 ? "" : "s"}${failed ? ` (${failed} failed)` : ""}.`);
         this.close();
     }
@@ -1218,7 +1474,9 @@ export class AceConfigPanel extends ApplicationV2 {
             try { await game.settings.set(MODULE_ID, key, meta.default); }
             catch (e) { console.warn(`ACE: Engine | Reset failed for ${key}:`, e); }
         }
-        ui.notifications.info(`Reset ${tab.keys.length} setting${tab.keys.length === 1 ? "" : "s"} on ${tab.label} to defaults.`);
+        for (const key of tabKeys(tab)) delete this._pendingChanges[key];
+        const n = tabKeys(tab).length;
+        ui.notifications.info(`Reset ${n} setting${n === 1 ? "" : "s"} on ${tab.label} to defaults.`);
         this.render(false);
     }
 }

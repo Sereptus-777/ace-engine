@@ -13,7 +13,8 @@
 // EngineBridge.* calls now reach engine's own api by module id.
 
 import { isAIFailure } from "./ai-failure.mjs";
-import { getSecret, getSecretVault } from "../settings.mjs";
+import { getSecret } from "../settings.mjs";
+
 
 const MODULE_ID = "ace-engine";
 
@@ -103,6 +104,58 @@ export const FACTION_TEMPLATES = {
     wolf:      { type: "pack",      stability: "stone",   structure: "alpha + pack members",            canSpy: false },
     bear:      { type: "pack",      stability: "stone",   structure: "solitary or mated pair",          canSpy: false },
     beast:     { type: "pack",      stability: "stone",   structure: "alpha + pack members",            canSpy: false },
+
+    // ── Tribal peoples (2026-08-22) ───────────────────────────────────────
+    //
+    // ⚠️ WITHOUT A ROW HERE A CREATURE RESOLVES TO "commoner". resolveCreatureBase
+    // falls through to that default, so every bullywug in Johnny's world was
+    // being treated as a villager who might join a merchants' guild. Johnny:
+    // "the Bullywugs have tribes and shit like that, with shamans and all kinds
+    // of shit, so let's do the most realistic thing."
+    //
+    // These are the social creatures that appear in his campaign. Solitary ones
+    // are deliberately absent: an ancient dragon, an aboleth or an awakened
+    // shrub has no faction, and inventing one for them would be worse than
+    // leaving them alone.
+    bullywug:  { type: "tribe",     stability: "sand",    structure: "chieftain + shaman + warriors",   canSpy: true  },
+    troglodyte:{ type: "tribe",     stability: "sand",    structure: "chieftain + shaman + warriors",   canSpy: true  },
+    grimlock:  { type: "tribe",     stability: "sand",    structure: "chieftain + seers + hunters",     canSpy: true  },
+    "kuo-toa": { type: "tribe",     stability: "glass",   structure: "archpriest + whips + monitors",   canSpy: true  },
+    sahuagin:  { type: "tribe",     stability: "stone",   structure: "baron + priestesses + hunters",   canSpy: true  },
+    "yuan-ti": { type: "cult",      stability: "stone",   structure: "abomination + malisons + purebloods", canSpy: true },
+    duergar:   { type: "clan",      stability: "stone",   structure: "clan lord + overseers + smiths",  canSpy: true  },
+    ogre:      { type: "warband",   stability: "sand",    structure: "biggest one + the rest",          canSpy: false },
+    troll:     { type: "warband",   stability: "sand",    structure: "biggest one + the rest",          canSpy: false },
+    "hill giant":  { type: "steading", stability: "sand", structure: "chief + brutes",                  canSpy: false },
+    "frost giant": { type: "steading", stability: "stone", structure: "jarl + thanes + thralls",        canSpy: true  },
+    werewolf:  { type: "pack",      stability: "glass",   structure: "alpha + pack + new-bitten",       canSpy: true  },
+    wererat:   { type: "pack",      stability: "glass",   structure: "alpha + pack + new-bitten",       canSpy: true  },
+    vistani:   { type: "caravan",   stability: "stone",   structure: "elder + families + outriders",    canSpy: true  },
+    mongrelfolk:{ type: "warren",   stability: "glass",   structure: "keeper + the made + the kept",    canSpy: true  },
+
+    // ── Bound to a master (2026-08-22) ────────────────────────────────────
+    //
+    // ⚠️ THESE ARE NOT FREE AGENTS AND THEY ARE NOT NOBODY. A Strahd Zombie
+    // belongs to Strahd, a specter to whatever raised it, an imp to the devil
+    // who sent it. Killing one is a wound to its master, and that is precisely
+    // the connection that makes reputation feel like a world rather than a
+    // scoreboard. Left untyped they defaulted to "commoner" and belonged to
+    // nothing, so slaughtering Strahd's undead cost the party nothing with Strahd.
+    specter:   { type: "master",    stability: "stone",   structure: "necromancer/lich + undead",       canSpy: false },
+    spectre:   { type: "master",    stability: "stone",   structure: "necromancer/lich + undead",       canSpy: false },
+    shadow:    { type: "master",    stability: "stone",   structure: "necromancer/lich + undead",       canSpy: false },
+    wraith:    { type: "master",    stability: "stone",   structure: "necromancer/lich + undead",       canSpy: false },
+    wight:     { type: "master",    stability: "stone",   structure: "necromancer/lich + undead",       canSpy: false },
+    ghoul:     { type: "master",    stability: "stone",   structure: "necromancer/lich + undead",       canSpy: false },
+    ghast:     { type: "master",    stability: "stone",   structure: "necromancer/lich + undead",       canSpy: false },
+    mummy:     { type: "master",    stability: "granite", structure: "high priest + guardians",         canSpy: false },
+    ghost:     { type: "master",    stability: "glass",   structure: "the haunted place + its dead",    canSpy: false },
+    revenant:  { type: "master",    stability: "granite", structure: "the oath + those bound by it",    canSpy: true  },
+    "vampire spawn": { type: "master", stability: "stone", structure: "vampire lord + spawn",           canSpy: false },
+    "phantom warrior": { type: "master", stability: "granite", structure: "the fallen order + its dead", canSpy: false },
+    imp:       { type: "master",    stability: "stone",   structure: "archdevil + lesser devils",       canSpy: true  },
+    quasit:    { type: "master",    stability: "stone",   structure: "demon lord + lesser demons",      canSpy: true  },
+    abishai:   { type: "master",    stability: "stone",   structure: "Tiamat + her abishai",            canSpy: true  },
 };
 
 // ── CREATURE FAMILIES ────────────────────────────────────────────────────────
@@ -114,9 +167,21 @@ export const CREATURE_FAMILIES = {
     goblinoid: ["goblin", "hobgoblin", "bugbear"],            // Maglubiyet's children
     orcish:    ["orc", "half-orc"],                            // Gruumsh worshippers
     underdark: ["drow", "duergar", "svirfneblin"],             // Underdark races
-    undead:    ["skeleton", "zombie", "undead", "wight", "ghoul", "ghost", "wraith"],
+    // ⚠️ THE UNDEAD LIST WAS MISSING THE ONES HE ACTUALLY FIGHTS. Specters,
+    // shadows, phantom warriors and vampire spawn are most of the undead in
+    // this campaign — the Specter alone has been met 2,205 times — and none of
+    // them were in this list, so they could never share a master's faction with
+    // the skeletons and zombies standing beside them.
+    undead:    ["skeleton", "zombie", "undead", "wight", "ghoul", "ghast", "ghost",
+                "wraith", "specter", "spectre", "shadow", "mummy", "revenant",
+                "vampire spawn", "phantom warrior"],
     construct: ["construct", "golem"],
     canine:    ["wolf", "worg", "dire wolf"],
+    // Amphibious and subterranean peoples who live in tribes with shamans.
+    tribal:    ["bullywug", "troglodyte", "grimlock", "kuo-toa", "sahuagin", "lizardfolk"],
+    giantkin:  ["ogre", "troll", "hill giant", "frost giant"],
+    lycan:     ["werewolf", "wererat", "werebear", "wereboar"],
+    fiend:     ["imp", "quasit", "abishai"],
     criminal:  ["bandit", "thug", "pirate", "assassin"],       // Human criminal types
     military:  ["guard", "soldier", "knight", "veteran"],       // Organized military
     civilian:  ["commoner", "merchant", "priest", "bartender", "barmaid", "innkeeper"],
@@ -228,17 +293,96 @@ const _NORM = (s) => String(s || "").toLowerCase()
 
 // Creature-kind inference so monster factions can ride the kin-propagation web.
 // Empty string = a human/organisation faction (no creature kin).
+// ⚠ WORD BOUNDARIES BOTH ENDS. A leading-only boundary matched "Orcus",
+// the demon lord, and tagged him as an orc.
+// ⚠️🔴 THESE WERE STRINGS, AND EVERY ONE OF THEM WAS DEAD (2026-08-22).
+//
+// They were written as "\bgnolls?\b" — a STRING literal, not a regex literal.
+// In a JavaScript string, \b is the BACKSPACE character, not a word boundary.
+// So `new RegExp("\bgnolls?\b")` builds a pattern demanding a backspace byte on
+// either side of the word, which no faction name will ever contain.
+//
+// All seventeen hints matched nothing, silently, from the day they were
+// written. The consequences ran the whole length of the system:
+//
+//   - 448 of Johnny's 453 factions were recorded as being made of HUMANS,
+//     including ones literally named "Gnolls", "Kobolds", "Drow" and
+//     "Hobgoblin Legions", each with the reason "assumed — an organisation
+//     with no other evidence". The evidence was the name.
+//   - The faction matcher could therefore never place a monster: a bullywug
+//     scored zero against 453 human organisations, because the 91 monster
+//     factions he already owned were all wearing a human label.
+//   - Which is why I concluded ACE had to INVENT tribes with an AI, and built
+//     that, and Johnny quite rightly said: "I don't think there should be any
+//     AI-made-up factions. I think we have enough to choose from." He was
+//     right. There was never a shortage; there was a broken pattern.
+//
+// ⚠️ REGEX LITERALS FROM NOW ON. A regex literal cannot suffer this: /\b/ is a
+// word boundary and there is no string-escaping layer in between to eat it.
+// The control-character checker cannot catch this class either — the file on
+// disk is perfectly clean, and the corruption only exists at runtime.
 const _CREATURE_HINTS = [
-    ["hobgoblin", "hobgoblin"], ["bugbear", "bugbear"], ["goblinoid", "goblin"], ["goblin", "goblin"],
-    ["kobold", "kobold"], ["gnoll", "gnoll"], ["\\borc", "orc"], ["drow", "drow"], ["duergar", "duergar"],
-    ["lizardfolk", "lizardfolk"], ["yuan", "yuan-ti"], ["sahuagin", "sahuagin"], ["kuo-?toa", "kuo-toa"],
-    ["bullywug", "bullywug"], ["\\bgiant", "giant"], ["\\bogre", "ogre"], ["\\btroll", "troll"],
-    ["vampire|lich|wight|ghoul|zombie|skeleton|\\bundead|wraith|spectre|specter", "undead"],
+    [/\bhobgoblins?\b/i, "hobgoblin"], [/\bbugbears?\b/i, "bugbear"],
+    [/\bgoblinoids?\b/i, "goblin"],    [/\bgoblins?\b/i, "goblin"],
+    [/\bkobolds?\b/i, "kobold"],       [/\bgnolls?\b/i, "gnoll"],
+    [/\borcs?\b/i, "orc"],             [/\bdrow\b/i, "drow"],
+    [/\bduergar\b/i, "duergar"],       [/\blizardfolk\b/i, "lizardfolk"],
+    [/\byuan-?ti\b/i, "yuan-ti"],      [/\bsahuagin\b/i, "sahuagin"],
+    [/\bkuo-?toa\b/i, "kuo-toa"],      [/\bbullywugs?\b/i, "bullywug"],
+    [/\bgiants?\b/i, "giant"],         [/\bogres?\b/i, "ogre"],
+    [/\btrolls?\b/i, "troll"],         [/\bgrimlocks?\b/i, "grimlock"],
+    [/\btroglodytes?\b/i, "troglodyte"], [/\bmongrelfolk\b/i, "mongrelfolk"],
+    [/\bwere(wolf|wolves|rat|rats|bear|bears)\b/i, "werewolf"],
+    [/\bvistani\b/i, "vistani"],
+    [/\b(imps?|quasits?|abishai|devils?|archdevils?)\b/i, "imp"],
+    [/\b(demons?|balors?|mariliths?)\b/i, "quasit"],
+    [/\b(constructs?|golems?)\b/i, "golem"],
+    [/\b(vampires?|lich|liches|wights?|ghouls?|zombies?|skeletons?|undead|wraiths?|spectres?|specters?)\b/i, "undead"],
 ];
-function _inferCreatureBase(f) {
-    const text = [(f.name || ""), (f.type || ""), (f.description || ""), (f.purpose || "")].join(" ").toLowerCase();
+// Words that mean "we fight these", not "we are these". A description is where
+// a faction names its ENEMIES, so any creature word near one of these is the
+// opposite of an identity.
+const _OPPOSITION = /\b(combat|combating|fight|fighting|oppose|opposing|against|hunt|hunting|hunter|hunters|slay|slayer|slayers|bane|purge|purging|destroy|destroying|defend|defending|protect|protecting|resist|resisting|war)\b/i;
+
+/**
+ * What creature a faction is MADE OF. Empty for an organisation of people,
+ * which is correct and deliberate.
+ *
+ * ⚠️🔴 THIS READ THE DESCRIPTION, AND A DESCRIPTION NAMES YOUR ENEMIES (2026-08-21).
+ *
+ * The old version joined name + type + description + purpose and matched any
+ * creature word anywhere in it. So:
+ *
+ *   Royal Guard of Damara — "renowned for their skill in COMBATING UNDEAD"
+ *       -> tagged creatureBase "undead"
+ *   Followers of the Morninglord — "They oppose Strahd and his VAMPIRE spawn"
+ *       -> tagged creatureBase "undead"
+ *
+ * Nine of Johnny's organisations were labelled as the very thing they exist to
+ * destroy. Then kin propagation did exactly what it was built to do: every time
+ * the party killed an undead in Barovia, word spread "among their own kind" and
+ * worsened every faction sharing that base. The church of the sun god ended up
+ * HATING the party for killing vampires. The factions most opposed to undead
+ * were the ones most likely to say so in their description, and therefore the
+ * most likely to be mislabelled and turned against the party.
+ *
+ * The rule now: identity comes from the NAME, never the description. "Orc
+ * Legion" is orcs. "Royal Guard of Damara" is not undead, whatever its history
+ * says. And a creature word sitting next to an opposition word is an enemy
+ * being named, so it yields nothing.
+ */
+export function inferCreatureBase(f) {
+    // ⚠️ THE NAME. Nothing else. Description and purpose name a faction's
+    // ENEMIES, and `type` in Johnny's world had already been poisoned by the
+    // same bad import - Beholder Hives and Illithid Elder Brain Colonies were
+    // both carrying type "undead", which is how they survived a name-based
+    // pass. A field that inherited the bug cannot be used to repair it.
+    const name = String(f.name || "").toLowerCase();
+    if (_OPPOSITION.test(name)) return "";
     for (const [pat, base] of _CREATURE_HINTS) {
-        if (new RegExp(pat, "i").test(text)) return base;
+        // ⚠️ The pattern is already a compiled regex. Rebuilding it from a
+        // string is what let the escaping bug in; there is nothing to rebuild.
+        if (pat.test(name)) return base;
     }
     return "";
 }
@@ -248,7 +392,7 @@ function _buildLibraryEntry(f, keepId) {
         id:           keepId || f.id || foundry.utils.randomID(),
         name:         f.name || "(unnamed faction)",
         type:         f.type || "",
-        creatureBase: _inferCreatureBase(f),
+        creatureBase: inferCreatureBase(f),
         leader:       f.leader || "",
         scope:        f.scope || "",
         nation:       f.nation || "",
@@ -417,6 +561,13 @@ export function findMatchingFactions(creatureBase, worldTag) {
     const data = _load();
     const base = (creatureBase || "").toLowerCase().trim();
 
+    // ⚠️ NO BASE MEANS NO KIN, NOT EVERY KIN. 338 of Johnny's 453 factions are
+    // organisations and correctly carry an empty creature base. Matching an
+    // empty base against an empty base made all 338 "kin" to each other, so one
+    // death could ripple through every organisation in the world. One caller
+    // happened to guard against it; that guard was all that stood in the way.
+    if (!base) return [];
+
     // Build set of acceptable creature bases: this creature + all family members
     const familyBases = new Set(getFamilyMembers(base).map(b => b.toLowerCase()));
 
@@ -461,6 +612,34 @@ export function findByTier(tier, worldTag) {
  * @returns {Promise<FactionData>}
  */
 export async function saveFaction(factionData) {
+    // ⚠️ MATCH BEFORE YOU CREATE. Johnny's registry holds "Cult of the
+    // Dragon" three times, "Red Wizards of Thay" twice, and six duplicated names
+    // across thirteen entries, because a new id was minted whenever the caller
+    // did not supply one. Nothing ever asked whether that faction already
+    // existed under the same name.
+    //
+    // Only on CREATE. An explicit id means the caller is editing a known
+    // faction and renaming it is their business, including renaming it to
+    // something that collides.
+    if (!factionData?.id && factionData?.name) {
+        // ⚠️ Dynamic, for the same cycle reason as above.
+        let twin = null;
+        try {
+            const lk = await import("./faction-lookup.mjs");
+            const hit = lk.findFactionByName(factionData.name);
+            if (hit) twin = { ...hit.faction, id: hit.id };
+        } catch (_) { /* dedupe is a courtesy, never a blocker */ }
+        if (twin) {
+            console.log(`${TAG} | "${factionData.name}" already exists (${twin.id}) — updating it instead of creating a second.`);
+            factionData.id = twin.id;
+            // Keep anything the existing one knows that the new one does not.
+            for (const k of ["description", "purpose", "leader", "headquarters", "creatureBase", "tier", "bibleRef"]) {
+                if (!factionData[k] && twin[k]) factionData[k] = twin[k];
+            }
+            factionData.allies  = Array.from(new Set([...(twin.allies  || []), ...(factionData.allies  || [])]));
+            factionData.enemies = Array.from(new Set([...(twin.enemies || []), ...(factionData.enemies || [])]));
+        }
+    }
     if (!factionData?.id) {
         factionData.id = foundry.utils.randomID();
     }
@@ -478,12 +657,43 @@ export async function saveFaction(factionData) {
  * Delete a faction from the registry.
  * @param {string} factionId
  */
+/**
+ * Remove a faction, and let go of everyone who belonged to it.
+ *
+ * ⚠️🔴 THIS USED TO LEAVE ORPHANS, AND THAT IS HOW EIGHT CREATURES ENDED UP
+ * POINTING AT NOTHING (2026-08-22). Deleting the registry entry never touched
+ * the `factionId` flag on its members, so Death Knight, Lord Soth, Casimir
+ * Thornwick and five others were left carrying an id that resolved to nothing.
+ *
+ * The damage was silent and specific: the faction sweep only asked whether a
+ * flag was PRESENT, so it treated them as settled and skipped them forever,
+ * while deed propagation found no faction and exited without a word. Three
+ * 32-point kills evaporated on that alone.
+ *
+ * A creature whose faction is deleted is unaffiliated, not broken. Say so, and
+ * write it down, so the sweep can find them a new home.
+ */
 export async function deleteFaction(factionId) {
     const data = _load();
     const name = data[factionId]?.name || factionId;
+
+    const freed = [];
+    for (const actor of (game.actors ?? [])) {
+        try {
+            if (actor.getFlag(MODULE_ID, "factionId") !== factionId) continue;
+            await actor.unsetFlag(MODULE_ID, "factionId");
+            await actor.unsetFlag(MODULE_ID, "factionRole").catch(() => {});
+            freed.push(actor.name);
+        } catch (err) {
+            console.warn(`${TAG} | could not release ${actor?.name} from ${name}:`, err);
+        }
+    }
+
     delete data[factionId];
     await _serializedSave(data);
-    console.log(`${TAG} | Deleted faction: ${name}`);
+    console.log(`${TAG} | Deleted faction: ${name}`
+        + (freed.length ? ` — released ${freed.length}: ${freed.join(", ")}` : ""));
+    return { name, freed };
 }
 
 /**
@@ -2755,7 +2965,6 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
     // DEFAULT path for every token drop. ESLint's no-use-before-define is what
     // surfaced it; `node --check` cannot see this class of bug. Do not move
     // them back down.
-    const matching = findMatchingFactions(creatureBase, worldTag);
     let isNew = false;
 
     // ── The proper lookup, loaded once and shared by both paths ────
@@ -2774,6 +2983,21 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
         };
     } catch (err) {
         console.warn(`${TAG} | Faction lookup module unavailable — falling back to creature-base matching only:`, err);
+    }
+
+    // ── The candidate pool, scored across EVERY faction ──────────────────
+    // ⚠️ Computed HERE, after the dynamic import above, because this and
+    // decideFaction() are now the SAME scorer. They used to be two: one built
+    // this list for the AI, the other made the decision, and nothing kept them
+    // agreeing. The dynamic import is what stops faction-lookup and this file
+    // forming a cycle, so the ranking cannot happen before it.
+    let ranked = [];
+    try { ranked = _lookup?.rankFactions?.(actor, { sceneName, worldTag, limit: 12 }) ?? []; }
+    catch (err) { console.warn(`${TAG} | ranking failed, falling back to creature-base matching:`, err); }
+    const matching = ranked.length ? ranked : findMatchingFactions(creatureBase, worldTag);
+    if (ranked.length) {
+        console.log(`${TAG} | ${actor.name}: best faction matches — ` +
+            ranked.slice(0, 3).map(r => `${r.name} (${r._score}: ${r._why.slice(0, 2).join("; ")})`).join(" | "));
     }
 
     // ── Auto-scan (scene load) vs manual drop ──────────────────────

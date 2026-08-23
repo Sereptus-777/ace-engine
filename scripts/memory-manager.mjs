@@ -10,6 +10,11 @@ import {
   SceneStore, WorldStore, HistoryStore, DeedStore,
 } from "./category-store.mjs";
 import { DocumentStore } from "./document-store.mjs";
+// ⚠️ STATIC, NOT LAZY. Loaded on demand, the FIRST deed of every session would
+// be judged before the module resolved and go out neutral, which is exactly the
+// bug this file exists to fix. deed-valence imports nothing from here, so there
+// is no cycle, and it touches `game` only when called.
+import { enrichDeed } from "./deed-valence.mjs";
 
 const MODULE_ID    = "ace-engine";
 const SAVE_DEBOUNCE_MS = 2500;
@@ -21,6 +26,7 @@ const _FP = () =>
 
 // Silent uploader moved to the shared, corruption-proof module.
 import { silentUpload as _silentUpload } from "./silent-upload.mjs";
+import { STORE_LIMIT, trimToSentence } from "./text-limits.mjs";
 
 // Journal constants — hierarchical folder structure
 const ACE_FOLDER_NAME     = "\u{1F4D6} ACE Engine";
@@ -156,7 +162,7 @@ export class MemoryManager {
     // Cap at the same length as fresh-generated summaries (saveSessionSummary
     // slices at 2000). Bumped to 4000 here to allow GM-expanded summaries.
     const ok = this.world.updateSession(sessionNum, {
-      summary: newText.slice(0, 4000),
+      summary: trimToSentence(newText, STORE_LIMIT.sessionSummary),
       lastEditedFromJournal: Math.floor(Date.now() / 1000),
     });
     if (!ok) {
@@ -570,7 +576,7 @@ export class MemoryManager {
   logNarration(text, scene) {
     if (!text) return;
     this.history.push({
-      k: "narration", txt: text.slice(0, 300),
+      k: "narration", txt: trimToSentence(text, STORE_LIMIT.narration),
       s: scene ?? this._currentScene(),
     });
     this._scheduleSave("history");
@@ -580,7 +586,7 @@ export class MemoryManager {
   logNote(text, scene) {
     if (!text) return;
     this.history.push({
-      k: "note", txt: text.slice(0, 500),
+      k: "note", txt: trimToSentence(text, STORE_LIMIT.note),
       s: scene ?? this._currentScene(),
     });
     this.world.addWorldNote(text, scene ?? this._currentScene(), "note");
@@ -697,7 +703,7 @@ export class MemoryManager {
       if (rec) {
         rec.milestones.push({
           t: Math.floor(Date.now() / 1000),
-          txt: (text ?? "milestone").slice(0, 300),
+          txt: trimToSentence(text ?? "milestone", STORE_LIMIT.milestone),
           type: milestoneType ?? "story",
         });
         if (rec.milestones.length > 100) rec.milestones.shift();
@@ -717,7 +723,7 @@ export class MemoryManager {
 
     const loc = this.tiles.touchLocation(locationName);
     if (loc) {
-      loc.notes.push({ t: Math.floor(Date.now() / 1000), txt: text.slice(0, 500) });
+      loc.notes.push({ t: Math.floor(Date.now() / 1000), txt: trimToSentence(text, STORE_LIMIT.note) });
       if (loc.notes.length > 30) loc.notes.shift();
       this.tiles.markDirty();
     }
@@ -752,6 +758,18 @@ export class MemoryManager {
       session: deed.session ?? (this.world.getLastSession()?.num ?? 0),
     };
 
+    // ⚠️ DECIDE WHAT IT MEANS HERE, NOT LATER. Every deed used to be announced
+    // with a valence of "neutral" because nothing that calls logDeed has ever
+    // passed one, and propagateDeed discards neutral on its first line. 82 real
+    // deeds across five months moved nothing at all. Judging the deed at the
+    // moment it is recorded is the only way it can ever reach a consumer with
+    // meaning attached. See deed-valence.mjs.
+    try {
+      enrichDeed(enriched);
+    } catch (err) {
+      console.warn(`${MODULE_ID} | could not judge a deed (it is still saved):`, err);
+    }
+
     // One source of truth: record into the World-Event ledger when it's wired.
     // Falls back to the legacy DeedStore only if the ledger isn't attached yet,
     // so behaviour is unchanged until init injects the ledger.
@@ -762,7 +780,13 @@ export class MemoryManager {
         magnitude: enriched.magnitude,
         scene:     enriched.scene,
         actors:    enriched.pcs,
+        // ⚠️ CARRY BOTH SHAPES. The kill path passes `factions: [{id, name}]`
+        // while the store and every consumer read a bare `factionId` string.
+        // Passing only one of them is how the kill path's faction lookup, the
+        // single most careful piece of this pipeline, was silently discarded.
         factions:  enriched.factions,
+        factionId: enriched.factionId,
+        valence:   enriched.valence,
         source:    enriched.source,
         meta:      { day: enriched.day, session: enriched.session },
       });
@@ -781,6 +805,23 @@ export class MemoryManager {
 
     this._scheduleSaves(this._ledger ? ["history"] : ["deeds", "history"]);
     console.log(`${MODULE_ID} | Deed logged: "${record.summary ?? record.text}" (${record.magnitude}) [${record.source}]`);
+
+    // ⚠️ ANNOUNCE IT. Deeds were recorded and then sat there: 187 of them in
+    // Johnny's world, none of which ever moved a faction, because nothing was
+    // listening. Reputation responded to kills and to nothing else.
+    try {
+      // ⚠️ READ `enriched`, NOT `deed`. `deed` is the caller's original object
+      // and no caller has ever set either field. Judging the deed and then
+      // announcing the unjudged copy would have left this exactly as broken as
+      // it was, with a new file to prove it had been fixed.
+      Hooks.callAll(`${MODULE_ID}.deedRecorded`, {
+        ...record,
+        valence:   enriched.valence ?? record.valence ?? "neutral",
+        factionId: enriched.factionId ?? record.factionId ?? "",
+      });
+    } catch (err) {
+      console.warn(`${MODULE_ID} | a deedRecorded listener threw (the deed is still saved):`, err);
+    }
     return record;
   }
 
@@ -977,7 +1018,7 @@ export class MemoryManager {
       date:    date ?? new Date().toISOString().slice(0, 10),
       scene:   sceneName ?? this._currentScene(),
       party:   partyNames,
-      summary: summary.slice(0, 2000),
+      summary: trimToSentence(summary, STORE_LIMIT.sessionSummary),
     };
 
     this.world.addSession(record);
@@ -1330,26 +1371,110 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
 
   // ── Journal Folders (Hierarchical) ───────────────────────
 
-  /** Get or create the top-level folder (auto-renames legacy "📖 ACE" if found). */
+  /**
+   * THE one owner of the "📖 ACE Engine" journal folder, and the only thing
+   * allowed to create it.
+   *
+   * ⚠️🔴 TWO FILES WERE BOTH CREATING IT (2026-08-21). Johnny: "there are two
+   * Ace Engine folders." There were. This method created one coloured #c9a84c,
+   * and the Envoy consolidation pass in ace-engine.mjs created another coloured
+   * #d4af37, each finding nothing because it looked before the other had
+   * finished. Classic check-then-act: two independent creators, one name, no
+   * coordination, and whichever lost the race left an orphan sitting in his
+   * sidebar for months with nothing in it.
+   *
+   * There is one creator now. The consolidation pass calls this instead of
+   * making its own, and this merges any duplicates it finds on the way past.
+   *
+   * ⚠️ IT SAYS WHAT IT MOVED, AND IT ONLY DELETES A FOLDER THAT IS EMPTY AFTER
+   * MOVING. Never a folder with anything left in it, ever, for any reason.
+   */
   async _getAceFolder() {
-    let folder = game.folders?.find(
-      f => f.type === "JournalEntry" && f.name === ACE_FOLDER_NAME && !f.folder
-    );
-    if (!folder) {
-      // Check for legacy folder name and rename it
-      folder = game.folders?.find(
-        f => f.type === "JournalEntry" && f.name === ACE_FOLDER_LEGACY && !f.folder
-      );
-      if (folder) {
-        await folder.update({ name: ACE_FOLDER_NAME });
-        console.log(`${MODULE_ID} | Renamed journal folder "${ACE_FOLDER_LEGACY}" → "${ACE_FOLDER_NAME}"`);
-      } else {
-        folder = await Folder.create({
-          name: ACE_FOLDER_NAME, type: "JournalEntry", color: "#c9a84c",
-        });
+    const roots = (game.folders?.filter(
+      f => f.type === "JournalEntry" && !f.folder &&
+           (f.name === ACE_FOLDER_NAME || f.name === ACE_FOLDER_LEGACY)
+    ) ?? []);
+
+    if (!roots.length) {
+      return Folder.create({ name: ACE_FOLDER_NAME, type: "JournalEntry", color: "#c9a84c" });
+    }
+
+    // Weigh each candidate by what it actually holds, so the keeper is the one
+    // with the campaign in it rather than whichever happens to sort first.
+    const weigh = (f) =>
+      (game.journal?.filter(j => j.folder?.id === f.id).length ?? 0) +
+      (game.folders?.filter(x => x.folder?.id === f.id).length ?? 0);
+
+    roots.sort((a, b) => weigh(b) - weigh(a) || String(a.id).localeCompare(String(b.id)));
+    const keeper = roots[0];
+    if (keeper.name !== ACE_FOLDER_NAME) {
+      await keeper.update({ name: ACE_FOLDER_NAME });
+      console.log(`${MODULE_ID} | Renamed journal folder "${ACE_FOLDER_LEGACY}" → "${ACE_FOLDER_NAME}"`);
+    }
+
+    const others = roots.slice(1);
+    if (!others.length) return keeper;
+
+    let movedJournals = 0, movedFolders = 0, removed = 0, leftAlone = 0;
+    for (const dup of others) {
+      try {
+        const journals = game.journal?.filter(j => j.folder?.id === dup.id) ?? [];
+        if (journals.length) {
+          await JournalEntry.updateDocuments(journals.map(j => ({ _id: j.id, folder: keeper.id })));
+          movedJournals += journals.length;
+        }
+
+        // Subfolders move by name: if the keeper already has a "Session Logs",
+        // the duplicate's entries join it rather than creating a second one.
+        const subs = game.folders?.filter(x => x.folder?.id === dup.id) ?? [];
+        for (const sub of subs) {
+          const twin = game.folders?.find(
+            x => x.type === "JournalEntry" && x.folder?.id === keeper.id && x.name === sub.name && x.id !== sub.id
+          );
+          if (twin) {
+            const inner = game.journal?.filter(j => j.folder?.id === sub.id) ?? [];
+            if (inner.length) {
+              await JournalEntry.updateDocuments(inner.map(j => ({ _id: j.id, folder: twin.id })));
+              movedJournals += inner.length;
+            }
+          } else {
+            await sub.update({ folder: keeper.id });
+            movedFolders++;
+          }
+        }
+
+        // ⚠️ Re-read AFTER the moves. Deleting on the strength of a count taken
+        // before them is how a folder with contents gets removed.
+        const stillHasJournals = (game.journal?.filter(j => j.folder?.id === dup.id).length ?? 0);
+        const stillHasFolders  = (game.folders?.filter(x => x.folder?.id === dup.id).length ?? 0);
+        if (stillHasJournals || stillHasFolders) {
+          leftAlone++;
+          console.warn(`${MODULE_ID} | Duplicate ACE folder still holds ` +
+            `${stillHasJournals} journal(s) and ${stillHasFolders} folder(s) — LEFT IN PLACE, nothing deleted.`);
+          continue;
+        }
+        await dup.delete();
+        removed++;
+      } catch (err) {
+        console.warn(`${MODULE_ID} | Could not merge a duplicate ACE folder:`, err);
+        leftAlone++;
       }
     }
-    return folder;
+
+    if (movedJournals || movedFolders || removed) {
+      const parts = [];
+      if (movedJournals) parts.push(`${movedJournals} journal${movedJournals === 1 ? "" : "s"}`);
+      if (movedFolders)  parts.push(`${movedFolders} subfolder${movedFolders === 1 ? "" : "s"}`);
+      const what = parts.length ? `moved ${parts.join(" and ")} into it, and ` : "";
+      ui.notifications?.info(
+        `ACE Engine found ${roots.length} journal folders called "${ACE_FOLDER_NAME}". ` +
+        `Kept the one holding your campaign, ${what}removed ${removed} empty duplicate${removed === 1 ? "" : "s"}.` +
+        (leftAlone ? ` ${leftAlone} was left alone because it still had contents.` : ""),
+        { permanent: true });
+      console.log(`${MODULE_ID} | Merged ACE journal folders: kept ${keeper.id}, ` +
+        `moved ${movedJournals} journal(s) + ${movedFolders} folder(s), deleted ${removed} empty, left ${leftAlone}.`);
+    }
+    return keeper;
   }
 
   /** Get or create a subfolder (auto-renames legacy "NPC"→"NPC Profiles" etc.). */
@@ -1433,6 +1558,21 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
     const rec = this.npcs.getRecord(npcName);
     if (!rec) return false;
 
+    // ⚠️ THIS GATE USED TO ASK THE WRONG QUESTION. Every test below was a
+    // measure of how OFTEN a thing had been seen — linked, or 2+ encounters,
+    // or among the 20 most recent — and not one of them asked whether the thing
+    // was a CREATURE. A dining table walked in through the 20-most-recent
+    // clause on a single sighting, and so did every map template and stray
+    // image import. 475 profiles, median length 148 characters.
+    //
+    // The identity test is now the first thing asked, and it is decisive.
+    // See npc/journal-identity.mjs.
+    if (this._journalIdentity) {
+      const verdict = this._journalIdentity.classify(npcName, rec);
+      if (verdict.kind === "thing") return false;
+      return true;   // a person or a kind of creature both deserve a page
+    }
+
     // Linked actors always qualify
     if (rec.actorId) {
       const actor = game.actors?.get(rec.actorId);
@@ -1460,6 +1600,12 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
     // "Journal sync complete — N entries" line at the end. The 500+ debug
     // lines per world load were drowning out real warnings/errors. Errors
     // (try/catch below) still log so genuine failures aren't lost.
+    // ⚠️ LOAD THE CLASSIFIER BEFORE THE GATE ASKS IT ANYTHING. _isNpcJournalWorthy
+    // reads this._journalIdentity, which only exists once the modules below have
+    // resolved. Checking first and loading afterwards would mean the very first
+    // NPC of every session was judged by the old, broken rule.
+    await this._journalPages();
+
     if (!content && !this._isNpcJournalWorthy(npcName)) {
       return;
     }
@@ -1468,17 +1614,57 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       const folder = await this._getAceSubfolder(ACE_SUB_NPC);
       const journal = await this._getOrCreateJournal(folder, npcName);
 
-      let htmlContent;
+      // A caller-supplied body is a deliberate override and keeps the old shape.
       if (content) {
-        htmlContent = `<div>${content.replace(/\n/g, "<br>")}</div>`;
-      } else {
-        htmlContent = this._buildNpcHtml(npcName);
+        await this._upsertJournalPage(journal, "Memory",
+          `<div>${content.replace(/\n/g, "<br>")}</div>`);
+        return;
       }
 
-      await this._upsertJournalPage(journal, "Memory", htmlContent);
+      // ⚠️ FOUR PAGES, NOT ONE STAT DUMP. Across all 578 journals ACE had
+      // written 0 cross-links, 0 portraits and 0 ownership rules, and 509 of
+      // them were a single page. Foundry offers a linked, multi-page,
+      // permissioned document and none of it was being used, which is why the
+      // journals read like a log file: they were one.
+      const pages = await this._journalPages();
+      if (!pages) {
+        await this._upsertJournalPage(journal, "Memory", this._buildNpcHtml(npcName));
+        return;
+      }
+      const rec = this.npcs.getRecord(npcName);
+      const verdict = this._journalIdentity.classify(npcName, rec);
+      const built = verdict.kind === "creature"
+        ? pages.buildBestiaryPages(verdict.name, { records: rec ? [rec] : [] })
+        : pages.buildPersonPages(rec, { actor: verdict.actor });
+      await pages.writePages(journal, built, pages.buildLinkIndex());
     } catch (err) {
       console.error(`${MODULE_ID} | writeNpcJournal failed for "${npcName}":`, err);
     }
+  }
+
+  /**
+   * Load the journal builders once and hang them on the instance.
+   *
+   * ⚠️ Loaded lazily rather than imported at the top because these read
+   * `game.actors` and the compendium index, neither of which exists when this
+   * file is first evaluated. Returns null rather than throwing so a failure
+   * here degrades to the old single-page format instead of losing the journal.
+   */
+  async _journalPages() {
+    if (this._journalPagesModule !== undefined) return this._journalPagesModule;
+    try {
+      const [identity, pages] = await Promise.all([
+        import("./npc/journal-identity.mjs"),
+        import("./npc/journal-pages.mjs"),
+      ]);
+      await identity.loadStatblockNames();
+      this._journalIdentity = identity;
+      this._journalPagesModule = pages;
+    } catch (err) {
+      console.warn(`${MODULE_ID} | journal builders unavailable, using the old format:`, err);
+      this._journalPagesModule = null;
+    }
+    return this._journalPagesModule;
   }
 
   /**
@@ -1595,15 +1781,24 @@ Write the session summary now. Be vivid but concise \u2014 this is a campaign jo
       const folder = await this._getAceSubfolder(ACE_SUB_PC);
       const journal = await this._getOrCreateJournal(folder, displayName);
 
-      let htmlContent;
       if (content) {
-        htmlContent = `<div>${content.replace(/\n/g, "<br>")}</div>`;
-      } else {
-        htmlContent = this._buildPcHtml(actorId);
+        await this._upsertJournalPage(journal, "Memory",
+          `<div>${content.replace(/\n/g, "<br>")}</div>`);
+        return;
       }
 
-      await this._upsertJournalPage(journal, "Memory", htmlContent);
-      // Per-PC log removed — full sync emits one summary at the end.
+      // ⚠️ READ THE CHARACTER, NOT THE COPY. The old page printed rec.class and
+      // rec.level straight out of the store, so Chudd's journal said 7th level
+      // for a 9th-level druid and Syrax's said 7th when Warlock 7 / Paladin 2
+      // totals 9. Species was never printed at all because ACE never recorded
+      // it: in dnd5e it is an embedded Item, not a field.
+      const pages = await this._journalPages();
+      if (!pages) {
+        await this._upsertJournalPage(journal, "Memory", this._buildPcHtml(actorId));
+        return;
+      }
+      const actor = game.actors?.get(actorId) ?? game.actors?.getName?.(displayName) ?? null;
+      await pages.writePages(journal, pages.buildPcPages(rec, { actor }), pages.buildLinkIndex());
     } catch (err) {
       console.error(`${MODULE_ID} | writePcJournal failed:`, err);
     }

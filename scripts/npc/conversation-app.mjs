@@ -1243,35 +1243,91 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     //  the flaw in the first version of this code.
     // ═══════════════════════════════════════════════════════════════════════
 
+    /**
+     * Fill the microphone picker, and tell the truth about what it controls.
+     *
+     * ⚠️🔴 THE PICKER WAS LYING (2026-08-21). The note above this method used to
+     * claim that holding a chosen device open with getUserMedia makes speech
+     * recognition follow it. IT DOES NOT. Johnny's console said "listening on
+     * Mic In (Elgato Wave:3)" while the recogniser heard nothing at all, and
+     * dictation only started working when he changed the microphone in CHROME'S
+     * OWN site settings. Our dropdown had never had any say in it.
+     *
+     * webkitSpeechRecognition takes no device argument and always uses the
+     * microphone Chrome itself is set to. So this picker chooses which device
+     * the LEVEL METER listens to, and nothing more. Presenting it as the input
+     * device is what sent him round in circles changing settings that could not
+     * possibly have helped.
+     *
+     * So the picker now shows Chrome's actual dictation device, selects it, and
+     * marks it. Johnny: "we've got to immediately sync the browser microphone
+     * to the NPC chat, even if it's the wrong one. At least the person will
+     * know, hey, that's not my microphone that I'm using currently."
+     */
     async _initMicPicker() {
         const sel = this._micSelect;
         if (!sel) return;
         try {
             // Labels stay hidden until the site has microphone permission, so a
-            // fresh player would see "Microphone 1, 2, 3". Ask once, release at
-            // once — we only wanted the names.
+            // fresh player would see "Microphone 1, 2, 3". Ask once — and while
+            // we have the stream, read WHICH device Chrome handed us. That is
+            // the one it will dictate from, and it is the only way to know.
+            let chromeId = "", chromeLabel = "";
             try {
                 const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const track = probe.getAudioTracks?.()[0];
+                chromeId    = track?.getSettings?.().deviceId ?? "";
+                chromeLabel = track?.label ?? "";
                 probe.getTracks().forEach(t => t.stop());
             } catch (_) { /* denied — fall through with generic labels */ }
 
             const devices = (await navigator.mediaDevices.enumerateDevices())
                 .filter(d => d.kind === "audioinput");
-            const saved = game.settings.get(MODULE_ID, "micDeviceId") ?? "";
+            if (!chromeLabel && chromeId) {
+                chromeLabel = devices.find(d => d.deviceId === chromeId)?.label ?? "";
+            }
 
-            sel.innerHTML = '<option value="">Default microphone</option>';
+            sel.innerHTML = "";
             for (const d of devices) {
                 const o = document.createElement("option");
                 o.value = d.deviceId;
-                o.textContent = d.label || `Microphone ${sel.options.length}`;
+                const isChromes = chromeId && d.deviceId === chromeId;
+                o.textContent = (d.label || `Microphone ${sel.options.length + 1}`)
+                              + (isChromes ? "  ✓ Chrome is using this" : "");
                 sel.appendChild(o);
             }
-            if (saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
+            if (!devices.length) {
+                const o = document.createElement("option");
+                o.value = ""; o.textContent = "No microphone found";
+                sel.appendChild(o);
+            }
+
+            // ⚠️ SELECT WHAT CHROME IS ACTUALLY USING, not what we saved. A
+            // saved preference that the recogniser ignores is worse than no
+            // preference: it reads as a working setting.
+            if (chromeId && [...sel.options].some(o => o.value === chromeId)) {
+                sel.value = chromeId;
+                try { await game.settings.set(MODULE_ID, "micDeviceId", chromeId); } catch (_) {}
+            }
+
+            this._chromeMicId    = chromeId;
+            this._chromeMicLabel = chromeLabel;
+            if (chromeLabel) {
+                sel.title = `Chrome dictates from "${chromeLabel}". To change it, click the padlock in the address bar, then Site settings, then Microphone.`;
+            }
 
             sel.addEventListener("change", async () => {
                 try { await game.settings.set(MODULE_ID, "micDeviceId", sel.value); } catch (_) {}
-                // Show the new choice working (or not) straight away.
                 this._startLevelMeter(sel.value, 4000);
+                // Changing this does NOT change what dictation listens to. Say
+                // so at the moment they change it, not after it fails.
+                if (this._chromeMicId && sel.value !== this._chromeMicId) {
+                    ui.notifications.warn(
+                        `That changes the level meter only. Dictation always uses the microphone Chrome is set to, ` +
+                        `which is "${this._chromeMicLabel || "its default"}". To change that, click the padlock in the ` +
+                        `address bar, then Site settings, then Microphone, then reload.`,
+                        { permanent: true });
+                }
             });
             sel.addEventListener("click", ev => ev.stopPropagation());
         } catch (err) {
@@ -1564,7 +1620,10 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 if (this._meterLoudest > 4) return;          // heard something — fine
                 const dev = this._micSelect?.selectedOptions?.[0]?.textContent ?? "your default microphone";
                 ui.notifications.warn(
-                    `No sound is reaching the browser from "${dev}". Pick a different microphone in the dropdown beside the mic button — virtual devices (Wave Link, Voicemeeter, OBS, NVIDIA Broadcast) are often silent unless that software is running.`,
+                    `No sound is reaching the browser from "${dev}". ⚠️ The dropdown here only feeds the level bar — ` +
+                    `dictation always uses the microphone CHROME is set to. Click the padlock in the address bar, then ` +
+                    `Site settings, then Microphone, and choose the one you actually speak into. Virtual devices ` +
+                    `(Wave Link, Voicemeeter, OBS, NVIDIA Broadcast) are often silent unless that software is running.`,
                     { permanent: true });
                 console.warn(`${MODULE_ID} | Mic: 5s of silence from "${dev}" — peak level ${this._meterLoudest}.`);
             }, 5000);
@@ -1683,11 +1742,13 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (this._micDeafRetried) {
             this._stopMic({ send: false });
             ui.notifications.error(
-                "Your microphone is working - the level bar can see it - but this browser's speech " +
-                "recogniser is getting no audio from it. That is almost always another program holding " +
-                "the microphone exclusively: a dictation tool (Wispr Flow, Dragon), a meeting app, or a " +
-                "virtual device like Wave Link, Voicemeeter, OBS or NVIDIA Broadcast. Close it, or pick " +
-                "the plain hardware microphone in the dropdown. Typing always works.",
+                "Your microphone is working, the level bar can see it, but this browser's speech recogniser is "
+                + "getting no audio from it. 👉 THE USUAL FIX: click the padlock in the address bar, then Site "
+                + "settings, then Microphone, choose the one you actually speak into, and reload. ⚠️ The dropdown "
+                + "in this window does NOT control dictation. Chrome decides that, and the two are often "
+                + "different. If Chrome is already on the right one, another program is holding the microphone "
+                + "exclusively: a dictation tool (Wispr Flow, Dragon), a meeting app, or a virtual device like "
+                + "Wave Link, Voicemeeter, OBS or NVIDIA Broadcast. Typing always works.",
                 { permanent: true });
             console.error(`${MODULE_ID} | Mic: recogniser deaf on both attempts. Meter peak was ` +
                 `${peak}, recognition returned no-speech.`);

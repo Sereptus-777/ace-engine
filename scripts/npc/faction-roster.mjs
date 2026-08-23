@@ -276,14 +276,63 @@ function _splitLeader(leader) {
  *
  * @returns {Object<string, Array<{name:string,title:string}>>} keyed by slotKey
  */
+
+// ⚠️ A DESCRIPTION IS NOT A PERSON, AND BOTH LIVE IN THE `leader` FIELD.
+// Johnny's registry holds "Grik Skullcrusher, Chieftain" beside "Council of
+// faith leaders", "No single leader - network of High Harpers", "Rotating
+// council of city lords" and plain "none". harvestNamedOfficers only checked
+// for a capital letter, and every one of those descriptions has one, so it
+// would happily seat a noun in the chief's chair.
+// ⚠️🔴 THESE ARE REGEX LITERALS BECAUSE I WROTE THEM AS STRINGS FIRST AND IT
+// FAILED EXACTLY AS DOCUMENTED, ONE HOUR AFTER I DOCUMENTED IT.
+//
+// The first version was `new RegExp("(^|\b)(none|unknown|...)")`. A single \b
+// inside a STRING literal is a BACKSPACE character, not a word boundary — the
+// same defect that had killed all seventeen _CREATURE_HINTS in faction-registry
+// since the day they were written, which I found, fixed, and wrote a warning
+// about, and then reproduced here within the hour.
+//
+// The result was measurable: of ~55 factions whose leader field is a
+// description, only 3 were caught. "Various Thayan Zulkirs", "Various High
+// Priestesses", "Various local leaders", "Unknown cult leader" and "Rotating
+// Spokesperson from Bryn Shander" were all seated as people.
+//
+// A regex literal has no string-escaping layer to eat the escape. Anything used
+// as a pattern in this codebase should be written this way.
+const NOT_A_PERSON =
+    /(^|\b)(none|unknown|n\/a|nobody|varies|various|several|many|rotating|no single|leaderless|collective|committee|assembly|network|multiple|council|conclave|circle|senate|parliament|board|group of|a group|elected|unelected|shared|no formal|no known|not known|tbd|tba)\b/i;
+
+// A bare rank is a post, not the person holding it.
+const TITLE_ONLY =
+    /^(the\s+)?(lord|lady|king|queen|baron|baroness|chief|chieftain|captain|commander|leader|master|mistress|priest|priestess|abbot|elder|warchief|warlord|thane|jarl|matron|archmage|guildmaster|mayor|magistrate)s?$/i;
+
+/**
+ * Is this leader field a person we can seat, or a description of how they decide?
+ * @returns {{name:string,title:string}|null}
+ */
+export function personFromLeaderField(leader) {
+    const raw = String(leader || "").trim();
+    if (!raw) return null;
+    // ⚠️ Split on a SPACED dash only. "Ursok the Amber-Scarred" is one name and
+    // an earlier version cut it in half at the hyphen.
+    let name = raw.split(/\s*[,(]\s*/)[0].replace(/\s+[-–—]\s+.*$/, "").trim();
+    if (!name || name.length < 3) return null;
+    if (NOT_A_PERSON.test(name)) return null;
+    const words = name.split(/\s+/).filter(Boolean);
+    if (!words.some(w => /^[A-ZÀ-Þ]/.test(w))) return null;
+    if (words.length === 1 && TITLE_ONLY.test(name)) return null;
+    const title = raw.slice(name.length).replace(/^[\s,()–—-]+|[\s()]+$/g, "").trim();
+    return { name, title };
+}
+
 export function harvestNamedOfficers(faction, template) {
     const out = {};
     if (!faction) return out;
     const slots = parseStructure(template?.structure);
 
     // 1. The leader field is structured — take it at face value.
-    const lead = _splitLeader(faction.leader);
-    if (lead?.name && /[A-Z]/.test(lead.name)) {
+    const lead = personFromLeaderField(faction.leader);
+    if (lead?.name) {
         const leaderSlot = slots.find(sl => sl.rung === "leader") ?? slots[0];
         if (leaderSlot) out[leaderSlot.key] = [{ name: lead.name, title: lead.title || leaderSlot.label }];
     }

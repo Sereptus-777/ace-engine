@@ -5152,6 +5152,27 @@ Appropriate loot, XP, and story rewards.
    * @param {object} [opts]
    * @param {boolean} [opts.broadcast=false] — also send audio to all players via socket
    */
+  /**
+   * ⚠️ The robot voice is not a fallback. See the note in npc/tts.mjs - the
+   * narrator has exactly the same rule: if the GM chose ElevenLabs, a failure
+   * is silence and a stated reason, never Windows speech synthesis pretending
+   * everything is fine.
+   */
+  _browserVoiceChosen() {
+    try { return game.settings.get(MODULE_ID, "voiceProvider") === "browser"; }
+    catch (_) { return false; }
+  }
+
+  _refuseRobot(why) {
+    if (game.user?.isGM) {
+      ui.notifications?.error(
+        `ACE: the narration was not spoken because ${why}. The browser voice is off because you chose ` +
+        `ElevenLabs — fix the cause, or switch to the browser voice in ACE Engine → Voice & TTS.`,
+        { permanent: true });
+    }
+    console.warn(`${MODULE_ID} | narrator refused to fall back to the browser voice — ${why}`);
+  }
+
   async _speakText(text, gender = "male", { broadcast = false } = {}) {
     if (!text) return;
     this._cancelTTS();
@@ -5173,14 +5194,16 @@ Appropriate loot, XP, and story rewards.
           this._browserTtsWarned = true;
           console.log(
             `${MODULE_ID} | TTS: no ElevenLabs key — using the free browser voice.\n` +
-            `  → Add one in ACE Engine → AI Setup for premium voices.\n` +
+            `  → Add one in ACE Engine → Voice & TTS for premium voices.\n` +
             `  → It is stored in this browser only and is never sent to your players.`
           );
         }
+        if (!this._browserVoiceChosen()) return this._refuseRobot("no ElevenLabs key is set");
         await this._speakBrowser(clean, gender, broadcast);
       }
     } catch (err) {
       console.error(`${MODULE_ID} | TTS error (outer):`, err);
+      if (!this._browserVoiceChosen()) return this._refuseRobot(`the voice request failed (${err?.message ?? err})`);
       try { await this._speakBrowser(clean, gender, false); } catch (_) {}
       // GM-only, and phrased as what actually happened rather than "check
       // console" — the browser voice is already speaking, so this is a
@@ -5263,6 +5286,7 @@ Appropriate loot, XP, and story rewards.
                    : resp.status === 403 ? "API key forbidden — check your ElevenLabs subscription."
                    : resp.status === 429 ? "Rate limit exceeded — too many requests."
                    : `ElevenLabs returned ${resp.status} — falling back to browser voice.`;
+        if (!this._browserVoiceChosen()) return this._refuseRobot(hint);
         ui.notifications?.warn(`ACE TTS: ${hint}`);
         await this._speakBrowser(text, gender, broadcast);
         return;
@@ -5320,6 +5344,7 @@ Appropriate loot, XP, and story rewards.
       await this._ttsAudio.play();
     } catch (err) {
       console.error(`${MODULE_ID} | ElevenLabs TTS failed:`, err);
+      if (!this._browserVoiceChosen()) return this._refuseRobot(`ElevenLabs playback failed (${err?.message ?? err})`);
       await this._speakBrowser(text, gender, broadcast);
     }
   }

@@ -5,7 +5,7 @@
 
 import { AcePanel }          from "./panel.mjs";
 import { installSliderGuard } from "./slider-guard.mjs";
-import { maySpendOnAI, doneSpending } from "./npc/ai-spend-limit.mjs";
+import { maySpendOnAI, doneSpending, lastRefusal } from "./npc/ai-spend-limit.mjs";
 import { isBioInFlight, openAutoLinkCleanup } from "./npc/bio-generator.mjs";
 import { setSharedElevenLabsKey, getSharedElevenLabsKey, getSharedElevenLabsKeyInfo } from "./npc/shared-credentials.mjs";
 import { AceSettings }       from "./settings.mjs";
@@ -416,13 +416,17 @@ async function _consolidateLegacyJournalFolders() {
       );
       if (!legacyFolder) continue;
 
-      // Lazy-create destination only if we actually have legacy data to move
+      // ⚠️ THE SECOND CREATOR. This used to call Folder.create itself, which
+      // is how Johnny ended up with two folders both called "📖 ACE Engine":
+      // this pass and memory-manager's _getAceFolder each looked, each found
+      // nothing, and each made one. There is a single owner now and this asks
+      // it. Never create this folder here again.
       if (!destFolder) {
-        destFolder = await Folder.create({
-          name: NEW_FOLDER_NAME,
-          type: "JournalEntry",
-          color: "#d4af37",
-        });
+        destFolder = await aceMemory?._getAceFolder?.();
+        if (!destFolder) {
+          console.warn(`${MODULE_ID} | Consolidation: memory manager not ready, leaving legacy journals where they are.`);
+          return;
+        }
       }
 
       const entries = game.journal.filter(j => j.folder?.id === legacyFolder.id);
@@ -616,6 +620,25 @@ Hooks.on("getSceneControlButtons", (controls) => {
       onClick: () => openPanel(),
       button:   true,
     });
+
+    // ⚠️ THERE WAS NO WAY TO OPEN THIS EXCEPT THE CONSOLE. "Where Everybody
+    // Stands" is the only screen in ACE that answers "who hates us and why",
+    // and reaching it required typing an API call by hand. A GM tool nobody
+    // can click is a GM tool nobody uses, and the boot-time API check taught
+    // us that something only ever run by hand may as well not exist.
+    tokenGroup.tools.push({
+      name:    "ace-standings",
+      title:   "ACE — Where Everybody Stands",
+      icon:    "fa-solid fa-scale-balanced",
+      visible:  true,
+      onClick: () => import("./standings-panel.mjs")
+        .then(m => m.openStandings())
+        .catch(err => {
+          console.error(`${MODULE_ID} | could not open the standings panel:`, err);
+          ui.notifications?.error("ACE: the standings panel failed to open. See the console.");
+        }),
+      button:   true,
+    });
   }
 });
 
@@ -640,8 +663,10 @@ Hooks.on("renderSceneControls", (app, html) => {
  *       <li class="scene-control ...">...</li>
  */
 function _injectAceControl() {
-  // Don't inject twice (re-checked after every render)
-  if (document.querySelector("[data-ace-control]")) return;
+  // ⚠️ THE GUARD IS PER BUTTON NOW. A blanket "have we injected anything?"
+  // check meant that once the first button existed, the second could never be
+  // added — including on the very first render, where it silently halved the
+  // toolbar.
 
   // v13 first, then v12 fallbacks
   const mainControls =
@@ -660,36 +685,58 @@ function _injectAceControl() {
 
   console.debug(`${MODULE_ID} | Toolbar: injecting into <${mainControls.tagName}> #${mainControls.id}`);
 
-  // v13 uses <li><button ...></button></li> — match that pattern exactly
-  const li  = document.createElement("li");
-  li.setAttribute("data-ace-control", "1");
+  // ⚠️ TWO BUTTONS NOW, BUILT BY ONE FUNCTION. This used to hand-build a single
+  // <li><button> inline, so the standings panel — the only screen that answers
+  // "who hates us and why" — had no way to open it except typing an API call
+  // into the console. Johnny: "why aren't I getting that pop-up anymore? I'd
+  // like to see the pop-up as well. Makes it more visual for me."
+  const make = ({ key, icon, label, onClick }) => {
+    if (document.querySelector(`[data-ace-control="${key}"]`)) return;
+    const li = document.createElement("li");
+    li.setAttribute("data-ace-control", key);
 
-  const btn = document.createElement("button");
-  btn.type      = "button";
-  btn.className = "control ui-control";
-  btn.setAttribute("data-tooltip", "ACE — GM Assistant (Ctrl+Shift+L)");
-  btn.setAttribute("aria-label",   "ACE — GM Assistant");
-  btn.title = "ACE — GM Assistant (Ctrl+Shift+L)";
-  // Let Foundry's .control.ui-control CSS supply the gray background + border-radius.
-  // Only override layout — no background/border overrides that would fight Foundry's styles.
-  btn.style.cssText = "display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;width:100%;height:100%;";
+    const btn = document.createElement("button");
+    btn.type      = "button";
+    btn.className = "control ui-control";
+    btn.setAttribute("data-tooltip", label);
+    btn.setAttribute("aria-label", label);
+    btn.title = label;
+    // Let Foundry's .control.ui-control CSS supply the gray background and
+    // radius. Only layout is overridden here; fighting Foundry's own styles is
+    // how a button ends up looking like it belongs to a different program.
+    btn.style.cssText = "display:flex;align-items:center;justify-content:center;"
+      + "cursor:pointer;padding:0;width:100%;height:100%;";
 
-  // Use the same fa-book-sparkles icon as the panel header, in grimoire gold
-  const icon = document.createElement("i");
-  icon.className   = "fas fa-book-sparkles";
-  icon.style.cssText = "font-size:28px;color:#c9a84c;pointer-events:none;display:block;";
+    const i = document.createElement("i");
+    i.className = icon;
+    i.style.cssText = "font-size:28px;color:#c9a84c;pointer-events:none;display:block;";
+    btn.appendChild(i);
+    li.appendChild(btn);
 
-  btn.appendChild(icon);
-  li.appendChild(btn);
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onClick();
+    });
+    mainControls.appendChild(li);
+  };
 
-  btn.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    openPanel();
+  make({
+    key: "panel", icon: "fas fa-book-sparkles",
+    label: "ACE — GM Assistant (Ctrl+Shift+L)",
+    onClick: () => openPanel(),
   });
-
-  mainControls.appendChild(li);
-  console.debug(`${MODULE_ID} | Toolbar button injected`);
+  make({
+    key: "standings", icon: "fa-solid fa-scale-balanced",
+    label: "ACE — Where Everybody Stands",
+    onClick: () => import("./standings-panel.mjs")
+      .then(m => m.openStandings())
+      .catch(err => {
+        console.error(`${MODULE_ID} | could not open the standings panel:`, err);
+        ui.notifications?.error("ACE: the standings panel failed to open. See the console.");
+      }),
+  });
+  console.debug(`${MODULE_ID} | toolbar buttons injected`);
 }
 
 // ── Standalone browser TTS for players (no panel, no ElevenLabs) ──────
@@ -814,6 +861,79 @@ Hooks.once("ready", () => {
   import("./orphan-sweep.mjs")
     .then(({ sweepOrphanedEnvoyKeys }) => sweepOrphanedEnvoyKeys())
     .catch(err => console.warn(`${MODULE_ID} | orphan sweep could not run:`, err));
+});
+
+// Repair factions that were labelled as the creature they FIGHT. Runs once,
+// GM-side, and names every faction it touches. See npc/faction-repair.mjs.
+Hooks.once("ready", () => {
+  import("./npc/faction-repair.mjs")
+    .then(({ repairFactionCreatureBases }) => repairFactionCreatureBases())
+    // ⚠️ ORDER MATTERS. Repair strips the wrong tags first; backfill then gives
+    // every faction a base creature. Backfilling first would see the poisoned
+    // values, treat them as already answered, and leave them in place.
+    .then(() => import("./npc/faction-composition.mjs"))
+    .then(({ backfillCompositions }) => backfillCompositions())
+    .catch(err => console.warn(`${MODULE_ID} | faction repair/backfill could not run:`, err));
+});
+
+// Rebuild combat memories from the fights already in the log. Runs once, GM
+// side. ⚠️ Needs the memory manager, so it waits for one rather than reaching
+// into module scope from another file.
+Hooks.once("ready", () => {
+  // ⚠️ THE GUARD BELONGS TO THE BACKFILL ALONE. It was written as an early
+  // return at the top of this handler, which put it in front of the deed and
+  // heal registrations too — so a world without a memory manager would have
+  // silently lost all three while the console mentioned only one. That is the
+  // "one failure kills every registration below it" shape, with a guard playing
+  // the part of the throw. Each subsystem now stands or falls on its own.
+  if (!aceMemory) {
+    console.warn(`${MODULE_ID} | combat memory backfill skipped — no memory manager at ready. ` +
+                 `Deed propagation and heal memory are unaffected and still install.`);
+  } else {
+    import("./npc/combat-memory-backfill.mjs")
+      .then(({ backfillCombatMemory }) => backfillCombatMemory({ memory: aceMemory }))
+      .catch(err => console.warn(`${MODULE_ID} | combat memory backfill could not run:`, err));
+  }
+
+  // Deeds move faction standing. Until now only kills did. See deed-propagation.mjs.
+  import("./deed-propagation.mjs")
+    .then(({ installDeedPropagation }) => installDeedPropagation())
+    // ⚠️ AFTER the propagation is installed and after the faction repair, so the
+    // back-catalogue lands on repaired factions and reset standings rather than
+    // on the mislabelled ones. It also costs money, so it waits until the world
+    // has settled rather than racing everything else at boot.
+    .then(() => new Promise(r => setTimeout(r, 8000)))
+    .then(() => import("./deed-classifier.mjs"))
+    .then(({ classifyDeedHistory }) => classifyDeedHistory({ memory: aceMemory, aiProvider }))
+    .catch(err => console.warn(`${MODULE_ID} | deed history could not be read back:`, err));
+
+  // ⚠️ PC statistics come from ACE QOL's OWN events, not from reading dnd5e
+  // chat messages that ACE QOL no longer creates. See pc-stats.mjs.
+  import("./pc-stats.mjs")
+    .then(({ installPcStats }) => installPcStats({ memory: aceMemory }))
+    .catch(err => console.warn(`${MODULE_ID} | PC statistics could not install:`, err));
+
+  // Healing an outsider is an act, not a statistic. See heal-memory.mjs.
+  import("./heal-memory.mjs")
+    .then(({ installHealMemory }) => installHealMemory({ memory: aceMemory }))
+    .catch(err => console.warn(`${MODULE_ID} | heal memory could not install:`, err));
+
+  // ⚠️ Journals were being written as flat stat dumps: 475 NPC Profiles with a
+  // median length of 148 characters, including one for a dining table. This
+  // rebuilds them as linked, multi-page dossiers, folds creature types into a
+  // Bestiary, and removes the ones that were never creatures. Runs once, then
+  // stays available as game.aceEngine.rebuildJournals().
+  import("./npc/journal-rebuild.mjs")
+    .then(({ installJournalRebuild }) => installJournalRebuild())
+    .catch(err => console.warn(`${MODULE_ID} | journal rebuild could not install:`, err));
+
+  // ⚠️ 82 real deeds across five months had moved nothing, and 233 of 236
+  // faction scores were an artifact of a starting roll Johnny never asked for.
+  // This forgets the dealt opinions and rebuilds reputation from what actually
+  // happened. Runs once per version. See deed-replay.mjs.
+  import("./deed-replay.mjs")
+    .then(({ installDeedReplay }) => installDeedReplay())
+    .catch(err => console.warn(`${MODULE_ID} | deed replay could not install:`, err));
 });
 
 Hooks.once("ready", async () => {
@@ -1353,7 +1473,11 @@ Hooks.once("ready", async () => {
       if (!maySpendOnAI(_ttsUser, Date.now(), "ttsRequest")) {
         game.socket.emit(`module.${MODULE_ID}`, {
           action: "ttsResponse", requestId: data.requestId,
-          error: "Too many voice requests in a row — give it a moment.",
+          // Send the ACTUAL reason and how long it lasts. "Too many in a row"
+          // was neither true nor actionable: the line had been split into two
+          // segments by us, and the player had no idea it was a rate limit at
+          // all, let alone one that clears on its own.
+          error: lastRefusal || "voices are busy — give it a moment.",
         });
         return;
       }
@@ -2270,6 +2394,34 @@ Hooks.once("ready", async () => {
     backupMemory:    () => aceMemory?.backup(),
     backupDigests:   () => digestEngine?.backupDigests(5),
     restoreDigests:  (bundle) => digestEngine?.restoreFromBackup(bundle),
+
+    // ⚠️ THE ENGINE ITSELF WAS NEVER EXPOSED, only its backup and restore.
+    // digest-browser.mjs opens with `api?.digestEngine`, found undefined every
+    // time, set its data to null and returned. The Digest Browser has therefore
+    // shown an empty window since it was written, with no error anywhere.
+    // Found 2026-08-22 by tools/api-surface-check.py.
+    //
+    // ⚠️ A GETTER, NOT A FUNCTION. The consumer does `const eng = api.digestEngine`
+    // and then `eng.getDigestMeta?.(id)`. Exposing a function here would hand it
+    // a function, `eng.getDigestMeta` would be undefined, the optional call would
+    // return nothing, and the browser would still show an empty window — a second
+    // silent failure wearing the first one's fix as a costume.
+    get digestEngine() { return digestEngine; },
+
+    /**
+     * Who is currently talking to this NPC.
+     *
+     * ⚠️ ALSO NEVER EXPOSED. conversation-app.mjs reads `api?.getNpcLock?.(id)`
+     * to work out WHICH PLAYER started a conversation, so a skill check can be
+     * attributed to their character. Undefined meant it fell through to
+     * `game.user.character`, and the comment three lines above that fallback
+     * says plainly why that is wrong: on the GM client it is the GM's own
+     * character. So every skill check raised during a player's NPC conversation
+     * has been credited to the wrong person.
+     */
+    getNpcLock:      (actorId) => npcChatState?.npcLocks?.get?.(actorId) ?? null,
+    getAllNpcLocks:  () => new Map(npcChatState?.npcLocks ?? []),
+
     getMemoryManager: () => aceMemory,
     triggerSfx:      (effect) => _triggerSfx(effect),
     stopSfx:         () => stopAllSfx(),
@@ -2678,6 +2830,16 @@ Hooks.once("ready", async () => {
       // is a few lines below. Removed rather than merged: they did the same
       // job and the live one is optional-chained.
 
+      /**
+       * Rebuild the journal folder: people become linked four-page dossiers,
+       * creature types fold into the Bestiary, non-creatures are deleted.
+       * Pass { dryRun: true } to see what it would do without touching anything.
+       */
+      rebuildJournals: async (opts = {}) => {
+        const { rebuildJournals } = await import("./npc/journal-rebuild.mjs");
+        return rebuildJournals(opts);
+      },
+
       /** Get faction standing. */
       getFactionStanding: (factionId) => {
         return reputationEngine?.getFactionStanding(factionId) ?? "neutral";
@@ -2685,6 +2847,73 @@ Hooks.once("ready", async () => {
       setFactionStanding: (factionId, standing) => {
         return reputationEngine?.setFactionStanding(factionId, standing, game.world.id);
       },
+
+      /** Move a faction's standing by POINTS. The scored path; see reputation-scale.mjs. */
+      // ⚠️ THE OPTIONS ARGUMENT HAD NOWHERE TO GO. This took two parameters
+      // and swallowed the rest, so `{ seed: false }` from the propagation could
+      // never reach the engine and every second-hand rumour kept seeding a
+      // rolled starting attitude. A passthrough that silently narrows a
+      // signature is the same silent-no-op shape as a missing method.
+      adjustFactionScore: (factionId, delta, worldId, opts) =>
+        reputationEngine?.adjustFactionScore(factionId, delta, worldId ?? game.world.id, opts),
+      getFactionScore: (factionId) => reputationEngine?.getFactionScore(factionId) ?? 0,
+      getAllFactionScores: () => reputationEngine?.getAllFactionScores() ?? {},
+
+      /**
+       * Forget every faction's opinion of the party. Membership and the faction
+       * registry are untouched; only what they THINK of you is cleared.
+       */
+      resetAllStandings: (worldId) =>
+        reputationEngine?.resetAllStandings(worldId ?? game.world?.id),
+
+      /**
+       * Wipe the dealt opinions and rebuild reputation from the deeds that
+       * actually happened. Pass { dryRun: true } to see the numbers first.
+       */
+      replayDeeds: async (opts = {}) => {
+        const { replayDeeds } = await import("./deed-replay.mjs");
+        return replayDeeds(opts);
+      },
+      hasFactionScore: (factionId) => reputationEngine?.hasFactionScore(factionId) ?? false,
+      /**
+       * Give existing creatures a faction using the scored matcher.
+       * `{dryRun:true}` reports without writing; `{force:true}` re-runs it.
+       */
+      assignFactionsToExisting: (opts) =>
+        import("./npc/faction-assign-existing.mjs")
+          .then(m => m.assignFactionsToExisting({ memory: aceMemory, ...opts })),
+      /** Open the GM-only "Where Everybody Stands" screen. */
+      openStandings: () => import("./standings-panel.mjs").then(m => m.openStandings()),
+
+      /**
+       * Write the real, published leaders and members into the factions that
+       * have them. 1495 DR. Nothing invented, no actors required.
+       * Pass { dryRun: true } to see what it would do.
+       */
+      fillKnownLeaders: (opts) =>
+        import("./npc/known-leaders.mjs").then(m => m.applyKnownLeaders(opts)),
+
+      /**
+       * Seat every leader already NAMED in your own faction data. Invents
+       * nothing; turns 196 plain-text leader fields into real members.
+       */
+      harvestFactionOfficers: (opts) =>
+        import("./npc/known-leaders.mjs").then(m => m.harvestAllRosters(opts)),
+
+      /** Re-derive faction compositions, retiring answers from rejected rules. */
+      refreshFactionCompositions: (opts) =>
+        import("./npc/faction-composition.mjs").then(m => m.backfillCompositions(opts)),
+
+      /** Re-read the deed back-catalogue. Use after assigning factions. */
+      reclassifyDeeds: async () => {
+        await game.settings.set(MODULE_ID, "deedClassification2026", false);
+        const m = await import("./deed-classifier.mjs");
+        return m.classifyDeedHistory({ memory: aceMemory, aiProvider });
+      },
+
+      /** Raise how widely the party is known. Nothing else in ACE does this. */
+      addFame: (magnitude) => reputationEngine?.addFame(magnitude, game.world.id),
+      getFameScore: () => reputationEngine?.getFameScore() ?? 0,
 
       // ── Living World: World Library ↔ Registry ──
       // ⚠️ `getWorldBibleFactions` was ALSO defined twice here. The surviving
@@ -3432,13 +3661,25 @@ async function _autoDiscoverAndSync() {
       // Extract class/level if available
       const rec = aceMemory.pcs.getRecord(actor.id);
       if (rec) {
-        rec.class = rec.class || aceMemory._extractClass(actor);
-        rec.level = rec.level || aceMemory._extractLevel(actor);
+        // ⚠️🔴 `||` MEANT "ONLY IF NEVER SET" (2026-08-22). Firaxis Greenbeard
+        // was captured once at Paladin 7 and the record became incapable of
+        // ever changing: he is level 9 and his journal still said 7, because a
+        // truthy 7 short-circuits the whole expression on every load forever.
+        // A character sheet is the authority on its own level, every time.
+        const _cls = aceMemory._extractClass(actor);
+        const _lvl = aceMemory._extractLevel(actor);
+        if (_cls) rec.class = _cls;
+        if (_lvl) rec.level = _lvl;
       }
     }
     // Increment session count for each PC (once per world load)
     for (const actor of pcs) {
-      aceMemory.logSession({ actorName: actor.name });
+      // ⚠️ NOT ON EVERY WORLD LOAD. This ran once per PC per load, so Johnny's
+      // count read 1,749 — that is how many times the world has been opened,
+      // not how many sessions have been played. A session is a sitting at the
+      // table, and the only thing that knows one has happened is a session
+      // summary being written. Counted there instead.
+      // (was: aceMemory.logSession({ actorName: actor.name }))
     }
 
     if (pcs.length) {
@@ -3627,21 +3868,15 @@ Hooks.on("canvasReady", () => {
       aceMemory.pcs.markDirty();
     } catch (_) {}
 
-    // ── Deed: first visit to a new scene (travel tracking) ────
-    if (fameEngine) {
-      // Check if scene was visited before (use SceneStore)
-      const sceneRec = aceMemory.scenes?.getRecord(newScene);
-      const visitCount = sceneRec?.visitCount ?? 0;
-      if (visitCount === 1) {  // first visit (visitCount was just incremented by logSceneChange)
-        aceMemory.logDeed({
-          text:      `Arrived in ${newScene}`,
-          magnitude: "trivial",
-          scene:     newScene,
-          pcs:       (game.actors?.filter(a => a.hasPlayerOwner && a.type === "character") ?? []).map(a => a.name),
-          source:    "auto:travel",
-        });
-      }
-    }
+    // ⚠️ ARRIVING SOMEWHERE IS NOT A DEED. This wrote one on every first visit
+    // and produced 27 of Johnny's 109 deeds, all of them reading "Arrived in BM:
+    // 1F North East". A deed is something you DID, that somebody could hold
+    // against you or thank you for. Walking through a door is neither.
+    //
+    // The visit itself is not lost: logSceneChange already records it in the
+    // scene store with a count and a timestamp, which is where a visit belongs.
+    // Those lines also leaked into the story documents as "Arrived in" entries,
+    // and into the first Video Overview, read aloud on screen.
 
     // ── Narrative time: advance one step on scene transition ──
     if (!isInitialLoad && game.settings.get(MODULE_ID, "enableNarrativeTime")) {
@@ -3675,7 +3910,7 @@ Hooks.on("createCombat", (combat) => {
   if (game.user.isGM && panel?.rendered) panel.refreshSelectPanel();  // show initiative section
 });
 
-Hooks.on("deleteCombat", (combat) => {
+Hooks.on("deleteCombat", async (combat) => {
   // Multi-GM safety: deleteCombat fires on every client. The memory + faction
   // reputation writes below must only fire on ONE client or both GMs would
   // record the kill/survive events to AI memory and double-fire reputation
@@ -3684,6 +3919,62 @@ Hooks.on("deleteCombat", (combat) => {
   // Gather participant names from the just-deleted combat
   const participants = combat.turns?.map((c) => c.name).filter(Boolean) ?? [];
   aceMemory.logCombatEnd(participants, canvas?.scene?.name ?? "");
+
+  // ── COMBAT MEMORY: an NPC remembers fighting these people ────────────────
+  //
+  // ⚠️🔴 THIS FEATURE WAS READ-ONLY FOR ITS ENTIRE LIFE (found 2026-08-21).
+  // Three places in conversation-engine.mjs read `combatEncounters` to decide
+  // whether an NPC greets the party as strangers or as the people who nearly
+  // killed them, and NOTHING ANYWHERE WROTE IT. Not once. The flag was never
+  // set, so the reads always returned nothing and the NPC always met the party
+  // for the first time, however many times they had fought.
+  //
+  // A reader with no writer fails silently and looks exactly like a creature
+  // with nothing to remember.
+  //
+  // ⚠️ SURVIVORS ONLY. The dead do not carry a grudge, and writing to a corpse
+  // whose token is about to be swept into the Fallen folder is wasted work.
+  // Unlinked tokens keep this on their own delta, which is correct: THIS goblin
+  // remembers the fight, not every goblin sharing the statblock.
+  try {
+    const pcsHere = [];
+    const survivors = [];
+    for (const c of (combat.turns ?? [])) {
+      const a = c.actor ?? c.token?.actor;
+      if (!a) continue;
+      if (a.hasPlayerOwner) { pcsHere.push(c.name); continue; }
+      if ((a.system?.attributes?.hp?.value ?? 1) > 0) survivors.push(a);
+    }
+    if (pcsHere.length && survivors.length) {
+      const sceneName = canvas?.scene?.name ?? "";
+      const fallen = (combat.turns ?? []).filter(c => {
+        const a = c.actor ?? c.token?.actor;
+        return a && !a.hasPlayerOwner && (a.system?.attributes?.hp?.value ?? 1) <= 0;
+      }).length;
+      for (const a of survivors) {
+        try {
+          const prior = a.getFlag(MODULE_ID, "combatEncounters") ?? [];
+          const next = [...prior, {
+            t:         Math.floor(Date.now() / 1000),
+            pcNames:   pcsHere,
+            sceneName,
+            // What it felt like from THIS creature's side, which is what it
+            // should react to later.
+            outcome:   fallen > 0 ? "watched allies die in" : "survived",
+            alliesLost: fallen,
+          }];
+          // ⚠️ Keep the last 20. Unlike the world log this rides on an actor
+          // document that Foundry sends to clients, so it stays small.
+          await a.setFlag(MODULE_ID, "combatEncounters", next.slice(-20));
+        } catch (err) {
+          console.warn(`${MODULE_ID} | could not record combat memory for ${a.name}:`, err);
+        }
+      }
+      console.log(`${MODULE_ID} | Combat memory: ${survivors.length} survivor(s) will remember fighting ${pcsHere.join(", ")}.`);
+    }
+  } catch (err) {
+    console.warn(`${MODULE_ID} | combat memory write failed:`, err);
+  }
 
   // ── Reputation: log faction encounter events ──────────────
   if (reputationEngine) {
@@ -4208,7 +4499,22 @@ Hooks.on("createChatMessage", async (message) => {
   const isPC      = actor ? actor.hasPlayerOwner : false;
 
   // ── Track attack hits/misses for PCs ───────────────────────
-  if (aceMemory && isPC && game.combat?.active) {
+  // ⚠️🔴 RETIRED 2026-08-22 — pc-stats.mjs does this properly now.
+  //
+  // Everything below read dnd5e's CHAT MESSAGES to count hits, misses, crits
+  // and damage. ACE QOL took over the attack pipeline, suppresses dnd5e's own
+  // cards and renders its own, so the messages this counts largely stopped
+  // existing. It was also gated on `game.combat?.active`, so nothing outside a
+  // formal initiative tracker counted at all. Between them that is why Firaxis
+  // Greenbeard showed 20 kills, 0 fumbles and 114 total damage after five
+  // months of play.
+  //
+  // ⚠️ DISABLED RATHER THAN DELETED, and the difference matters: if the new
+  // listener ever misses something this one caught, the old logic is here to
+  // read. Leaving BOTH running would double every number that still produces a
+  // dnd5e message, which is the worse failure — a wrong number nobody can spot.
+  const _RETIRED_chatStatTracking = false;
+  if (_RETIRED_chatStatTracking && aceMemory && isPC && game.combat?.active) {
     const rollType = message.flags?.dnd5e?.roll?.type;
     if (rollType === "attack") {
       try {

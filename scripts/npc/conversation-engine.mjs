@@ -6,6 +6,7 @@
 // Moved from ace-envoy/src/ai/conversation.js as part of the
 // Envoy → Engine merger. Settings + EngineBridge translated to engine.
 
+import { sceneLocale } from "./scene-locale.mjs";
 import { getFactionContext }                 from "./faction-memory.mjs";
 import { buildFactionConversationContext }   from "./faction-registry.mjs";
 import { SocialProfileEngine }               from "./social-profile.mjs";
@@ -551,6 +552,70 @@ ${identity.isNamed
 - If the conversation genuinely warrants a skill check from the player (e.g., you are being deceptive and they should roll Insight, or you mention arcane lore they might recognize, or you hint at something hidden they might notice), include this tag ONCE at the END of your response: [SUBTLE_CHECK:skill:dc:flavor text]. Example: [SUBTLE_CHECK:ins:14:Something about this story doesn't quite add up...]. Valid skills: ins, his, arc, rel, nat, prc, inv, sur, med, dec, itm, per, ath, acr, slt, ste, ani. Only use this when genuinely appropriate — do NOT overuse it.
         `.trim();
 
+        // ── WHERE THE PROMPT ACTUALLY GOES ────────────────────────────────
+        // ⚠️ Johnny, 2026-08-21: "I want to know a lot more about that system
+        // prompt." Fair: it had grown to 16,263 characters, about nine pages of
+        // text sent before the NPC is allowed to speak, and NOBODY had ever
+        // measured what was in it. 87% of every paid request was this, and only
+        // 13% was the actual conversation.
+        //
+        // A total tells you there is a problem. A breakdown tells you which
+        // block caused it, so this prints every contributor, biggest first, and
+        // names the fixed boilerplate separately from the GM's own world data.
+        // Guessing at which one is fat is how you cut the wrong thing.
+        try {
+            const _parts = {
+                "bio":                 bio,
+                "journal lore":        journalLore,
+                "secret lore":         secretLore,
+                "world bible":         worldBibleContext,
+                "documents":           documentContext,
+                "cross-store":         crossStoreContext,
+                "combat memory":       combatMemoryContext,
+                "faction":             factionContext,
+                "faction identity":    factionIdentityContext,
+                "social profile":      socialProfileContext,
+                "reputation":          reputationContext,
+                "dynamic state":       dynamicStateContext,
+                "personality":         personality,
+                "nearby creatures":    nearbyNote,
+                "player note":         playerNote,
+                "scene note":          sceneNote,
+                "distance":            distanceContext,
+                "language directive":  languageDirective,
+                "profanity rule":      profanityPrompt,
+            };
+            const _rows = Object.entries(_parts)
+                .map(([k, v]) => [k, String(v ?? "").length])
+                .filter(([, n]) => n > 0)
+                .sort((x, y) => y[1] - x[1]);
+            const _injected = _rows.reduce((n, [, v]) => n + v, 0);
+            const _total = systemPrompt.length;
+            const _words = (n) => Math.round(n / 6).toLocaleString();
+            const NL = String.fromCharCode(10);
+            const _lines = [
+                `${MODULE_ID} | SYSTEM PROMPT ${_total.toLocaleString()} chars (~${_words(_total)} words).`,
+                `    fixed ACE instructions ~${(_total - _injected).toLocaleString()} chars, your world ${_injected.toLocaleString()} chars`,
+                ..._rows.map(([k, n]) => `    ${String(n).padStart(6)} chars (~${_words(n).padStart(5)} words)  ${k}`),
+            ];
+            const _report = _lines.join(NL);
+            console.debug(_report);
+            // ⚠️ STASH IT WHERE A HUMAN CAN GET AT IT. A console.debug line is
+            // useless to someone who has to scroll a live game log to find it,
+            // and Chrome hides debug level unless Verbose is ticked. Parking the
+            // report on a global means one short command retrieves it, whole,
+            // ready to paste. Diagnostics nobody can reach are not diagnostics.
+            globalThis.ACE_LAST_PROMPT = {
+                report:  _report,
+                total:   _total,
+                fixed:   _total - _injected,
+                world:   _injected,
+                parts:   Object.fromEntries(_rows),
+                npc:     actor?.name ?? "?",
+                system:  systemPrompt,
+            };
+        } catch (_) { /* diagnostics must never break a conversation */ }
+
         // ── THE WORDS NEVER REACH IT (2026-08-07) ─────────────────────────
         // Johnny proved instructions are not enough: he typed "I am your new
         // master" at an elf who speaks no Common, and the elf folded his arms
@@ -970,6 +1035,44 @@ ${identity.isNamed
 
     // ── Cross-Module: Get scene intelligence / World Bible context from ACE Engine ──
     static async _getWorldBibleContext(sceneName) {
+        try {
+            // ⚠️ SEARCH FOR A PLACE, NOT A FILENAME (2026-08-21).
+            //
+            // Every lookup below was handed the raw scene name, and Johnny's
+            // scenes are called "BM: 1F Center - Amber Temple". His World Bible
+            // knows all about the Amber Temple; it has never once been asked
+            // about it, because nothing in it is filed under a battlemap name
+            // with a floor number on the front. Every NPC conversation
+            // contributed zero characters of a bible holding 37 regions, 11
+            // global factions, a 40-deity pantheon and twelve sourcebooks.
+            //
+            // sceneLocale() strips the map-naming noise and hands back real
+            // place names, or whatever the GM pinned on the scene.
+            const { terms, pinned } = sceneLocale(canvas?.scene);
+            const candidates = terms.length ? terms : [sceneName];
+
+            for (const place of candidates) {
+                const ctx = await AIHandler._worldBibleFor(place);
+                if (ctx) {
+                    console.debug(`${MODULE_ID} | World Bible: "${sceneName}" -> "${place}"` +
+                                  `${pinned ? " (pinned by the GM)" : ""}, ${ctx.length} chars`);
+                    return ctx;
+                }
+            }
+            // ⚠️ Say when the bible had nothing, rather than returning "" and
+            // letting a full bible look identical to an empty one.
+            console.debug(`${MODULE_ID} | World Bible: nothing found for "${sceneName}" ` +
+                          `(tried ${candidates.map(t => `"${t}"`).join(", ") || "nothing usable"}). ` +
+                          `Pin it with the scene flag aceRegion if this scene has a home in your world.`);
+            return "";
+        } catch (e) {
+            console.warn("ACE: Engine | World Bible lookup failed:", e);
+            return "";
+        }
+    }
+
+    /** The original chain of lookups, for one place name. */
+    static async _worldBibleFor(sceneName) {
         try {
             // Prefer Scene Intelligence (comprehensive, cached per scene) — via bridge
             const intelPrompt = await EngineBridge.getSceneIntelligencePrompt(sceneName);

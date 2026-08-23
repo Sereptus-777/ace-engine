@@ -4,6 +4,9 @@
 // available to NPCs based on faction and notoriety level.
 // ============================================================
 
+import { bandFor, scoreForBand, clampScore, applyFame, fameBandFor, FAME_FLOOR,
+         startingStanding } from "./reputation-scale.mjs";
+
 const MODULE_ID = "ace-engine";
 const REPUTATION_DIR  = (worldId) => `worlds/${worldId}/ace-engine`;
 const REPUTATION_FILE = "ace-party-reputation.json";
@@ -32,8 +35,10 @@ function _emptyData(worldId) {
       version: 1,
     },
     notoriety:       "unknown",
+    fameScore:       null,        // 0-100; null means "not migrated yet"
     deeds:           [],
-    factionStanding: {},
+    factionStanding: {},          // derived words, kept so old readers work
+    factionScore:    {},          // -100..+100, THE source of truth
     titles:          [],
     knownInRegions:  [],
   };
@@ -192,6 +197,199 @@ export class ReputationEngine {
   getFactionStanding(factionId) {
     if (!factionId || !this._data) return "neutral";
     return this._data.factionStanding[factionId] ?? "neutral";
+  }
+
+  /**
+   * The party's standing with a faction as a NUMBER, -100 to +100.
+   *
+   * ⚠️ THIS IS THE SOURCE OF TRUTH; the word is derived from it. Six words
+   * could not express "slightly worse than last week", so a legendary act had
+   * to move a whole rung or nothing at all. See reputation-scale.mjs.
+   *
+   * Falls back to converting an old word-based standing the first time a
+   * faction is read, using the MIDDLE of that word's band so nothing lands one
+   * point away from changing its own label.
+   */
+  getFactionScore(factionId) {
+    if (!factionId || !this._data) return 0;
+    this._data.factionScore ??= {};
+    const known = this._data.factionScore[factionId];
+    if (typeof known === "number") return known;
+    const word = this._data.factionStanding?.[factionId];
+    if (word) {
+      // "suspicious" was the old name for what is now "wary".
+      const key = String(word).toLowerCase() === "suspicious" ? "wary" : String(word).toLowerCase();
+      return scoreForBand(key);
+    }
+    return 0;
+  }
+
+  /**
+   * Move a faction's standing by a number of points and save.
+   * ⚠️ Writes BOTH the score and the derived word, so a reader that still wants
+   * a word keeps getting one and can never disagree with the number.
+   * @returns {{from:number, to:number, band:string, changed:boolean}}
+   */
+  /**
+   * The attitude a faction arrives with, applied the FIRST time anything
+   * touches them and never again.
+   *
+   * ⚠️ THIS IS WHAT "ON FIRST CONTACT" MEANS. Johnny, asked when a starting
+   * attitude should be decided: "It should happen on first contact, right?"
+   * It used to be dealt to all 453 factions at world load, which meant every
+   * faction in the Realms held a view of a party that had never left Barovia,
+   * and it re-dealt itself after every repair.
+   *
+   * Now nothing has an opinion until the party does something that reaches it.
+   * At that moment they arrive with who they are — the Zhentarim hostile, a
+   * temple wary — and the deed moves them from there.
+   */
+  async _startingScoreFor(factionId) {
+    try {
+      const { getFaction } = await import("./npc/faction-registry.mjs");
+      const f = getFaction(factionId);
+      if (!f) return 0;
+      const { score } = startingStanding({ ...f, id: factionId });
+      return Number(score) || 0;
+    } catch (err) {
+      // ⚠️ Zero, and say so. Silently inventing an attitude would be worse
+      // than starting neutral, and pretending this worked would be worst.
+      console.warn(`ACE: Engine | reputation | could not read a starting attitude `
+        + `for ${factionId}; beginning at neutral:`, err);
+      return 0;
+    }
+  }
+
+  /**
+   * @param {boolean} [opts.seed=true]  apply their innate attitude if this is
+   *   the first thing that has ever touched them. FALSE for second-hand news.
+   *
+   * ⚠️ A RUMOUR IS NOT A MEETING. With seeding on for everything, the party
+   * hurt the Temple of Lathander, its ally the Purple Dragons heard about it,
+   * and the Purple Dragons were handed a rolled starting attitude of +60 and
+   * then docked 9 — leaving a faction the party has never met sitting at +51
+   * and reading as nearly friendly. The roll decided that, not the campaign.
+   *
+   * So an innate attitude is applied only when a faction is the SUBJECT of
+   * something: when the party did it TO them. Allies and enemies who merely
+   * hear about it move from wherever they already were, which for a stranger
+   * is nothing at all.
+   */
+  async adjustFactionScore(factionId, delta, worldId, opts = {}) {
+    if (!factionId || !this._data || !delta) return null;
+    const seed = opts.seed !== false;
+    const from = this.hasFactionScore(factionId)
+      ? this.getFactionScore(factionId)
+      : (seed ? await this._startingScoreFor(factionId) : 0);
+    const to   = clampScore(from + delta);
+    this._data.factionScore ??= {};
+    this._data.factionScore[factionId] = to;
+    const band = bandFor(to);
+    this._data.factionStanding[factionId] = band.key;
+    this._dirty = true;
+    await this.save(worldId);
+    return { from, to, band: band.key, changed: bandFor(from).key !== band.key };
+  }
+
+  /** Every faction score, as a plain object. Read-only snapshot. */
+  getAllFactionScores() {
+    return { ...(this._data?.factionScore ?? {}) };
+  }
+
+  /**
+   * Forget every opinion and start again from nothing.
+   *
+   * ⚠️ WHY THIS EXISTS. On 2026-08-22 a starting-attitude pass rolled an
+   * opinion for 233 factions that Johnny had never met, and he said plainly he
+   * had not wanted it. The evidence was in the numbers: of 236 scores, 233 sat
+   * on an EXACT band midpoint (-90, -59, -24, +25, +60, +90), because they were
+   * dealt rather than earned. Only three had ever been touched by anything, and
+   * by six points.
+   *
+   * Wiping is safe because it discards only the OPINION. Membership lives on
+   * the creature as a flag, and the faction registry is untouched, so Vladimir
+   * stays in the Order of the Silver Dragon and Varek stays in the Amber
+   * Collective. What resets is only what those factions think of the party,
+   * which is then rebuilt from deeds that actually happened.
+   *
+   * @returns {{cleared:number}} how many opinions were forgotten
+   */
+  async resetAllStandings(worldId) {
+    if (!this._data) return { cleared: 0 };
+    const cleared = new Set([
+      ...Object.keys(this._data.factionScore ?? {}),
+      ...Object.keys(this._data.factionStanding ?? {}),
+    ]).size;
+    this._data.factionScore = {};
+    this._data.factionStanding = {};
+
+    // ⚠️🔴 FAME HAS TO GO BACK TOO, OR REPLAY IS NOT IDEMPOTENT (2026-08-22).
+    // This forgot every faction's opinion and left renown standing, so each
+    // rebuild added the same sixteen deeds' fame on top of the last: Johnny
+    // watched it climb 12 → 32 → 45 across three runs of a pass whose whole
+    // purpose is to produce the same answer from the same deeds. A repair that
+    // changes the world a little more every time you run it is not a repair.
+    this._data.fameScore = null;         // null means "not migrated", so the floor applies
+    this._data.notoriety = "unknown";
+
+    this._dirty = true;
+    await this.save(worldId);
+    console.log(`ACE: Engine | reputation | forgot ${cleared} faction opinions and reset renown; `
+      + `membership and the registry are untouched.`);
+    return { cleared };
+  }
+
+  /**
+   * Has this faction ever had a standing recorded?
+   * ⚠️ getFactionScore() cannot answer this: it returns 0 both for "never set"
+   * and for "genuinely neutral", and seeding a starting attitude needs to tell
+   * those apart or it would overwrite a real neutral every load.
+   */
+  hasFactionScore(factionId) {
+    if (!factionId || !this._data) return false;
+    if (typeof this._data.factionScore?.[factionId] === "number") return true;
+    return !!this._data.factionStanding?.[factionId];
+  }
+
+  /** Fame as a number, seeded off the old word scale the first time. */
+  /**
+   * Renown, 0-100, as a whole number.
+   *
+   * ⚠️ THE STORED VALUE CARRIES A FRACTION. Fame accumulates in fractions so
+   * that many small deeds add up slowly rather than each rounding away to zero
+   * — forty goblin bands used to move renown from 12 to exactly 12. Every
+   * consumer wants a whole number, so the rounding happens here, once.
+   */
+  getFameScore() {
+    return Math.round(this._fameRaw());
+  }
+
+  /** The stored value, fraction intact. Internal: only addFame needs this. */
+  _fameRaw() {
+    if (!this._data) return 0;
+    if (typeof this._data.fameScore === "number") return this._data.fameScore;
+    // ⚠️ A campaign in progress is not "unheard of". Johnny: "if it's unknown,
+    // it should at least be local." Nothing in ACE has ever raised this, which
+    // is why his has read "unknown" since March.
+    const SEED = { unknown: FAME_FLOOR, local: 15, regional: 50, continental: 85, legendary: 95 };
+    return SEED[String(this._data.notoriety || "unknown").toLowerCase()] ?? FAME_FLOOR;
+  }
+
+  /** Raise fame for an act and save. */
+  async addFame(magnitude, worldId) {
+    if (!this._data) return null;
+    // ⚠️ Work on the RAW value. Reading the rounded one would throw away the
+    // fraction on every call, which is the same as not carrying one at all.
+    const fromRaw = this._fameRaw();
+    const toRaw   = applyFame(fromRaw, magnitude);
+    if (toRaw === fromRaw) return null;
+    this._data.fameScore = toRaw;
+    this._data.notoriety = fameBandFor(toRaw).key;
+    this._dirty = true;
+    await this.save(worldId);
+    const from = Math.round(fromRaw), to = Math.round(toRaw);
+    // Only worth telling the GM when the number they can SEE has moved.
+    return { from, to, band: fameBandFor(toRaw).label, changed: to !== from };
   }
 
   /**

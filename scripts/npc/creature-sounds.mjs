@@ -296,8 +296,26 @@ export async function rebuildCreatureSoundIndex() {
  */
 export function getCreatureSoundCandidates(actor) {
     const primary = getCreatureSoundFolder(actor);
-    const out = [];
-    if (primary) out.push(primary);
+
+    // ⚠️🔴 THE FALLBACK OVERRODE A DELIBERATE EXCLUSION (2026-08-21).
+    //
+    // TYPE_TO_FOLDER intentionally leaves humanoid, fey and celestial unmapped,
+    // with a comment saying so in as many words: types that speak normally get
+    // no creature sounds. Correct. And then this function appended monster,
+    // generic and beast to EVERY creature regardless, which handed those buckets
+    // straight back to the ones just excluded.
+    //
+    // That is why Varek Thalor, CR 30, mid-sentence about his own resolve,
+    // growled at Johnny. The rule that should have spared him was written,
+    // documented, and then quietly undone three lines below it.
+    //
+    // The fallback exists for a real reason: a creature whose OWN family bucket
+    // is empty should still make a noise rather than going silent. So it stays,
+    // and it stays conditional on having a family in the first place. No family
+    // means the creature was never meant to growl.
+    if (!primary) return [];
+
+    const out = [primary];
     for (const generic of ["monster", "generic", "beast"]) {
         if (!out.includes(generic)) out.push(generic);
     }
@@ -476,33 +494,105 @@ export function isSoundEmote(emoteText) {
     return words.some(w => SOUND_VERBS.has(w));
 }
 
+// ─── Sound words: two tiers, because one of them eats English ──────────────
+//
+// ⚠️🔴 THE OLD PATTERN DELETED ORDINARY WORDS FROM SPOKEN DIALOGUE (2026-08-21).
+//
+// Every alternative in it ended with an OPTIONAL letter, so each one collapsed
+// onto a real English word:
+//
+//     h+o+w+l*      also matches  "how"
+//     h+i+s+[s]*    also matches  "his"      ← the worst one
+//     y+e+l+p*      also matches  "yell"
+//     r+a+w+r*      also matches  "raw"
+//     g+r+[aeiou]*r*[aeiou]*[wl]*   also matches  "grow", "grew"
+//
+// Run against a real sentence, "His blade was raw steel, and his oath was his
+// own." came out of the speakers as "blade was steel, and oath was own." Varek
+// Thalor, CR 30, asked "How about you?" and the module deleted "How" and played
+// a monster growl in its place. That is what Johnny heard.
+//
+// ⚠️ AND IT WAS INVISIBLE. Only the AUDIO is affected; the chat card shows the
+// correct sentence. So the GM reads the right words while the table hears the
+// wrong ones, and the natural conclusion is that the AI wrote something odd.
+// Months of NPC dialogue were blamed on the model.
+//
+// The rule now: a sound word must be UNMISTAKABLY a sound.
+//
+//   Tier A — elongated, not English. "Grrr", "Hissss", "Raaargh". Every pattern
+//            REQUIRES the doubled letter or the suffix that makes it a noise, so
+//            no ordinary word can reach it. Stripped anywhere.
+//   Tier B — real English words that are also sounds: roar, growl, howl, wail.
+//            Only stripped when the character is plainly making the noise rather
+//            than talking about it, i.e. standing alone as an exclamation.
+//            "Roar!" is a roar. "Do you hear that howl?" is a sentence.
+
+// Tier A: the doubled letter or hard suffix is MANDATORY in every branch.
+const SOUND_ELONGATED = new RegExp(
+    "\\b(?:" + [
+        "gr{2,}[aeiou]*[wl]*",      // grr, grrr, grrrah   (never "grow"/"grew")
+        "hi?s{3,}",                 // hisss, hissss  ("hiss" is Tier B: it is a real word)
+        "r+[ao]{3,}[aor]*g*h*",     // raaar, rooaar  (three+ vowels, so never plain "roar")
+        "r+[ao]{2,}[aor]*g+h+",     // roargh, raargh (the gh is what makes it a noise)
+        "ra+wr+",                   // rawr                (never "raw")
+        "ho{2,}wl*",                // hoowl          ("howl" is Tier B: it is a real word)
+        "howl{2,}",                 // howll
+        "ye{2,}lp+",                // yeelp          ("yelp" is Tier B)
+        "yelp{2,}",                 // yelpp
+        "a+rgh+",                   // argh, aargh         (never "arg")
+        "u+gh+",                    // ugh, uugh
+        "n+gh+",                    // ngh
+        "b+a+h{2,}",                // bahh
+        "g+[aeo]+h{2,}",            // gahh, goh h
+        "sn[ao]rl{2,}",             // snarll
+        "mo+a+n{2,}",               // moann
+        "bu?zz{2,}",                // buzzz
+        "squa+wk{2,}",              // squawkk
+        "ca+w{2,}",                 // caww
+        "scree+",                   // screee
+    ].join("|") + ")\\b[!.,;:?\\s]*",
+    "gi");
+
+// Tier B: genuine words. Only a standalone exclamation counts as a noise.
+const SOUND_WORDS = [
+    "roar", "growl", "snarl", "grunt", "snort", "howl", "moan", "groan",
+    "wail", "yelp", "hiss", "screech", "shriek", "squeal", "bellow",
+    "chitter", "squelch", "wheeze", "croak", "gurgle", "cackle", "caw",
+    "squawk", "chirp", "cluck", "hoot",
+];
+
+// Standalone means: start of the line or after sentence punctuation, then the
+// word (optionally pluralised), then an exclamation or full stop, then a
+// boundary. "Roar! You dare?" strips. "...that awful roar was..." does not.
+const SOUND_STANDALONE = new RegExp(
+    "(^|[.!?…]\\s*|[\"“”']\\s*)(" + SOUND_WORDS.join("|") + ")s?\\s*[!.]+\\s*",
+    "gi");
+
 /**
- * Strips onomatopoeia and standalone sound words from dialogue text.
+ * Remove noises the creature MAKES from words the creature SAYS, so the sound
+ * file can play instead. Returns the cleaned line and whether anything went.
  *
- * "Grrr, me kill you!" → { cleaned: "me kill you!", hadSounds: true }
- * "Back off!"          → { cleaned: "Back off!",    hadSounds: false }
- * "Hisss!"             → { cleaned: "",              hadSounds: true }
+ * ⚠️ When in doubt, keep the word. A missing growl is a cosmetic loss; a
+ * deleted word changes what a character said.
  */
 export function stripSoundEffects(text) {
     if (!text) return { cleaned: "", hadSounds: false };
     let hadSounds = false;
 
-    // 1. Onomatopoeia with repeated letters (Grrr, Hisss, Raargh, etc.)
-    let cleaned = text.replace(
-        /\b(?:g+r+[aeiou]*r*[aeiou]*[wl]*|h+i+s+[s]*|r+[ao]+[aor]*g*h*|g+[aeo]+h+|a+r+g+h*|u+g+h+|r+a+w+r*|n+g+h+|b+a+h+|s+n+a+r+l*|g+n+a+r+l*|s+n+o+r+t*|g+r+u+n+t*|h+o+w+l*|m+o+a+n*|g+r+o+a+n*|w+a+i+l*|y+e+l+p*|b+u+z+z*|c+a+w+|s+q+u+a+w+k*)\b[!.,;:?\s]*/gi,
-        () => { hadSounds = true; return ""; }
-    );
+    let cleaned = String(text).replace(SOUND_ELONGATED, () => { hadSounds = true; return ""; });
 
-    // 2. Standalone sound verbs (catches "Screech!" or "Caw!" cases)
-    cleaned = cleaned.replace(
-        /\b(screech|shriek|squeal|bellow|chitter|squelch|wheeze|croak|gurgle|cackle|caw|squawk|chirp|screee|cluck|hoot)[s]?[!.,;:?\s]*/gi,
-        () => { hadSounds = true; return ""; }
-    );
+    cleaned = cleaned.replace(SOUND_STANDALONE, (_m, lead) => {
+        hadSounds = true;
+        return lead ?? "";
+    });
 
-    // 3. Clean up leftover punctuation / extra spaces
     cleaned = cleaned.replace(/^[\s,;:!?.…—–-]+/, "")
                      .replace(/\s{2,}/g, " ")
                      .trim();
+
+    // ⚠️ Never hand back an empty line because the whole utterance looked like a
+    // noise. If nothing survives, the original was the utterance.
+    if (!cleaned) return { cleaned: String(text).trim(), hadSounds: false };
 
     return { cleaned, hadSounds };
 }

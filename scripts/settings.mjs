@@ -5,6 +5,9 @@
 import { MODULE_ID }      from "./ace-engine.mjs";
 import { AceConfigPanel } from "./config-panel.mjs";
 import { AceLanguageTable } from "./npc/language-table.mjs";
+// Safe to import: shared-credentials declares its own module id and imports
+// nothing, so there is no cycle back into this file.
+import { getSharedElevenLabsKey } from "./npc/shared-credentials.mjs";
 
 // ── First-page settings visibility ──────────────────────────
 // Settings whose keys are in this set stay visible on Foundry's standard
@@ -106,6 +109,34 @@ export class AceSettings {
       });
     }
     game.settings.register(MODULE_ID, "apiKeysByProviderSecure", {
+      scope: "client", config: false, type: Object, default: {},
+    });
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  🔑 ONE PLACE. THIS ONE. (2026-08-21)
+    //
+    //  Everything above is now a MIGRATION SOURCE and nothing else. Do not
+    //  read it, do not write it, do not add to it.
+    //
+    //  ⚠️ WHY. The provider key used to live in THREE places at once: a world
+    //  copy, a client copy, and a per-provider vault that held its own second
+    //  copy of the same string. Three copies means three chances to disagree,
+    //  and no single answer to "what is my key". It cost Johnny his key: the
+    //  panel read one copy, the wizard wrote another, and a single Save wrote
+    //  emptiness across all three at once. There was nothing left to recover
+    //  from precisely BECAUSE there were three of them.
+    //
+    //  The vault was never a cache of the active key - it IS the storage. A
+    //  provider key is simply the entry for the provider you are using. There
+    //  is no separate "active key" any more, so there is nothing left that can
+    //  fall out of step.
+    //
+    //    { byProvider: { openai: "sk-…", anthropic: "sk-ant-…" },
+    //      chat: "…", digest: "…" }
+    //
+    //  Client-scoped, so it is never broadcast to a player.
+    // ══════════════════════════════════════════════════════════════════════
+    game.settings.register(MODULE_ID, "apiKeys", {
       scope: "client", config: false, type: Object, default: {},
     });
 
@@ -546,18 +577,30 @@ export class AceSettings {
 
     s("maxContextTokens", {
       name: "Max Context Tokens",
-      hint: "How much conversation history rides along with each request. Higher = NPCs remember more of a long conversation, but each message costs a little more and takes slightly longer. 7000 matches ACE's long-standing behaviour; raise it for better memory, lower it if you hit rate limits or context errors.",
+      hint: "How much of a conversation an NPC can see at once. 7,000 is about 4,100 words, roughly fourteen paperback pages, and is what ACE has always used. Higher means NPCs remember more of a long scene. You pay per word on every message, so on a cheap model this is pennies and on an expensive one it is not — check what your provider charges before pushing it high.",
       type: Number,
       default: 7000,
-      range: { min: 500, max: 16000, step: 500 },
+      // ⚠️ THE OLD CEILING WAS 16,000 AND THE MODEL HOLDS 128,000. Even the
+      // maximum a GM was allowed to choose was one eighth of what gpt-4o-mini
+      // can actually take, so the slider capped memory far below the hardware.
+      // Johnny, 2026-08-21: "I want that ceiling so it's well past 16,000."
+      //
+      // ⚠️ THE DEFAULT DELIBERATELY DOES NOT MOVE. On gpt-4o-mini 128,000
+      // tokens costs about two cents a reply and memory is nearly free. On an
+      // expensive model it is not: the same request on a top-tier model runs to
+      // a dollar or more EACH TIME. Raising the ceiling lets someone who knows
+      // their provider spend it; raising the default would spend it for people
+      // who never looked.
+      range: { min: 500, max: 128000, step: 1000 },
     });
 
     s("maxResponseTokens", {
       name: "Max Response Tokens",
-      hint: "Upper limit on how long a reply can be. Higher = ACE Engine can write longer narration and more detailed answers; lower = forces concise responses. Default 2048 fits most table-side use.",
+      hint: "The longest a single reply may be. 2,048 is about 1,200 words, four pages, which is plenty for anything said at a table. Raise it for long narration. ⚠️ Providers reserve this whole amount against your credit before writing a word, so an enormous value can get a request refused outright even when the reply would have been short.",
       type: Number,
       default: 2048,
-      range: { min: 256, max: 8192, step: 256 },
+      // gpt-4o-mini alone allows 16,384 completion tokens; 8,192 was ours.
+      range: { min: 256, max: 16384, step: 256 },
     });
 
     // ── Feature Toggles ────────────────────────────────────
@@ -1283,6 +1326,44 @@ export class AceSettings {
 
     s("factionRegistry", {
       scope: "world", config: false, type: Object, default: {},
+    });
+
+    // One-shot flag for the mislabelled-faction repair. See npc/faction-repair.mjs.
+    s("factionBaseRepair2026", {
+      scope: "world", config: false, type: Boolean, default: false,
+    });
+
+    // One-shot flag for rebuilding combat memories from the history log.
+    s("combatMemoryBackfill2026", {
+      scope: "world", config: false, type: Boolean, default: false,
+    });
+
+    // One-shot flag for reading the deed back-catalogue into standings.
+    s("deedClassification2026", {
+      scope: "world", config: false, type: Boolean, default: false,
+    });
+
+    // One-shot flag for assigning factions to creatures that predate the feature.
+    s("factionAssignExisting2026", {
+      scope: "world", config: false, type: Boolean, default: false,
+    });
+
+    // Rebuild NPC Profiles into linked multi-page dossiers, fold creature types
+    // into a Bestiary, rewrite PC Profiles, and delete the journals that were
+    // never creatures at all. See npc/journal-rebuild.mjs.
+    //
+    // ⚠️ A VERSION, NOT A BOOLEAN. A plain "done" flag means the next time the
+    // page format improves, every existing world silently keeps the old one and
+    // only brand-new worlds get the fix. Storing which build last rebuilt lets a
+    // later version run again on its own.
+    s("journalRebuildVersion", {
+      scope: "world", config: false, type: String, default: "",
+    });
+
+    // Wipe the dealt faction opinions and rebuild reputation from real deeds.
+    // Version-stamped so a later fix to the pipeline can run it again.
+    s("deedReplayVersion", {
+      scope: "world", config: false, type: String, default: "",
     });
 
     s("factionMemory", {
@@ -2388,31 +2469,60 @@ export class AceSettings {
  * world scope, which means every write goes through here and the world names
  * are only ever blanked.
  */
-export async function setSecret(name, value) {
-  const map = {
-    apiKey: "apiKeySecure",
-    chatApiKey: "chatApiKeySecure",
-    digestApiKey: "digestApiKeySecure",
-  };
-  const secure = map[name] ?? name;
-  await game.settings.set(MODULE_ID, secure, value ?? "");
-  // ⚠️ Blank the legacy world name on every write, not just at migration.
-  // Anything that wrote it before this release, or any older client still
-  // running, gets cleaned up the next time the GM saves.
-  if (map[name]) {
-    try {
-      if (game.settings.get(MODULE_ID, name)) await game.settings.set(MODULE_ID, name, "");
-    } catch (_) { /* not registered on this build — fine */ }
-  }
+// ─── The one store ────────────────────────────────────────────────────────
+// Every secret read and write in ACE Engine goes through these five helpers
+// and lands in the single client-scoped `apiKeys` object. Nothing else may
+// touch a key name directly.
+
+const _SLOT = { chatApiKey: "chat", digestApiKey: "digest", chatApiKeySecure: "chat", digestApiKeySecure: "digest" };
+const _blankStore = () => ({ byProvider: {}, chat: "", digest: "" });
+
+/** The whole store, always a safe shape, never a shared reference. */
+function _readStore() {
+  try {
+    const v = game.settings.get(MODULE_ID, "apiKeys");
+    if (!v || typeof v !== "object") return _blankStore();
+    return { ..._blankStore(), ...v, byProvider: { ...(v.byProvider ?? {}) } };
+  } catch (_) { return _blankStore(); }
 }
 
-/** Write the per-provider vault. Client-scoped, world copy blanked. */
+async function _writeStore(next) {
+  await game.settings.set(MODULE_ID, "apiKeys", next);
+}
+
+/** Which provider the key belongs to. A key is meaningless without one. */
+function _activeProvider() {
+  try { return game.settings.get(MODULE_ID, "aiProvider") || "default"; }
+  catch (_) { return "default"; }
+}
+
+/**
+ * Write a secret. One write, one place.
+ *
+ * ⚠️ Writing the provider key stores it AGAINST THE CURRENT PROVIDER, which is
+ * what lets a GM keep an OpenAI key and an Anthropic key at the same time and
+ * switch between them without losing either. Switching provider no longer
+ * copies anything anywhere, so there is no copy left to go stale.
+ */
+export async function setSecret(name, value) {
+  const v = typeof value === "string" ? value.trim() : (value ?? "");
+  const store = _readStore();
+  const slot = _SLOT[name];
+  if (slot) {
+    store[slot] = v;
+  } else {
+    const provider = _activeProvider();
+    if (v) store.byProvider[provider] = v;
+    else delete store.byProvider[provider];
+  }
+  await _writeStore(store);
+}
+
+/** Replace the per-provider keys wholesale. Used by the config panel. */
 export async function setSecretVault(vault) {
-  await game.settings.set(MODULE_ID, "apiKeysByProviderSecure", vault ?? {});
-  try {
-    const legacy = game.settings.get(MODULE_ID, "apiKeysByProvider");
-    if (legacy && Object.keys(legacy).length) await game.settings.set(MODULE_ID, "apiKeysByProvider", {});
-  } catch (_) { /* fine */ }
+  const store = _readStore();
+  store.byProvider = { ...(vault ?? {}) };
+  await _writeStore(store);
 }
 
 /** Is this setting key a secret? Used to route generic config-panel writes. */
@@ -2478,6 +2588,47 @@ export async function migrateSystemPromptToAdditions() {
  * ⚠️ NEVER LOGS OR DISPLAYS THE KEY. Reports only whether it authenticated and
  * which narrator voice will be used.
  */
+/**
+ * The voices on the GM's OWN ElevenLabs account.
+ *
+ * ⚠️ WHY THIS HAD TO EXIST. The narrator and NPC voice pickers were hardcoded
+ * lists of ElevenLabs STOCK voices. If you had cloned a voice, or bought one
+ * from the library, or made your own, it could not appear in either dropdown -
+ * the only way to reach it was to tick "use a custom voice ID instead" and
+ * paste a raw id you had to go and find yourself. That is four settings doing
+ * one job and it is why the voice screen read as broken.
+ *
+ * @returns {Promise<{ok: boolean, voices: Array<{id,name,category}>, error?: string}>}
+ */
+export async function fetchElevenLabsVoices() {
+  const key = getSharedElevenLabsKey();
+  if (!key) return { ok: false, voices: [], error: "no ElevenLabs key is set" };
+  try {
+    const res = await fetch("https://api.elevenlabs.io/v2/voices?page_size=100", {
+      headers: { "xi-api-key": key },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      // ⚠️ Say which failure it was. "Could not load voices" sends the GM
+      // hunting through the wrong screen; 401 is the key, 403 is permissions.
+      const why = res.status === 401 ? "the key is invalid or expired"
+                : res.status === 403 ? "the key is missing the voices permission — create a Full Access key"
+                : `ElevenLabs returned ${res.status}`;
+      return { ok: false, voices: [], error: why };
+    }
+    const data = await res.json();
+    const voices = (data?.voices ?? [])
+      .map(v => ({ id: v.voice_id, name: v.name ?? v.voice_id, category: v.category ?? "" }))
+      .filter(v => v.id);
+    // Your own creations first: those are the ones a GM is looking for.
+    const rank = (c) => (c === "cloned" ? 0 : c === "generated" ? 1 : c === "professional" ? 2 : 3);
+    voices.sort((a, b) => rank(a.category) - rank(b.category) || a.name.localeCompare(b.name));
+    return { ok: true, voices };
+  } catch (err) {
+    return { ok: false, voices: [], error: err?.name === "TimeoutError" ? "ElevenLabs did not respond" : (err?.message ?? "request failed") };
+  }
+}
+
 export async function verifyElevenLabsKey(key) {
   const k = String(key ?? "").trim();
   if (!k) {
@@ -2491,12 +2642,36 @@ export async function verifyElevenLabsKey(key) {
       signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) {
-      const why = res.status === 401 ? "ElevenLabs rejected that key (401). Check it was copied whole."
+      // ⚠️ READ THE BODY. This only ever named 401 and 429, so the failure that
+      // actually happened - a 400 whose body said, word for word, "API key ID
+      // used as API key - only valid API keys can be used. API keys start with
+      // sk_" - was reported to the GM as "ElevenLabs returned 400 Bad Request".
+      // The provider had already diagnosed it and we replaced its sentence with
+      // a status code.
+      let detail = "";
+      try {
+        const j = await res.json();
+        detail = j?.detail?.message ?? j?.detail?.status ?? j?.message ?? "";
+      } catch (_) { /* not JSON */ }
+
+      const why = detail ? `ElevenLabs said: ${detail}`
+                : res.status === 401 ? "ElevenLabs rejected that key (401). Check it was copied whole."
                 : res.status === 429 ? "That key is rate-limited or out of quota right now."
                 : `ElevenLabs returned ${res.status} ${res.statusText}.`;
-      ui.notifications?.error(`ACE Engine: ${why} NPC voices stay on the browser voice until this is fixed.`,
+
+      // The single most common mistake, and it is not obvious: the dashboard
+      // LISTS a key id, and the key itself is shown exactly once, when you
+      // create it. Copying the wrong one gives a plausible looking string.
+      const looksLikeAnId = !k.startsWith("sk_");
+      const hint = looksLikeAnId
+        ? " That string does not start with \"sk_\", so it is probably the key ID copied from the list in " +
+          "your ElevenLabs dashboard rather than the key itself. In ElevenLabs open your profile, then API Keys, " +
+          "create a new key, and copy the value it shows you once at creation."
+        : "";
+
+      ui.notifications?.error(`ACE Engine: ${why}${hint} NPC voices stay silent until this is fixed.`,
         { permanent: true });
-      console.warn(`${MODULE_ID} | ElevenLabs key check failed: ${res.status}`);
+      console.warn(`${MODULE_ID} | ElevenLabs key check failed: ${res.status} ${detail}`);
       return false;
     }
     let voiceName = "your configured narrator voice";
@@ -2530,26 +2705,37 @@ export function isSecretKey(name) {
  * ⚠️ Never read the legacy names directly anywhere else.
  */
 export function getSecret(name) {
-  const map = {
-    apiKey: "apiKeySecure",
-    chatApiKey: "chatApiKeySecure",
-    digestApiKey: "digestApiKeySecure",
-  };
-  const secure = map[name];
+  const store = _readStore();
+  const slot = _SLOT[name];
+  const live = slot ? store[slot] : store.byProvider[_activeProvider()];
+  if (live) return live;
+
+  // Nothing in the store yet. Fall back to the old names ONCE so a client that
+  // has not run the migration (a second GM, a fresh browser) still works. The
+  // migration below empties these permanently.
   try {
+    const legacy = { apiKey: "apiKeySecure", chatApiKey: "chatApiKeySecure", digestApiKey: "digestApiKeySecure" };
+    const secure = legacy[name];
     if (secure) {
       const v = game.settings.get(MODULE_ID, secure);
       if (v) return v;
+    }
+    if (!slot) {
+      const oldVault = game.settings.get(MODULE_ID, "apiKeysByProviderSecure") || {};
+      const fromVault = oldVault[_activeProvider()];
+      if (fromVault) return fromVault;
     }
     return game.settings.get(MODULE_ID, name) || "";
   } catch (_) { return ""; }
 }
 
-/** Per-provider vault, client-scoped, with legacy fallback. */
+/** The per-provider keys. This IS the storage, not a copy of anything. */
 export function getSecretVault() {
+  const store = _readStore();
+  if (Object.keys(store.byProvider).length) return store.byProvider;
   try {
-    const v = game.settings.get(MODULE_ID, "apiKeysByProviderSecure");
-    if (v && Object.keys(v).length) return v;
+    const old = game.settings.get(MODULE_ID, "apiKeysByProviderSecure");
+    if (old && Object.keys(old).length) return old;
     return game.settings.get(MODULE_ID, "apiKeysByProvider") || {};
   } catch (_) { return {}; }
 }
@@ -2560,40 +2746,84 @@ export function getSecretVault() {
  */
 export async function migrateSecretsToClientScope() {
   if (!game.user?.isGM) return;
-  const pairs = [
-    ["apiKey", "apiKeySecure"],
-    ["chatApiKey", "chatApiKeySecure"],
-    ["digestApiKey", "digestApiKeySecure"],
-  ];
-  let moved = 0;
-  for (const [legacy, secure] of pairs) {
-    try {
-      const old = game.settings.get(MODULE_ID, legacy);
-      if (!old) continue;
-      if (!game.settings.get(MODULE_ID, secure)) {
-        await game.settings.set(MODULE_ID, secure, old);
-      }
-      await game.settings.set(MODULE_ID, legacy, "");   // stop broadcasting it
-      moved++;
-    } catch (err) {
-      console.warn(`${MODULE_ID} | secret migration failed for "${legacy}":`, err);
+
+  const store = _readStore();
+  let folded = 0;
+
+  // 1. Fold every old copy into the one store. First non-empty value wins, and
+  //    anything already in the store wins over everything, so re-running this
+  //    can never overwrite a key the GM has since typed.
+  const readOld = (name) => {
+    try { return (game.settings.get(MODULE_ID, name) || "").toString().trim(); }
+    catch (_) { return ""; }
+  };
+
+  for (const [slot, names] of Object.entries({
+    chat:   ["chatApiKeySecure", "chatApiKey"],
+    digest: ["digestApiKeySecure", "digestApiKey"],
+  })) {
+    if (store[slot]) continue;
+    for (const n of names) {
+      const v = readOld(n);
+      if (v) { store[slot] = v; folded++; break; }
     }
   }
+
+  // The provider key: the old vault first (it was keyed correctly), then the
+  // loose single copies, which belong to whichever provider is selected now.
   try {
-    const oldVault = game.settings.get(MODULE_ID, "apiKeysByProvider") || {};
-    if (Object.keys(oldVault).length) {
-      const cur = game.settings.get(MODULE_ID, "apiKeysByProviderSecure") || {};
-      if (!Object.keys(cur).length) {
-        await game.settings.set(MODULE_ID, "apiKeysByProviderSecure", oldVault);
+    for (const vaultName of ["apiKeysByProviderSecure", "apiKeysByProvider"]) {
+      const old = game.settings.get(MODULE_ID, vaultName) || {};
+      for (const [provider, key] of Object.entries(old)) {
+        if (key && !store.byProvider[provider]) { store.byProvider[provider] = key; folded++; }
       }
-      await game.settings.set(MODULE_ID, "apiKeysByProvider", {});
-      moved++;
+    }
+  } catch (_) { /* not registered on this build */ }
+
+  const provider = _activeProvider();
+  if (!store.byProvider[provider]) {
+    for (const n of ["apiKeySecure", "apiKey"]) {
+      const v = readOld(n);
+      if (v) { store.byProvider[provider] = v; folded++; break; }
+    }
+  }
+
+  if (folded) await _writeStore(store);
+
+  // 2. Empty the old names so nothing reads a stale second copy later.
+  for (const n of ["apiKey", "chatApiKey", "digestApiKey", "apiKeySecure", "chatApiKeySecure", "digestApiKeySecure"]) {
+    try { if (game.settings.get(MODULE_ID, n)) await game.settings.set(MODULE_ID, n, ""); } catch (_) {}
+  }
+  for (const n of ["apiKeysByProvider", "apiKeysByProviderSecure"]) {
+    try {
+      const v = game.settings.get(MODULE_ID, n);
+      if (v && Object.keys(v).length) await game.settings.set(MODULE_ID, n, {});
+    } catch (_) {}
+  }
+
+  // 3. ⚠️ BLANKING IS NOT DELETING. Foundry keeps a Setting document for
+  //    anything ever written and ships every world document to every client,
+  //    so a blanked world key is still a record sitting in the database with
+  //    the module's name on it. Remove the documents outright.
+  let purged = 0;
+  try {
+    const worldStore = game.settings?.storage?.get?.("world");
+    if (worldStore) {
+      for (const n of ["apiKey", "chatApiKey", "digestApiKey", "apiKeysByProvider"]) {
+        const doc = [...worldStore].find(d => d?.key === `${MODULE_ID}.${n}`);
+        if (doc) { await doc.delete(); purged++; }
+      }
     }
   } catch (err) {
-    console.warn(`${MODULE_ID} | secret vault migration failed:`, err);
+    console.warn(`${MODULE_ID} | could not remove old world key records:`, err);
   }
-  if (moved) {
-    console.log(`${MODULE_ID} | Moved ${moved} secret(s) out of world scope into this client. Players can no longer read them.`);
-    ui.notifications?.info(`ACE Engine: ${moved} API key(s) moved to GM-only storage. They were previously readable by any player.`);
+
+  if (folded || purged) {
+    console.log(`${MODULE_ID} | Secrets consolidated: folded ${folded} old cop${folded === 1 ? "y" : "ies"} into one store, removed ${purged} world record(s).`);
+    if (folded) {
+      ui.notifications?.info(
+        `ACE Engine: your API keys now live in one place, on this computer only. ` +
+        `Nothing was lost and players can no longer read them.`);
+    }
   }
 }

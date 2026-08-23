@@ -47,6 +47,7 @@ export class AIConfigDialog extends HandlebarsApplicationMixin(ApplicationV2) {
             secretLore:        this.actor.getFlag(MODULE_ID, "secretLore")     || this.actor.flags?.npclink?.secretLore     || "",
             voiceId:           this.actor.getFlag(MODULE_ID, "voiceId")        || this.actor.flags?.npclink?.voiceId        || "",
             voiceAccent:       this.actor.getFlag(MODULE_ID, "voiceAccent")    || "",
+            factionId:         this.actor.getFlag(MODULE_ID, "factionId")      || "",
             voiceGender,
             isMale:            voiceGender === "male",
             isFemale:          voiceGender === "female",
@@ -127,7 +128,20 @@ export class AIConfigDialog extends HandlebarsApplicationMixin(ApplicationV2) {
                             const voiceCode = el.querySelector(".ace-npc-voice-id");
                             if (voiceCode) voiceCode.textContent = result.voiceId;
                             const voiceInput = el.querySelector("#ai-voice-id-input");
-                            if (voiceInput) voiceInput.value = result.voiceId;
+                            // ⚠️ Setting .value on a <select> does nothing when no
+                            // option matches, so an auto-assigned voice would look
+                            // like it had not been assigned. Make the option first.
+                            if (voiceInput) {
+                                if (voiceInput.tagName === "SELECT"
+                                    && ![...voiceInput.options].some(o => o.value === result.voiceId)) {
+                                    const o = document.createElement("option");
+                                    o.value = result.voiceId;
+                                    o.textContent = result.voiceId;
+                                    voiceInput.appendChild(o);
+                                }
+                                voiceInput.dataset.current = result.voiceId;
+                                voiceInput.value = result.voiceId;
+                            }
                             const accentBadge = el.querySelector(".ace-badge-accent");
                             if (accentBadge) accentBadge.innerHTML = `<i class="fas fa-globe"></i> ${result.accent}`;
                             ui.notifications.info(`Voice reassigned (${newGender}) — ${result.accent} accent`);
@@ -162,6 +176,101 @@ export class AIConfigDialog extends HandlebarsApplicationMixin(ApplicationV2) {
         }
 
         // Voice Test button
+        // ── Faction: the only place a GM can see or change it ──────────────
+        // ⚠️ There was NO faction field anywhere in the interface. A creature's
+        // faction could be set by a token drop or a bulk pass and never seen,
+        // never corrected. Vladimir Horngaard sat filed under the enemy he died
+        // fighting and the only way to fix him was a console command.
+        (async () => {
+            const sel = el.querySelector("#ai-faction-select");
+            if (!sel) return;
+            const current = sel.dataset.current || "";
+            try {
+                const { getAllFactions } = await import("./faction-registry.mjs");
+                const all = getAllFactions() ?? {};
+                const rows = Object.entries(all)
+                    .filter(([, f]) => f && typeof f === "object")
+                    .sort((a, b) => String(a[1].name || "").localeCompare(String(b[1].name || "")));
+                for (const [id, f] of rows) {
+                    const o = document.createElement("option");
+                    o.value = id; o.textContent = f.name || id;
+                    sel.appendChild(o);
+                }
+                if (current && ![...sel.options].some(o => o.value === current)) {
+                    const o = document.createElement("option");
+                    o.value = current; o.textContent = `${current} (no longer in the registry)`;
+                    sel.appendChild(o);
+                }
+                sel.value = current;
+            } catch (err) { console.warn("ACE: Engine | faction list failed:", err); }
+
+            // How that faction currently regards the party, in words.
+            const showStanding = () => {
+                const hint = el.querySelector("#ai-faction-standing");
+                if (!hint) return;
+                const id = sel.value;
+                if (!id) { hint.textContent = "No faction. Deeds involving this creature reach nobody."; return; }
+                try {
+                    const api = game.modules.get(MODULE_ID)?.api;
+                    const score = api?.getFactionScore?.(id) ?? 0;
+                    const word = api?.getFactionStanding?.(id) ?? "neutral";
+                    hint.textContent = `They regard your party as ${word} (${score > 0 ? "+" : ""}${score}).`;
+                } catch (_) { hint.textContent = ""; }
+            };
+            sel.addEventListener("change", showStanding);
+            showStanding();
+
+            el.querySelector("#ai-faction-suggest")?.addEventListener("click", async () => {
+                try {
+                    const { rankFactions } = await import("./faction-lookup.mjs");
+                    const ranked = rankFactions(this.actor, { worldTag: game.world?.title || "", limit: 3 });
+                    if (!ranked.length) { ui.notifications?.info("Nothing in the registry matches this creature."); return; }
+                    sel.value = ranked[0].id;
+                    showStanding();
+                    ui.notifications?.info(`Best match: ${ranked[0].name} — ${ranked[0]._why.slice(0, 2).join("; ")}. Save to keep it.`);
+                } catch (err) { console.warn("ACE: Engine | faction suggest failed:", err); }
+            });
+        })();
+
+        // ── Fill the voice picker from the GM's own ElevenLabs account ─────
+        // Same rule as the narrator picker: the creature's saved voice is never
+        // dropped from the list, and a voice that is no longer on the account
+        // is shown as such rather than silently vanishing - which is itself the
+        // diagnosis when a creature has stopped speaking.
+        const _fillVoices = async (loud) => {
+            const sel = el.querySelector("#ai-voice-id-input");
+            if (!sel || sel.tagName !== "SELECT") return;
+            const current = sel.dataset.current || sel.value || "";
+            const { fetchElevenLabsVoices } = await import("../settings.mjs");
+            const { ok, voices, error } = await fetchElevenLabsVoices();
+            if (!ok || !voices.length) {
+                if (loud) ui.notifications?.warn(`ACE Engine — ${error ?? "no voices returned"}.`);
+                if (current && ![...sel.options].some(o => o.value === current)) {
+                    const o = document.createElement("option");
+                    o.value = current; o.textContent = current;
+                    sel.appendChild(o);
+                }
+                sel.value = current;
+                return;
+            }
+            sel.innerHTML = "";
+            const add = (label, value, parent) => {
+                const o = document.createElement("option");
+                o.value = value; o.textContent = label;
+                (parent ?? sel).appendChild(o);
+            };
+            add("Automatic — ACE picks a voice", "");
+            const grp = document.createElement("optgroup");
+            grp.label = "Your ElevenLabs voices";
+            for (const v of voices) add(v.category === "cloned" ? `${v.name} (yours)` : v.name, v.id, grp);
+            sel.appendChild(grp);
+            if (current && !voices.some(v => v.id === current)) add(`${current} (not on your account)`, current);
+            sel.value = current;
+            if (loud) ui.notifications?.info(`ACE Engine — ${voices.length} voice(s) loaded.`);
+        };
+        _fillVoices(false);
+        el.querySelector("#ai-voice-refresh")?.addEventListener("click", () => _fillVoices(true));
+
         el.querySelector("#ai-test-voice")?.addEventListener("click", async () => {
             const voiceId  = el.querySelector("#ai-voice-id-input")?.value?.trim()
                           || this.actor.getFlag(MODULE_ID, "voiceId") || "";
@@ -200,6 +309,11 @@ export class AIConfigDialog extends HandlebarsApplicationMixin(ApplicationV2) {
             const fd = new FormData(form);
             await this.actor.setFlag(MODULE_ID, "personality",       fd.get("personality") || "");
             await this.actor.setFlag(MODULE_ID, "secretLore",        fd.get("secretLore")  || "");
+            // ⚠️ unsetFlag when cleared, so "no faction" really is none rather
+            // than an empty string the matcher would have to interpret.
+            const chosenFaction = fd.get("factionId") || "";
+            if (chosenFaction) await this.actor.setFlag(MODULE_ID, "factionId", chosenFaction);
+            else               await this.actor.unsetFlag(MODULE_ID, "factionId");
             await this.actor.setFlag(MODULE_ID, "voiceId",           fd.get("voiceId")     || "");
             await this.actor.setFlag(MODULE_ID, "conversationRange", parseInt(fd.get("conversationRange")) || 30);
             await this.actor.setFlag(MODULE_ID, "chatDisabled",      fd.get("chatDisabled") === "on");

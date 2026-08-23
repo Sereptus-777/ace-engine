@@ -46,6 +46,62 @@ function _userPickedBrowser() {
     catch (_) { return false; }
 }
 
+// ─── 🤖🔴 THE ROBOT VOICE IS NOT A FALLBACK ──────────────────────────────
+// Johnny, 2026-08-21: "I don't ever want to hear the robotic voice."
+//
+// He is right, and it is not only a taste call. Every one of these fallbacks
+// turned a FAILURE into a PERFORMANCE: ElevenLabs refused, and instead of
+// saying so we played Windows speech synthesis and wrote a line to a console
+// nobody has open. The table hears a robot, the GM has no idea why, and the
+// actual cause - a voice id that is not on the account, a key without the
+// text-to-speech permission, a model the plan does not include - never
+// reaches a human. It cost a two-hour hunt in July and it cost this morning.
+//
+// So: if the GM chose the browser voice, it plays, because that is what they
+// asked for. If they chose ElevenLabs, ElevenLabs is what they get or they get
+// SILENCE AND A REASON. A wrong answer delivered confidently is worse than no
+// answer, and that applies to voices too.
+const _REASONS = {
+    nokey:    "no ElevenLabs key is set",
+    novoice:  "this speaker has no ElevenLabs voice assigned",
+    invalid:  "ElevenLabs does not recognise that voice id (404) — it may belong to another account, or have been deleted",
+    error:    "the ElevenLabs request failed",
+    badkey:   "ElevenLabs rejected the API key",
+    proxy:    "the GM's client could not produce the audio",
+};
+
+/**
+ * Refuse to speak rather than drop to the robot voice. Returns "ok" so callers
+ * carry on normally: the line is still on screen, it simply is not spoken.
+ */
+function _refuseRobot(reason, detail = "") {
+    // ⚠️ A PLAYER MUST BE TOLD WHY THEIR NPC WENT QUIET (2026-08-21). This was
+    // GM-only, which is right for "go fix your API key" and completely wrong
+    // for a rate limit: Liam watched Varek stop mid-scene with nothing on his
+    // screen at all, while the only explanation sat in the GM's console.
+    // Config advice stays GM business; anything that just means "wait" is for
+    // whoever is looking at the silent NPC.
+    if (!game.user?.isGM && reason === "proxy") {
+        ui.notifications?.warn(
+            `The voice did not play: ${detail || "the GM's client could not produce the audio"}. ` +
+            `The words are still in the chat.`);
+        console.warn(`TTS | voice unavailable via GM proxy — ${detail || reason}`);
+        return "ok";
+    }
+    if (game.user?.isGM) {
+        // ⚠️ The provider's own sentence beats anything we can paraphrase.
+        const why = detail && reason === "badkey"
+            ? `ElevenLabs rejected the API key: ${detail}`
+            : (_REASONS[reason] ?? reason);
+        ui.notifications?.error(
+            `ACE: that line was not spoken because ${why}. ` +
+            `The browser voice is off because you chose ElevenLabs — fix the cause, or switch to the browser voice in ACE Engine → Voice & TTS.`,
+            { permanent: true });
+    }
+    console.warn(`TTS | refused to fall back to the browser voice — ${reason}${detail ? ` (${detail})` : ""}`);
+    return "ok";
+}
+
 /**
  * The words that identify THIS creature, for creature-sound scoring.
  * "Ogre (1)" -> ["ogre"], so an ogre prefers ogre-roar over a generic one.
@@ -384,6 +440,22 @@ class TTSEngine {
         if (!response.ok) {
             const err = await response.text();
             console.error("TTS | ElevenLabs error:", response.status, err);
+            // ⚠️ ELEVENLABS ALREADY EXPLAINED THE PROBLEM. USE ITS WORDS.
+            // 2026-08-21: a 400 came back saying, in plain English, "API key ID
+            // used as API key - only valid API keys can be used. API keys start
+            // with sk_". That is the entire diagnosis, sitting in the response
+            // body, and we threw it away and told the GM "the request failed".
+            // Hours were spent hunting a key that was never a key.
+            let detail = "";
+            try {
+                const j = JSON.parse(err);
+                detail = j?.detail?.message ?? j?.detail?.status ?? j?.message ?? "";
+            } catch (_) { detail = String(err).slice(0, 200); }
+            // An auth failure can arrive as 400, not only 401/403 - which is
+            // exactly how this one slipped past the branch below.
+            if (/api[_ ]?key|authentication|unauthor/i.test(detail)) {
+                return { status: "badkey", detail };
+            }
             // A dead/mis-scoped key (401 unauthorized, 403 missing permission)
             // silently fell back to the robot voice — that cost a two-hour hunt
             // (2026-07-10). SHOUT it instead: a throttled GM toast pointing at
@@ -481,10 +553,11 @@ class TTSEngine {
                 } else {
                     ui.notifications?.warn(
                         "ACE: NPC voices have dropped to the robotic browser voice — no working ElevenLabs key was found. " +
-                        "Add or re-check it in ACE Engine → AI Setup.", { permanent: true });
+                        "Add or re-check it in ACE Engine → Voice & TTS.", { permanent: true });
                     console.warn("TTS | No ElevenLabs key resolved while voiceProvider is 'elevenlabs' — using the browser voice.");
                 }
             }
+            if (!_userPickedBrowser()) return _refuseRobot("nokey");
             await this._speakBrowser(text, pitch);
             return "ok";
         }
@@ -494,7 +567,7 @@ class TTSEngine {
             if (r === "ok") return "ok";
             // Proxy failed (GM offline mid-request, key invalid, network) —
             // fall back to browser so the player still hears something.
-            console.warn(`TTS | GM proxy returned "${r}" — falling back to browser TTS.`);
+            if (!_userPickedBrowser()) return _refuseRobot("proxy", r);
             await this._speakBrowser(text, pitch);
             return "ok";
         }
@@ -502,7 +575,10 @@ class TTSEngine {
         // mode === "local" — generate on this client and broadcast.
         const result = await this._fetch(text, voiceId, voiceSettings);
         if (result.status !== "ok") {
-            console.warn(`TTS | speak() got status "${result.status}" for voice ${voiceId} — falling back to browser TTS`);
+            // ⚠️ This is the branch that has been playing the robot. Name the
+            // cause on screen instead of hiding it behind a console warning.
+            if (!_userPickedBrowser()) return _refuseRobot(result.status, result.detail ?? `voice ${voiceId || "(none)"}`);
+            console.warn(`TTS | speak() got status "${result.status}" for voice ${voiceId} — browser voice was chosen, so using it.`);
             await this._speakBrowser(text, pitch);
             return "ok";
         }

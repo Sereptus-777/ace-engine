@@ -74,14 +74,35 @@
                 <p class="hint">Hidden knowledge, quest hooks, betrayal triggers. Players never see this — only the AI reads it.</p>
             </div>
 
+            {{!-- Faction --}}
+            <div class="form-group">
+                <label><i class="fas fa-flag"></i> Faction</label>
+                <div class="ace-npc-voice-override-row">
+                    <select name="factionId" id="ai-faction-select" data-current="{{factionId}}">
+                        <option value="">No faction</option>
+                    </select>
+                    <button type="button" id="ai-faction-suggest" class="ace-cfg-plainbtn">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i> Suggest
+                    </button>
+                </div>
+                <p class="hint" id="ai-faction-standing">Who they belong to. This is how a deed done for them, or against them, reaches anybody.</p>
+            </div>
+
             {{!-- Voice Override --}}
             <div class="form-group">
-                <label><i class="fas fa-microphone-alt"></i> Voice ID Override</label>
+                <label><i class="fas fa-microphone-alt"></i> Voice</label>
                 <div class="ace-npc-voice-override-row">
-                    <input type="text" name="voiceId" id="ai-voice-id-input" value="{{voiceId}}" placeholder="Auto-assigned by Voice Engine" />
+                    {{!-- A SELECT, not a text box. Pasting a raw voice id was the
+                          only way to give a creature one of your own voices. --}}
+                    <select name="voiceId" id="ai-voice-id-input" data-current="{{voiceId}}">
+                        <option value="">Automatic — ACE picks a voice</option>
+                    </select>
+                    <button type="button" id="ai-voice-refresh" class="ace-cfg-plainbtn">
+                        <i class="fa-solid fa-rotate"></i> Load my voices
+                    </button>
                 </div>
                 <input type="text" id="ai-test-text" placeholder="Test phrase... (leave blank for default)" />
-                <p class="hint">Override the auto-assigned voice. Paste an ElevenLabs Voice ID, or clear to let the Voice Engine pick one.</p>
+                <p class="hint">Give this creature a specific voice, or leave it on Automatic and ACE will choose one that suits them.</p>
             </div>
 
             {{!-- Accent Override — options built by JS to handle selected state --}}

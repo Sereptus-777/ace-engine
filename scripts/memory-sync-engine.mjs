@@ -241,19 +241,33 @@ async function _gatherPayload() {
     } catch (_) { /* skip */ }
   }
 
-  // 2. Journals — ACE folder contents only
+  // 2. Journals — ⚠️ ALL OF THEM, NOT JUST OURS (2026-08-22)
+  //
+  // This said "ACE folder contents only" and skipped everything else with a
+  // `continue`. So ACE faithfully backed up the 578 journals ACE had written,
+  // and NEVER ONCE COPIED A JOURNAL JOHNNY WROTE HIMSELF.
+  //
+  // He went looking for the campfire where King entered the story and it was
+  // nowhere in any export, any timeline, any backup — because it is in HIS
+  // journal, in HIS folder, and the only thing that has ever gathered journals
+  // deliberately ignored it.
+  //
+  // ⚠️ For a man whose first standing rule is "I want everything triple
+  // redundantly saved somewhere somehow", the one category of writing that was
+  // NOT saved was the part he wrote by hand. A backup that only backs up what
+  // the machine produced is not a backup of the campaign.
+  //
+  // Every journal is captured now, and each is marked `mine: true` when ACE
+  // wrote it, so a restore can still tell them apart.
   const journals = [];
   for (const j of game.journal?.contents ?? []) {
     try {
       const folderName = j.folder?.name ?? "";
       const grandparent = j.folder?.folder?.name ?? "";
-      // Capture if its IMMEDIATE folder is an ACE folder OR if its parent
-      // chain includes "ACE / <subfolder>" pattern.
       const isAceJournal = ACE_FOLDER_NAMES.includes(folderName)
                         || ACE_FOLDER_NAMES.includes(grandparent)
                         || folderName === "ACE"
                         || grandparent === "ACE";
-      if (!isAceJournal) continue;
       const pages = [];
       for (const p of j.pages?.contents ?? []) {
         pages.push({
@@ -269,6 +283,7 @@ async function _gatherPayload() {
         name: j.name,
         folderName,
         grandparent,
+        mine: isAceJournal,      // false = the GM wrote it, and it is irreplaceable
         pages,
       });
     } catch (_) { /* skip */ }
