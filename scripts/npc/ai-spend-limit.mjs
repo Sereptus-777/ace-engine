@@ -51,6 +51,61 @@ function _bucketFor(what) {
   return /tts|speak|voice/i.test(String(what ?? "")) ? "tts" : "ai";
 }
 
+// ⚠️🔴 THE PER-USER BUDGET CANNOT PROTECT THE BILL, AND HERE IS WHY.
+//
+// Foundry gives NO TRUSTED SENDER on a socket. `game.socket.emit` relays the
+// payload verbatim; the `userId` inside it is a value the SENDER wrote. Every
+// module stamps its own id in there for exactly that reason, and every module
+// can therefore be lied to. Our own note says it plainly: "Is the sender a GM?"
+// is NOT a check.
+//
+// So `_claimingPlayer` verifying that the claimed id names a real, active,
+// non-GM user proves only that the LIAR knows somebody else's name. One client
+// rotating through the ids of everyone at the table multiplies the budget by
+// the number of players connected. Flagged by an external audit 2026-08-25 and
+// it was right.
+//
+// You cannot fix that by inspecting the claim harder. There are two separate
+// jobs here and they had been merged into one:
+//
+//   FAIRNESS  - "has THIS player had more than their share?" needs a trustworthy
+//               identity, which a socket cannot give. See the note at the bottom
+//               of this file for the only sound way to get one.
+//   THE BILL  - "has THIS TABLE spent more than the GM agreed to?" needs no
+//               identity at all. It is a ceiling, and a ceiling cannot be forged
+//               by pretending to be somebody else.
+//
+// The ceiling is what stands between a runaway client and a real invoice, so it
+// goes in now and it is deliberately independent of who anybody claims to be.
+// A forged id can still steal another player's SHARE - which is rude - but it
+// can no longer spend more of Johnny's money than this.
+//
+// ⚠️ SET SO A REAL TABLE NEVER SEES IT. Six players talking hard is roughly
+// 6 AI and 12 speech requests a minute. These are five to ten times that, and
+// still one to two orders of magnitude below the hundreds-per-minute a broken
+// loop produces - which is the only thing this was ever meant to catch.
+const TABLE_CEILING = {
+  ai:  { windowMs: 300_000, max: 150 },
+  tts: { windowMs: 300_000, max: 600 },
+};
+
+const _table = { ai: [], tts: [] };   // bucket -> timestamps, everyone together
+
+/**
+ * Has the whole table exceeded what the GM's bill can absorb?
+ * Identity-free on purpose: this is the guard a forged userId cannot walk past.
+ */
+function _tableIsOverBudget(bucketName, now) {
+  const cap = TABLE_CEILING[bucketName];
+  if (!cap) return false;
+  const stamps = _table[bucketName];
+  // Drop anything outside the window, in place.
+  let i = 0;
+  while (i < stamps.length && now - stamps[i] >= cap.windowMs) i++;
+  if (i) stamps.splice(0, i);
+  return stamps.length >= cap.max;
+}
+
 const _spend = new Map();          // userId -> { [bucket]: { inFlight, stamps[] } }
 
 // Kept for anything that still imports them.
@@ -71,6 +126,29 @@ export function maySpendOnAI(user, now = Date.now(), what = "AI") {
 
   const bucketName = _bucketFor(what);
   const limit = BUDGETS[bucketName];
+
+  // ⚠️🔴 THE TABLE CEILING IS CHECKED FIRST, and it is checked against
+  // nobody in particular. A client rotating through forged user ids sails past
+  // every per-user budget in the file and arrives here, where identity is not
+  // consulted at all. This is the line that protects the invoice.
+  if (_tableIsOverBudget(bucketName, now)) {
+    const cap = TABLE_CEILING[bucketName];
+    const waitSec = Math.max(1, Math.ceil((cap.windowMs - (now - _table[bucketName][0])) / 1000));
+    lastRefusal = bucketName === "tts"
+      ? `the table has used its voice budget - about ${waitSec}s until more is available`
+      : `the table has used its AI budget - about ${waitSec}s until more is available`;
+    console.warn(`${TAG} | ${what} REFUSED BY THE TABLE CEILING - ${cap.max} ${bucketName} `
+      + `requests in ${cap.windowMs / 60000} minutes across ALL players. Clears in ~${waitSec}s. `
+      + `If this fires during normal play the ceiling is too low; if it fires repeatedly `
+      + `something is looping.`);
+    if (game.user?.isGM) {
+      ui.notifications?.warn(
+        `ACE: the whole table hit the ${bucketName === "tts" ? "voice" : "AI"} spend ceiling. `
+        + `Clears in about ${waitSec} seconds. If nobody is roleplaying, something is looping.`);
+    }
+    return false;
+  }
+
   const perUser = _spend.get(user.id) ?? {};
   _spend.set(user.id, perUser);
   const rec = perUser[bucketName] ?? { inFlight: false, stamps: [] };
@@ -106,8 +184,23 @@ export function maySpendOnAI(user, now = Date.now(), what = "AI") {
   }
 
   rec.stamps.push(now);
+  // The same spend counts against the table, whoever it was billed to.
+  _table[bucketName].push(now);
   if (limit.serialize) rec.inFlight = true;
   return true;
+}
+
+/**
+ * What the table has spent, for a GM who wants to look.
+ * `game.modules.get("ace-engine").api.spendStatus?.()` if it is wired up.
+ */
+export function spendStatus(now = Date.now()) {
+  const out = {};
+  for (const [bucket, cap] of Object.entries(TABLE_CEILING)) {
+    const used = _table[bucket].filter(t => now - t < cap.windowMs).length;
+    out[bucket] = { used, ceiling: cap.max, windowMinutes: cap.windowMs / 60000 };
+  }
+  return out;
 }
 
 /** Release the slot. Safe to call twice; safe to call for an unknown user. */
@@ -116,3 +209,34 @@ export function doneSpending(user) {
   if (!perUser) return;
   for (const rec of Object.values(perUser)) rec.inFlight = false;
 }
+
+// ═══ ⚠️🔴 WHAT IS STILL NOT SOLVED: WHO IS ASKING ══════════════════════
+//
+// The ceiling above stops the bill running away. It does NOT make the per-user
+// budgets honest, because they still trust a `userId` the sender wrote. A client
+// can still spend another player's share.
+//
+// There is exactly one sound way to learn who really sent something in Foundry,
+// and it is not the socket: make them WRITE A DOCUMENT. The server enforces
+// permissions on document updates and then hands every client a `userId` that IT
+// determined, not one the payload claimed:
+//
+//     // player side - they may only ever update their OWN user
+//     await game.user.setFlag(MODULE_ID, "aiRequest", payload);
+//
+//     // GM side - `userId` here comes from the server, not from the payload
+//     Hooks.on("updateUser", (user, changes, options, userId) => {
+//       const req = changes?.flags?.[MODULE_ID]?.aiRequest;
+//       if (!req) return;
+//       const asker = game.users.get(userId);   // TRUSTWORTHY
+//       ...
+//     });
+//
+// ⚠️ AND THE ONE TRAP IN IT: read the `userId` ARGUMENT, never
+// `user.id` and never anything inside `changes`. `user` is whose document was
+// edited, which a GM could edit on somebody's behalf; the fourth argument is who
+// actually did the editing. Getting that backwards reintroduces the whole bug
+// while looking like a fix.
+//
+// That is a refactor of every relay, not a patch, which is why it is written
+// down here rather than half-done.

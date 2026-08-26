@@ -8,6 +8,7 @@ import { AceLanguageTable } from "./npc/language-table.mjs";
 // Safe to import: shared-credentials declares its own module id and imports
 // nothing, so there is no cycle back into this file.
 import { getSharedElevenLabsKey } from "./npc/shared-credentials.mjs";
+import { protectKey, clearProtectedKey, protectedKeyStatus } from "./key-guard.mjs";
 
 // ── First-page settings visibility ──────────────────────────
 // Settings whose keys are in this set stay visible on Foundry's standard
@@ -20,6 +21,9 @@ import { getSharedElevenLabsKey } from "./npc/shared-credentials.mjs";
 // fighting each other (e.g. switching provider → URL/key auto-sync running
 // twice and corrupting state). The main-page UI is injected by
 // AceSettings.injectMainPageStatus() further down — see that hook.
+// Installed the moment the ElevenLabs key setting is registered - see below.
+let _guardElevenLabsKey = null;
+
 const VISIBLE_IN_MAIN_CONFIG = new Set([
     "moduleEnabled",   // master on/off — quick reach, only editable thing on main page
     "gameRulesEdition", // 5e ruleset toggle (2014 / 2024 / Auto) — strategic launch setting
@@ -199,16 +203,36 @@ export class AceSettings {
     // toggle when they open ACE Engine settings too. Both default to
     // "auto" so a fresh install picks the right edition automatically
     // from each actor's class items.
+    // ⚠️ THE OLD HINT ASKED THE GM TO DO THE SYNCING. It said "Mirror this
+    // with the same setting in ACE QOL for full consistency" — two settings with
+    // the same name and no connection between them, and a human told to keep
+    // them in step. Johnny, 2026-08-23: "The two have to sync together. Whatever
+    // I have in one has to happen in the other." They do now.
+    //
+    // ⚠️ AUTO REMOVED, matching QOL. A per-actor sniff means two creatures in
+    // one fight can run different rules. Worlds still on Auto are migrated once
+    // by ACE QOL, to the answer Auto was already giving them.
     s("gameRulesEdition", {
       name: "D&D 5e Rules Edition",
-      hint: "Which 5e ruleset ACE should follow for narration, NPC behavior, and rules references. Default: Auto — detect per-actor from class items. Mirror this with the same setting in ACE QOL for full consistency.",
+      hint: "Which ruleset ACE follows for narration, NPC behaviour and rules references. Shared with ACE QOL — change it in either and both update. Pick Custom on the ACE QOL panel to mix individual rules.",
       type: String,
       choices: {
-        auto:   "Auto — detect per actor from their class items (recommended)",
-        "2014": "2014 Rules (original 5e Player's Handbook)",
-        "2024": "2024 Rules (new Player's Handbook / One D&D)",
+        "2014":  "2014 Rules (original 5e Player's Handbook)",
+        "2024":  "2024 Rules (new Player's Handbook / One D&D)",
+        custom:  "Custom — per-rule mix, configured in ACE QOL",
       },
-      default: "auto",
+      default: "2024",
+      onChange: (value) => {
+        // ⚠️ The guard against a ping-pong lives in ACE QOL's module, which is
+        // where both sides route through. If QOL is not installed there is
+        // nothing to sync to and this is a no-op, which is correct — Engine is
+        // sold separately and must not require its sibling.
+        const qol = game.modules.get("ace-qol");
+        if (!qol?.active) return;
+        import("/modules/ace-qol/scripts/rules-edition.mjs")
+          .then(m => m.syncEditionTo("ace-qol", value))
+          .catch(err => console.warn(`${MODULE_ID} | rules-edition sync failed:`, err));
+      },
     });
 
     // ── AI Provider ─────────────────────────────────────────
@@ -755,8 +779,23 @@ export class AceSettings {
       // genuinely the only step. What was missing is any confirmation: a good
       // key and a typo'd key both did nothing visible, and the first you knew
       // of a bad one was a robotic voice mid-session in front of your players.
-      onChange: (value) => { verifyElevenLabsKey(value); },
+      // ⚠️ THE GUARD RUNS FIRST, then the verifier. A blanking write is
+      // undone before anything downstream is told the key is gone - and the
+      // caller that did it gets named in the console. Thirteen silent losses
+      // is enough. See key-guard.mjs.
+      onChange: (value) => {
+        try { _guardElevenLabsKey?.(value); } catch (_) { /* never block the verifier */ }
+        verifyElevenLabsKey(value);
+      },
     });
+
+    // ⚠️ INSTALL THE GUARD NOW THAT THE SETTING EXISTS. protectKey reads the
+    // current value to seed its shadow copy, so it must run after register().
+    try {
+      _guardElevenLabsKey = protectKey(MODULE_ID, "elevenLabsApiKey", "ElevenLabs key");
+    } catch (err) {
+      console.warn(`${MODULE_ID} | could not protect the ElevenLabs key:`, err);
+    }
 
     s("elevenLabsVoiceId", {
       scope: "client",

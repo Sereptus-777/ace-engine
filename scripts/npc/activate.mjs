@@ -346,10 +346,37 @@ function _registerHooks() {
                 if (_scanTier === "off" || _scanTier === "silent") continue;
             } catch (_) { continue; }
 
+            // ⚠️🔴 A SCENE LOAD MUST NEVER INVENT AN IDENTITY.
+            //
+            // Dropping a creature is a deliberate act; opening a map is not. This
+            // scan walked EVERY NPC token on the scene on every single load and
+            // generated a name and a bio for any that lacked one, which is how a
+            // fully written NPC ended up wearing an invented nameplate.
+            //
+            // Johnny, 2026-08-24, minutes before a session: "it just renamed Isaac,
+            // who already had a name and a background and everything... It was a
+            // scene scan that renamed them, and that's the only thing I need off."
+            //
+            // The tier gate above was tightened twice already (2026-07-26 for
+            // "off", 2026-08-07 for "silent") and BOTH times the fix was to add
+            // one more tier to the skip list rather than to ask whether a reload
+            // should be generating anything at all. It should not. The drop hook
+            // still honours every tier, so nothing a GM does on purpose changes;
+            // the quill under a token backfills any creature that wants one.
+            //
+            // ⚠️ VOICES STILL RUN ABOVE THIS LINE, deliberately. Assigning a
+            // voice writes no name, invents no history, and shows the players
+            // nothing - it just means an NPC can speak when spoken to.
+            continue;
+
+            /* eslint-disable no-unreachable */
+            // Kept, unreachable, so the shape of what a scan WOULD do is visible
+            // if this is ever revisited - and so nobody re-adds it from memory.
             const _bioDelay = 100 + _idx * 150;
             import("./bio-generator.mjs").then(({ queueBioGeneration }) => {
                 setTimeout(() => queueBioGeneration(tokenDoc), _bioDelay);
             }).catch(err => console.error(`${TAG} | Bio-generator load failed:`, err));
+            /* eslint-enable no-unreachable */
         }
     });
 

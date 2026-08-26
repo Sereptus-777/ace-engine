@@ -413,6 +413,12 @@ export async function openConvertDialog(npc) {
     return new Promise((resolve) => {
         new Dialog({
             title: `Convert NPC → PC: ${npc.name}`,
+            // ⚠️ DISMISSAL RESOLVES THE SAME AS CANCEL. Without this, closing with
+            // the X or Escape fires no button callback, the wrapping promise never
+            // settles, and the caller awaits forever — no error, nothing on screen.
+            // The Cancel button here already resolves null, so dismissal matches it
+            // rather than inventing a value the caller has not been taught to expect.
+            close: () => resolve(null),
             content,
             buttons: {
                 convert: {

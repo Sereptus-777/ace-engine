@@ -2197,70 +2197,58 @@ async function _generateBio(tokenDocument) {
         // on the nameplate for immersion). [2026-06-29 — identity-stability fix.]
         if (generatedName && generatedName !== actor.name) {
             try {
-                // ── A NAMED, LINKED NPC IS RENAMED FOR REAL (2026-08-06) ──────
-                // Johnny: "what if I'm looking for an Ogre that they talked to…
-                // five sessions later I want to find that same Ogre. It's got to
-                // be named whatever name was given to it in the actor sidebar."
-                // He is right: a linked actor IS its own sidebar row, and a row
-                // called "Ogre" is unfindable a month later.
+                // ── ⚠️🔴 THE SHEET NAME IS NEVER TOUCHED. EVER. ──────────────
                 //
-                // ⚠️ WHY THIS IS NOW SAFE, when 2026-06-29 banned it. Back then
-                // mechanics read the actor NAME as identity, so renaming broke
-                // undead behaviour. The July species-tag work moved every engine
-                // onto system.details.type — verified 2026-08-06: nothing in
-                // ace-qol or ace-engine infers creature KIND from an actor name
-                // any more (every name.includes() hit is an ITEM or EFFECT name).
+                // Johnny, 2026-08-23: "it cannot do that. It has to keep it
+                // Goblin Crookshank, or whatever is there. It's only supposed to
+                // put the new name on the nameplate... This can never happen.
+                // This cannot regress like this."
                 //
-                // ⚠️ LINKED ONLY. An unlinked token shares its base actor with
-                // every other token from it — renaming that would rename all
-                // eight goblins at once. The unlinked branch above keeps the
-                // display-only flag, which is correct: those have no sidebar row
-                // to find in the first place.
+                // ⚠️ THIS IS A REGRESSION I CAUSED, AND THE DATE IS THE PROOF.
+                // The rule was settled on 2026-07-10 and written down as FINAL:
+                // the actor, the prototype token and the canvas token always
+                // carry the CREATURE's name; an AI or GM flavour name lives in
+                // the flavorName flag and renders on the NAMEPLATE only.
                 //
-                // ⚠️ ONLY WHEN THE NAME IS STILL A SPECIES LABEL. "Ogre" gets
-                // renamed; "Thalgar Stonehide" — named by the GM or by an earlier
-                // run — is left alone. That makes this idempotent and means a
-                // GM who renames something back is never overruled.
+                // On 2026-08-06 I re-enabled a real rename for linked actors,
+                // reasoning from a separate request — "I want to find that same
+                // Ogre in the sidebar five sessions later" — and in doing so
+                // overruled a rule that had already been marked final. The
+                // comment I wrote even argued it was "now safe". It was not the
+                // safety that was wrong; it was overturning a settled decision
+                // to serve a different need.
+                //
+                // ⚠️ THE SIDEBAR NEED IS REAL AND IS MET WITHOUT RENAMING.
+                // npc-sidebar-search matches ALIASES on top of the row's own
+                // name. It already covers species and the original statblock
+                // name; the flavour name is now an alias too. So the row reads
+                // "Goblin Crookshank" and typing "Grizzle" still finds him.
+                // That answers 08-06 without breaking 07-10.
+                //
+                // Renaming the sheet breaks things far away from here: creature
+                // identity, the spell pipeline, the Multiattack parser, token
+                // art lookups, and every journal that references the creature by
+                // name. That is why the rule exists and why it is absolute.
                 const _species = resolveSpecies(actor, tokenDocument ?? null);
-                const _isLabel = !hasPersonalName(actor.name, _species);
 
-                if (_isLabel) {
-                    // ⚠️ CAPTURE THE OLD NAME BEFORE THE UPDATE. The log below
-                    // read actor.name AFTER the rename had already been applied,
-                    // so it printed 'RENAMED "Mind Flayers" → "Mind Flayers"'
-                    // and concealed what the creature had actually been called.
-                    // A log that reports the outcome as the intention is worse
-                    // than no log: it makes a real defect unreadable.
-                    const _wasNamed = actor.name;
+                // Keep what it IS, so search can find it by species/statblock
+                // name as well as by the name the party knows it by.
+                await actor.setFlag(MODULE_ID, "originalName", actor.name);
+                if (_species) await actor.setFlag(MODULE_ID, "species", _species);
 
-                    // Keep what it WAS, so the sidebar search can still find it
-                    // by species/statblock name once the row says "Thalgar".
-                    await actor.setFlag(MODULE_ID, "originalName", actor.name);
-                    if (_species) await actor.setFlag(MODULE_ID, "species", _species);
-                    await actor.setFlag(MODULE_ID, "nameRevealed", true);
+                // THE ONLY PLACE THE GENERATED NAME IS EVER WRITTEN.
+                await actor.setFlag(MODULE_ID, "flavorName", generatedName);
+                await actor.setFlag(MODULE_ID, "nameRevealed", true);
 
-                    // The real name IS the name now, so the display-only flavour
-                    // flag would just double up on the nameplate. Clear it.
-                    await actor.unsetFlag(MODULE_ID, "flavorName").catch(() => {});
-
-                    // prototypeToken too, so tokens placed later carry the name
-                    // instead of reverting to the statblock label.
-                    await actor.update({ name: generatedName, "prototypeToken.name": generatedName });
-                    if (tokenDocument && tokenDocument !== actor) {
-                        try { await tokenDocument.update({ name: generatedName, displayName: 50 }); }
-                        catch (tokErr) { console.warn(`${TAG} | Token rename failed (non-fatal):`, tokErr); }
-                    }
-                    console.log(`${TAG} | Linked actor RENAMED "${_wasNamed}" → "${generatedName}" (was a ${_species || "generic"} label; searchable by "${_species}" and the original name).`);
-                } else {
-                    // Already personally named — never overwrite the GM's choice.
-                    await actor.setFlag(MODULE_ID, "flavorName", generatedName);
-                    await actor.setFlag(MODULE_ID, "nameRevealed", true);
-                    console.log(`${TAG} | Flavor name stored (display-only): "${generatedName}" — real name kept as "${actor.name}" (already a personal name).`);
-                    if (tokenDocument && tokenDocument !== actor) {
-                        try { await tokenDocument.update({ displayName: 50 }); }   // keep nameplate visible
-                        catch (tokErr) { console.warn(`${TAG} | Nameplate visibility update failed (non-fatal):`, tokErr); }
-                    }
+                // Nameplate visible, so the table sees the name they were told.
+                if (tokenDocument && tokenDocument !== actor) {
+                    try { await tokenDocument.update({ displayName: 50 }); }
+                    catch (tokErr) { console.warn(`${TAG} | Nameplate visibility update failed (non-fatal):`, tokErr); }
                 }
+
+                console.log(`${TAG} | "${actor.name}" is known to the party as "${generatedName}". `
+                    + `The sheet, the prototype and the token keep the creature name — the flavour name is `
+                    + `nameplate-only, and the sidebar finds it by either.`);
             } catch (flavorErr) {
                 console.warn(`${TAG} | Naming failed (non-fatal — bio still saved):`, flavorErr);
             }

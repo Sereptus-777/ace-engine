@@ -34,6 +34,10 @@
 const MODULE_ID = "ace-engine";
 const TAG       = "ACE: Engine | Namer";
 
+// ⚠️ How long to wait for a NAME specifically. Deliberately far shorter than
+// the biography timeout — see the note at the call site.
+const NAME_TIMEOUT_MS = 15000;
+
 // ─── The name book ───────────────────────────────────────────────────────────
 //
 // The fallback, and the proof that naming works with no AI at all. Built to
@@ -310,11 +314,24 @@ export async function generateName(opts) {
         const userMsg = rejected
             ? `${lines.join("\n")}\n\nYour previous answer "${rejected}" was rejected: it must be a plain personal name, one or two words, and must not be the species, a place, a faction, or a name already in use. Answer again with the name only.`
             : lines.join("\n");
+        // ⚠️🔴 A NAME IS NOT WORTH THREE MINUTES. callAI carries the
+        // BIOGRAPHY's timeout — 180 seconds — which is right for a page of prose
+        // from a slow local model and absurd for two words. Dropping a token
+        // with Ollama stopped would have stalled naming for three minutes
+        // before falling back, and the fallback is INSTANT and always works.
+        //
+        // So the name request gets its own, much shorter patience. Losing the
+        // AI name costs a slightly less surprising name; waiting costs the
+        // session.
         let answer = "";
         try {
-            answer = await AIHandler.callAI(system, [], userMsg, provider, apiKey, [], { context: "namer" });
+            answer = await Promise.race([
+                AIHandler.callAI(system, [], userMsg, provider, apiKey, [], { context: "namer" }),
+                new Promise((_r, rej) => setTimeout(() => rej(new Error("naming timed out")), NAME_TIMEOUT_MS)),
+            ]);
         } catch (err) {
-            console.warn(`${TAG} | Naming call failed, using the name book:`, err);
+            console.warn(`${TAG} | Naming call did not answer within ${NAME_TIMEOUT_MS / 1000}s `
+                + `(or failed) — using the name book, which is instant:`, err?.message ?? err);
             return bookName();
         }
 

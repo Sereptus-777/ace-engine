@@ -2339,27 +2339,151 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
  * Score a canonical faction for the NPC identity dialog.
  * Wraps the existing affinity logic in a callable function.
  */
+/**
+ * Is this registry entry not actually a faction?
+ *
+ * ⚠️🔴 ONE DEFINITION, BECAUSE ONE COPY WAS NOT ENOUGH (2026-08-23). This test
+ * already existed, inline, inside the Customize dialog's scorer. The QUICK
+ * setup screen — the three-option one a GM actually sees on a token drop — used
+ * a different path and never learned it, so it offered Johnny "Goblinoids" as
+ * a faction his goblin might belong to.
+ *
+ * A creature type is not an organisation. Neither is "Evil-Aligned Factions".
+ * Both are artefacts of importing a sourcebook index as though it were a roster,
+ * and both are useless as an allegiance.
+ *
+ * Exported so there is exactly one place that decides this. Fixing the copy that
+ * surfaced and leaving the other is the habit that keeps costing days.
+ */
+const _rejectedNames = new Set();
+
+/**
+ * Give lowercase faction names their capitals back.
+ *
+ * ⚠️ ONLY NAMES THAT ARE ENTIRELY LOWERCASE ARE TOUCHED. A name with any
+ * capital in it already was written by somebody on purpose - "the Order of the
+ * Silver Dragon", "vistani" the adjective versus "Vistani" the people - and
+ * re-casing those would quietly rewrite Johnny's own words. All-lowercase is
+ * the only signal that means "this came out of an extractor, not a person".
+ *
+ * ⚠️ SMALL WORDS STAY SMALL, except at the start. "keepers of the black
+ * feather" becomes "Keepers of the Black Feather", not "Keepers Of The Black
+ * Feather", which reads like a spreadsheet rather than a name.
+ *
+ * ⚠️ DRY RUN BY DEFAULT, and it prints every before/after line. This edits
+ * the world graph, which is his campaign's memory - he sees the list first.
+ *
+ * @param {object}  [opts]
+ * @param {boolean} [opts.fix=false]  Actually write the change.
+ * @returns {Promise<{renamed:number, names:Array<[string,string]>}>}
+ */
+export async function capitaliseFactionNames({ fix = false } = {}) {
+    if (!game.user?.isGM) {
+        ui.notifications?.warn("Only the GM can rename factions.");
+        return { renamed: 0, names: [] };
+    }
+
+    const SMALL = new Set(["of", "the", "and", "in", "on", "at", "to", "for",
+                           "a", "an", "or", "de", "von", "van"]);
+    const titleCase = (name) => String(name).split(/\s+/).map((word, i) => {
+        const lower = word.toLowerCase();
+        if (i > 0 && SMALL.has(lower)) return lower;
+        // Hyphenated and apostrophed parts each get their own capital:
+        // "half-orc" -> "Half-Orc", "d'avenir" -> "D'Avenir".
+        return lower.replace(/(^|[-'’])([a-z])/g, (_m, sep, ch) => sep + ch.toUpperCase());
+    }).join(" ");
+
+    // ⚠️ THE REGISTRY, NOT THE DIGEST GRAPH. The graph is rebuilt from source
+    // material every time it loads, so a rename written there is undone on the
+    // next build. `_load()`/`_save()` are this file's own store - a world
+    // setting - and that is the copy every picker, standing and deed reads.
+    const data = _load();
+    const factions = data?.factions ?? data;
+    if (!factions || typeof factions !== "object") {
+        // ⚠️ "ABSENT" AND "BROKEN" MUST NOT PRINT THE SAME THING. Say which.
+        console.warn(`${TAG} | capitaliseFactionNames: the faction registry is empty or `
+            + `unreadable, so there is nothing to rename. That is not "every name is fine".`);
+        ui.notifications?.warn("The faction registry is empty — nothing to rename.");
+        return { renamed: 0, names: [] };
+    }
+
+    const names = [];
+    let total = 0;
+    for (const f of Object.values(factions)) {
+        if (!f || typeof f !== "object") continue;
+        total++;
+        const raw = String(f.name ?? "");
+        if (!raw || raw !== raw.toLowerCase()) continue;   // has a capital already
+        if (!/[a-z]/.test(raw)) continue;                  // nothing to capitalise
+        const next = titleCase(raw);
+        if (next === raw) continue;
+        names.push([raw, next]);
+        if (fix) f.name = next;
+    }
+
+    console.log(`${TAG} | capitaliseFactionNames ${fix ? "APPLIED" : "(dry run)"} — `
+        + `${names.length} of ${total} faction names are all-lowercase:`);
+    for (const [before, after] of names) console.log(`     "${before}"  ->  "${after}"`);
+
+    if (fix && names.length) {
+        try {
+            await _save(data);
+            console.log(`${TAG} | faction registry saved.`);
+        } catch (err) {
+            console.error(`${TAG} | could not save the faction registry — nothing was kept:`, err);
+            ui.notifications?.error("Could not save the renamed factions — see the console.");
+            return { renamed: 0, names };
+        }
+    } else if (!fix) {
+        console.log(`${TAG} | nothing was written. Run again with { fix: true } to apply.`);
+    }
+
+    ui.notifications?.info(`${names.length} faction name(s) ${fix ? "capitalised" : "would be capitalised (dry run)"}.`);
+    return { renamed: fix ? names.length : 0, names };
+}
+
+export function isNotARealFaction(f) {
+    const nameRaw = String(f?.name ?? "").trim();
+    if (!nameRaw) return true;
+    const nameLower = nameRaw.toLowerCase();
+
+    // "Evil-Aligned Factions", "World-Preserving Factions", "Major Factions"…
+    const GENERIC_CATEGORY = /^(evil|good|neutral|lawful|chaotic|world[\s-]\w+|practical|esoteric|major|minor|ancient|modern|other|misc|various|all)[\s\-/]*\w*\s+factions?$/i;
+    if (GENERIC_CATEGORY.test(nameLower)) return true;
+    if (/\baligned factions?\b|\btype factions?\b|\bcategory factions?\b/i.test(nameLower)) return true;
+
+    // The digest sometimes indexes taxonomy entries as factions.
+    const SPECIES_TYPES = new Set(["species", "race", "creature type", "creature", "taxonomy", "monster", "beast type", "creature family"]);
+    if (SPECIES_TYPES.has(String(f?.type ?? "").toLowerCase())) return true;
+
+    // A name that IS a creature type: "Goblinoids", "Orcs", "Undead".
+    const CREATURE_TYPE_NAMES = /^(goblinoids?|orcs?|elves|dwarves|humans?|gnolls?|kobolds?|lizardfolk|undead|fiends?|celestials?|aberrations?|constructs?|elementals?|monstrosities|oozes?|plants?|beasts?|giants?|dragons?|fey|humanoids?|beholders?|mind ?flayers?|illithids?|aboleths?|trolls?|ogres?|hobgoblins?|bugbears?|goblins?|treants?|golems?|skeletons?|zombies?|ghouls?|wights?|spectres?|specters?|wraiths?|liches|harpies|minotaurs?|medusas?|myconids?|grimlocks?|troglodytes?|gargoyles?|basilisks?|chimeras?|manticores?|wyverns?|slimes?|shamblers?|swarms?)$/i;
+    if (CREATURE_TYPE_NAMES.test(nameRaw)) {
+        // ⚠️ SAY WHAT WAS REJECTED, ONCE. This list is a judgement about
+        // somebody else's data. If it ever culls a group Johnny considers real,
+        // the failure mode without this line is a faction that silently stops
+        // appearing in every picker with nothing to explain why — undebuggable
+        // from the outside. One console line per name makes it findable.
+        if (!_rejectedNames.has(nameLower)) {
+            _rejectedNames.add(nameLower);
+            console.log(`${TAG} | "${nameRaw}" is a creature KIND, not an organisation — not offered as a faction. `
+                + `If that is wrong, rename it to something that reads as a group.`);
+        }
+        return true;
+    }
+
+    return false;
+}
+
 function _scoreFactionForDialog(f, creatureType, creatureSubtype, creatureBase, sceneIntel, sceneName, actor) {
     // ── HARD EXCLUSION 1: Generic category factions (not real factions) ──
     // These are placeholder groupings from digest extraction, not actual factions.
     const fNameRaw = (f.name || "").trim();
     const fNameLower = fNameRaw.toLowerCase();
-    if (!fNameRaw) return -1;
-    // Matches: "Evil-Aligned Factions", "World-Preserving Factions", "Practical/Esoteric Factions", etc.
-    const GENERIC_CATEGORY = /^(evil|good|neutral|lawful|chaotic|world[\s-]\w+|practical|esoteric|major|minor|ancient|modern|other|misc|various|all)[\s\-/]*\w*\s+factions?$/i;
-    if (GENERIC_CATEGORY.test(fNameLower)) return -1;
-    // Also exclude "X Aligned Factions" or "Y-Type Factions"
-    if (/\baligned factions?\b|\btype factions?\b|\bcategory factions?\b/i.test(fNameLower)) return -1;
-
-    // ── HARD EXCLUSION 1b: Species/taxonomy entries (not real factions) ──
-    // Digest engine sometimes indexes creature type entries as "factions."
-    // Filter out entries where the type is a species/race/taxonomy label.
-    const fTypeLower = (f.type || "").toLowerCase();
-    const SPECIES_TYPES = new Set(["species", "race", "creature type", "creature", "taxonomy", "monster", "beast type", "creature family"]);
-    if (SPECIES_TYPES.has(fTypeLower)) return -1;
-    // Also filter entries whose name IS a creature type (e.g., "Goblinoids", "Orcs", "Undead")
-    const CREATURE_TYPE_NAMES = /^(goblinoids?|orcs?|elves|dwarves|humans?|gnolls?|kobolds?|lizardfolk|undead|fiends?|celestials?|aberrations?|constructs?|elementals?|monstrosities|oozes?|plants?|beasts?|giants?|dragons?|fey|humanoids?)$/i;
-    if (CREATURE_TYPE_NAMES.test(fNameRaw)) return -1;
+    // ⚠️ ONE DEFINITION. These rules used to live here, inline, and the quick
+    // setup screen never saw them — which is how "Goblinoids" was offered as a
+    // faction. See isNotARealFaction above.
+    if (isNotARealFaction(f)) return -1;
 
     // Reuse the AFFINITY matrix and scoring from the existing system
     const AFFINITY = {
@@ -2849,9 +2973,18 @@ async function recommendFactions(actor, creatureBase, template, sceneName, world
     const { provider, apiKey } = getEnvoyAIConfig();
 
     // Build context about what factions already exist
-    const existingList = matching.map(f => `• "${f.name}" (${f.type}) — ${f.purpose || "no description"}`).join("\n");
-    const canonList = (sceneIntel?.canonicalFactions || []).map(f => `• "${f.name}" (${f.type || "faction"}) — ${f.description || ""}`).join("\n");
-    const digestList = (worldDigestFactions || []).slice(0, 8).map(f => `• "${f.name}" (${f.type || "faction"}) — ${f.purpose || f.description || ""}`).join("\n");
+    // ⚠️ NOTHING THAT IS NOT A FACTION REACHES THE MODEL. "Goblinoids" and
+    // "Evil-Aligned Factions" are sourcebook index entries that got imported as
+    // if they were organisations. Offered as an allegiance they are noise, and
+    // once the model sees one in the list it will happily recommend it.
+    const _real = (list) => (list || []).filter(f => !isNotARealFaction(f));
+    const _matching = _real(matching);
+    const _canon    = _real(sceneIntel?.canonicalFactions);
+    const _digest   = _real(worldDigestFactions).slice(0, 8);
+
+    const existingList = _matching.map(f => `• "${f.name}" (${f.type}) — ${f.purpose || "no description"}`).join("\n");
+    const canonList = _canon.map(f => `• "${f.name}" (${f.type || "faction"}) — ${f.description || ""}`).join("\n");
+    const digestList = _digest.map(f => `• "${f.name}" (${f.type || "faction"}) — ${f.purpose || f.description || ""}`).join("\n");
 
     const cr = actor.system?.details?.cr ?? "?";
     const alignment = actor.system?.details?.alignment || "unknown";
@@ -2870,11 +3003,15 @@ async function recommendFactions(actor, creatureBase, template, sceneName, world
 Given the creature type, scene context, and known factions, suggest exactly 3 ranked faction assignments.
 
 RULES:
-- Option 1 should be the BEST match (existing faction if one fits, or a compelling new one)
-- Option 2 should be an interesting ALTERNATIVE (rival faction, different allegiance, adds tension)
-- Option 3 should be "Generate New Faction" — a fresh faction the AI will create
-- Each option needs a NAME and a 1-sentence REASON explaining why this creature might belong there
-- If existing factions match well, prefer them. If not, suggest new names that fit the creature and setting.
+- CHOOSE ONLY FROM THE FACTIONS LISTED BELOW. Do NOT invent a faction. Do NOT
+  suggest a name that does not appear in the lists. If nothing fits well, say so
+  by choosing the closest options anyway and explaining the stretch in the reason.
+- Option 1 should be the BEST match of the ones listed
+- Option 2 should be an interesting ALTERNATIVE from the list (a rival, a
+  different allegiance, something that adds tension)
+- Option 3 should be a third option from the list, or "No Faction" if only two fit
+- Each option needs a NAME copied EXACTLY as it appears in the list, and a
+  1-sentence REASON explaining why this creature might belong there
 - Keep reasons SHORT (under 25 words)
 
 Respond in EXACTLY this format (3 lines, no extra text):
@@ -2897,7 +3034,20 @@ ${locationContext}`;
         const response = await Handler.callAI(systemPrompt, [], userMsg, provider, apiKey, [], { context: "faction-naming" });
         if (isAIFailure(response)) throw new Error("AI unavailable — using fallback recommendations");
         const parsed = _parseRecommendations(response, matching, sceneIntel, worldDigestFactions);
-        if (parsed.length === 3) return parsed;
+        // ⚠️ PAD, DO NOT DISCARD. Requiring exactly three threw away two good
+        // recommendations whenever the model offered one invented name, and fell
+        // all the way back to raw data. Keep what was real, fill the rest.
+        if (parsed.length) {
+            const filler = _fallbackRecommendations(matching, sceneIntel, worldDigestFactions, creatureBase, template);
+            const have = new Set(parsed.map(r => String(r.name).toLowerCase()));
+            for (const f of filler) {
+                if (parsed.length >= 3) break;
+                if (have.has(String(f.name).toLowerCase())) continue;
+                have.add(String(f.name).toLowerCase());
+                parsed.push(f);
+            }
+            return parsed.slice(0, 3);
+        }
     } catch (err) {
         console.warn(`${TAG} | AI faction recommendation failed (using fallback):`, err);
     }
@@ -2937,8 +3087,18 @@ function _parseRecommendations(response, matching, sceneIntel, worldDigestFactio
             results.push({ name: worldDigestFactions[worldIdx].name, reason, source: "world_digest", worldIdx });
             continue;
         }
-        // New faction suggestion
-        results.push({ name, reason, source: "generate" });
+        // ⚠️🔴 A NAME THAT IS NOT IN THE REGISTRY IS DISCARDED, NOT INVENTED.
+        //
+        // The prompt now forbids inventing a faction, and a model can ignore a
+        // prompt. Johnny, 2026-08-22: "everything from now on is going to have
+        // to belong to whatever factions we have available." That is a rule
+        // about what ACE DOES, so it is enforced where the answer is read, not
+        // where the request is written.
+        //
+        // Asking nicely and hoping is the same mistake as the elf who folded his
+        // arms defiantly at an order he was not supposed to understand: don't
+        // send it > gate in code > ask nicely, and the last one fails silently.
+        console.log(`${TAG} | The recommender offered "${name}", which is not in the registry. Discarded — ACE does not invent factions unasked.`);
     }
     return results;
 }
@@ -2946,7 +3106,16 @@ function _parseRecommendations(response, matching, sceneIntel, worldDigestFactio
 /**
  * Fallback when AI recommendation fails — build 3 options from raw data.
  */
+/** The nth canonical faction, shaped like the rows this function returns. */
+function _canonAt(sceneIntel, idx) {
+    const f = (sceneIntel?.canonicalFactions || []).filter(x => !isNotARealFaction(x))[idx];
+    return f ? { name: f.name, canonIdx: idx } : null;
+}
+
 function _fallbackRecommendations(matching, sceneIntel, worldDigestFactions, creatureBase, template) {
+    // ⚠️ The same filter the AI path uses. A fallback that offers rows the
+    // main path rejects is not a fallback, it is a second set of rules.
+    matching = (matching || []).filter(f => !isNotARealFaction(f));
     const results = [];
 
     // Option 1: first matching existing faction
@@ -2965,15 +3134,31 @@ function _fallbackRecommendations(matching, sceneIntel, worldDigestFactions, cre
         if (sceneIntel.canonicalFactions[idx]) {
             results.push({ name: sceneIntel.canonicalFactions[idx].name, reason: `From scene source material`, source: "canonical", canonIdx: idx });
         }
-    } else if (worldDigestFactions?.length) {
-        results.push({ name: worldDigestFactions[0].name, reason: `From campaign world lore`, source: "world_digest", worldIdx: 0 });
+    } else {
+        // ⚠️ Filtered like everything else — the world digest is exactly where
+        // taxonomy entries such as "Goblinoids" come from.
+        const wIdx = (worldDigestFactions || []).findIndex(f => !isNotARealFaction(f));
+        if (wIdx >= 0) {
+            results.push({ name: worldDigestFactions[wIdx].name, reason: `From campaign world lore`, source: "world_digest", worldIdx: wIdx });
+        }
     }
 
-    // Fill to 2 if needed, then always add Generate New as option 3
-    while (results.length < 2) {
-        results.push({ name: "No Faction", reason: `Skip faction assignment entirely`, source: "none" });
+    // ⚠️ NO INVENTED FACTION HERE EITHER (2026-08-23). This fallback runs
+    // whenever the AI is unavailable, and it used to push "Generate New Faction"
+    // as option 3 unconditionally — so turning invention off in one path left it
+    // switched on in the path that runs when the AI is down. Johnny: "everything
+    // from now on is going to have to belong to whatever factions we have
+    // available." Inventing one is still possible, deliberately, from the
+    // Customize screen's drop-down; it is no longer offered unasked.
+    const third = matching[2] ?? _canonAt(sceneIntel, 2) ?? null;
+    if (third) {
+        results.push(third.factionId
+            ? { name: third.name, reason: `Another ${template.type} in this world`, source: "existing", factionId: third.factionId }
+            : { name: third.name, reason: `From scene source material`, source: "canonical", canonIdx: third.canonIdx });
     }
-    results.push({ name: "Generate New Faction", reason: `Create a fresh ${template.type} for this ${creatureBase}`, source: "generate" });
+    while (results.length < 3) {
+        results.push({ name: "No Faction", reason: `Leave this creature unaffiliated`, source: "none" });
+    }
 
     return results.slice(0, 3);
 }

@@ -32,6 +32,24 @@ function searchAliases(actor) {
     const orig = actor?.getFlag?.(MODULE_ID, "originalName");
     if (sp) out.push(String(sp).toLowerCase());
     if (orig) out.push(String(orig).toLowerCase());
+
+    // ⚠️ THE FLAVOUR NAME IS NOW THE IMPORTANT ALIAS (2026-08-23). This file was
+    // written for a world where the sheet got RENAMED: the row said "Thalgar"
+    // and searching "ogre" found it. That rename has been removed — it violated
+    // the identity rule and broke everything that reads a creature by name — so
+    // the relationship is inverted. The row says "Goblin Crookshank" and the
+    // name the party actually knows lives in flavorName.
+    //
+    // Without this line, the one name a GM is most likely to type is the ONLY
+    // name that would not find anything, which is precisely the sidebar problem
+    // the rename was reached for in the first place.
+    const flavour = actor?.getFlag?.(MODULE_ID, "flavorName");
+    if (flavour) {
+      const f = String(flavour).toLowerCase();
+      out.push(f);
+      // Given name alone, so "Grizzle" finds "Grizzle Snaptooth".
+      for (const word of f.split(/\s+/)) if (word.length >= 3) out.push(word);
+    }
     // The creature-type fields, so even NPCs we never renamed are findable
     // by kind — "fiend", "cambion", whatever the sheet actually says.
     const t = actor?.system?.details?.type ?? {};

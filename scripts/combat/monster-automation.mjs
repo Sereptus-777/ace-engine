@@ -602,6 +602,19 @@ function bindApplyButtons(message, html) {
   const root = html instanceof HTMLElement ? html : (html?.[0] ?? html);
   if (!root?.querySelectorAll) return;
   for (const btn of root.querySelectorAll(".ace-monster-apply")) {
+    // ⚠️🔴 BIND ONCE PER BUTTON, EVER. Two listeners on one button means
+    // one click applies the damage TWICE — and it is invisible in testing,
+    // because the second apply reads the same dataset and quietly doubles the
+    // number. That happened on 2026-08-16 when both render hooks were
+    // registered on V13.
+    //
+    // That was fixed by registering ONE hook, which cured the symptom and left
+    // the cause: this function still had no guard, so ANY second call —
+    // including the already-drawn-card sweep added below on 08-23 — would have
+    // brought it straight back. The guard is on the BUTTON, so it holds no
+    // matter how many times or from where this runs.
+    if (btn.dataset.aceBound === "1") continue;
+    btn.dataset.aceBound = "1";
     btn.addEventListener("click", async (ev) => {
       ev.preventDefault();
       if (!game.user.isGM) {
@@ -694,6 +707,48 @@ export function initMonsterAutomation() {
       });
     }
   } catch (_) { /* no legacy registration — V13+ is covered above */ }
+
+  // ── ⚠️🔴 SWEEP THE CARDS THAT ARE ALREADY ON SCREEN ─────────────────
+  //
+  // Foundry paints the chat log ONCE. A card that was already drawn when this
+  // handler registered is bound by nobody, forever — which is every card above
+  // the fold for anyone who refreshes mid-session. They see an Apply button,
+  // they click it, and nothing happens. No error, because there is no listener
+  // to throw one.
+  //
+  // ace-engine.mjs learned this on 2026-08-07 and added a sweep. This second
+  // registration, three files away, never got one. Fixing the instance that
+  // surfaced and leaving its twin is the habit that keeps costing days.
+  //
+  // Uses ACE QOL's shared sweeper when it is installed, and a local equivalent
+  // when it is not — Engine ships on its own and must not need its sibling.
+  const _sweepDrawn = (reason) => {
+    try {
+      const shared = game.aceQol?.sweepDrawnCards;
+      if (typeof shared === "function") {
+        shared((message, html) => bindApplyButtons(message, html),
+               { label: "monster trait cards", namespace: MODULE_ID });
+        return;
+      }
+      const nodes = document.querySelectorAll("#chat-log [data-message-id], .chat-log [data-message-id]");
+      let touched = 0;
+      for (const node of nodes) {
+        const msg = game.messages?.get(node.dataset.messageId);
+        if (!msg) continue;
+        try { bindApplyButtons(msg, node); touched++; } catch (_) { /* one bad card must not stop the sweep */ }
+      }
+      if (touched) console.log(`${TAG} | Re-bound ${touched} already-drawn card(s) (${reason}).`);
+    } catch (err) {
+      console.warn(`${TAG} | could not sweep already-drawn cards:`, err);
+    }
+  };
+
+  // ⚠️ ready-INSIDE-ready NEVER FIRES. This runs from an init path that may
+  // already be past ready, so waiting on the event would wait on one that has
+  // already happened — proven live 2026-08-12.
+  if (game.ready) _sweepDrawn("ready");
+  else Hooks.once("ready", () => _sweepDrawn("ready"));
+  Hooks.on("renderChatLog", () => _sweepDrawn("chat log rendered"));
 
   console.log(`${TAG} | Monster trait automation initialized.`);
 }

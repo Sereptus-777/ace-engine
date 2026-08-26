@@ -45,7 +45,28 @@ function getPlayerToken() {
     return canvas.tokens?.placeables?.find(t => t.document?.actorId === charId) ?? null;
 }
 
+/**
+ * Distance between two creatures, edge to edge.
+ *
+ * ⚠️ D&D MEASURES SPACE TO SPACE, NOT CENTRE TO CENTRE. The two agree only
+ * while both creatures are Medium, which is why a centre-to-centre reading
+ * survives every casual test and then goes badly wrong the first time a Huge
+ * creature is involved: a dragon standing right beside you reads as 20 feet
+ * away, because that is how far its own middle is from its own edge.
+ *
+ * This measured centres with no attempt at the shared helper, while
+ * `scene-perception.mjs` two files away already reached for it correctly. Same
+ * module, same question, two answers.
+ *
+ * ⚠️ ENGINE STANDS ALONE. ACE Engine ships without QOL, so the helper is
+ * asked for by name and the raw fallback stays for anyone running Engine on its
+ * own. That is the pattern scene-perception established and this now matches.
+ */
 function tokenDistanceFt(tokenA, tokenB) {
+    const proper = game.aceQol?.distanceFt;
+    if (typeof proper === "function") {
+        try { return proper(tokenA, tokenB); } catch (_) { /* fall through */ }
+    }
     const gridSizePx = canvas.grid.size;
     const gridFt     = canvas.grid.distance;
     const a = tokenA.center;

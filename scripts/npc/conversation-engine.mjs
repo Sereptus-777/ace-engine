@@ -1509,10 +1509,17 @@ ${identity.isNamed
         if (!others.length) return "No nearby tokens detected.";
 
         return others.map(t => {
-            const a = t.center;
-            const b = originToken.center;
-            const distPixels = Math.hypot(a.x - b.x, a.y - b.y);
-            const distFeet   = Math.round((distPixels / gridSize) * gridDist);
+            // ⚠️ THE SAME MEASURE THE FILTER ABOVE USED. The earshot filter
+            // already asks for the shared edge-to-edge helper; this line, four
+            // lines later, did its own centre-to-centre maths. A Huge NPC could
+            // therefore pass a 30 ft earshot check and then be described to the
+            // model as standing 45 feet away, in the same sentence. One
+            // question deserves one answer.
+            const proper = game.aceQol?.distanceFt;
+            const distFeet = typeof proper === "function"
+                ? Math.round(proper(t, originToken))
+                : Math.round((Math.hypot(t.center.x - originToken.center.x,
+                                         t.center.y - originToken.center.y) / gridSize) * gridDist);
             const relation   = t.actor?.getFlag(MODULE_ID, "relationship")
                             || t.actor?.flags?.npclink?.relationship || "unknown";
             const type       = t.actor?.type || "creature";

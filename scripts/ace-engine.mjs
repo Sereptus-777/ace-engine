@@ -2971,6 +2971,14 @@ Hooks.once("ready", async () => {
       autoMapVoices: (opts) =>
         import("./npc/voice-map.mjs").then(m => m.autoMap(opts)),
 
+      /**
+       * Put back every creature name ACE overwrote between 2026-08-06 and
+       * 08-23. The AI name is kept as the nameplate name, so nothing is lost.
+       * Reports only; pass { fix: true } to apply.
+       */
+      restoreCreatureNames: (opts) =>
+        import("./npc/name-restore.mjs").then(m => m.restoreCreatureNames(opts)),
+
       /** Open the GM-only "Where Everybody Stands" screen. */
       openStandings: () => import("./standings-panel.mjs").then(m => m.openStandings()),
 
@@ -3327,6 +3335,24 @@ Hooks.once("ready", async () => {
 
       /** Get the digest engine instance. */
       getDigestEngine: () => digestEngine,
+
+      /** Remove a protected key on purpose - the ONLY legitimate way one goes.
+       *    game.modules.get("ace-engine").api.clearKey("elevenLabsApiKey")
+       *  ⚠️ Leaving a box blank is never treated as "delete it". */
+      clearKey: (key) =>
+        import("./key-guard.mjs").then(m => m.clearProtectedKey(MODULE_ID, key)),
+
+      /** What the guard is holding, for a GM who wants to look.
+       *    game.modules.get("ace-engine").api.keyStatus("elevenLabsApiKey") */
+      keyStatus: (key) =>
+        import("./key-guard.mjs").then(m => m.protectedKeyStatus(MODULE_ID, key)),
+
+      /** Give all-lowercase faction names their capitals back.
+       *    game.modules.get("ace-engine").api.capitaliseFactionNames()
+       *    game.modules.get("ace-engine").api.capitaliseFactionNames({ fix: true })
+       *  ⚠️ Dry run by default — it prints every before/after line first. */
+      capitaliseFactionNames: (opts) =>
+        import("./npc/faction-registry.mjs").then(m => m.capitaliseFactionNames(opts)),
 
       /**
        * Connected lookup: entity + location + faction + NPCs at location + Envoy history.
@@ -4924,18 +4950,25 @@ Hooks.once("ready", () => {
 });
 
 // v13+ uses renderChatMessageHTML; v12 uses renderChatMessage.
-// Only register the correct one to avoid deprecation warnings on v13.
+//
+// ⚠️ THE CATCH USED TO REGISTER THE DEPRECATED HOOK "as a safety fallback".
+// It was not safety, it was a guess made in the dark: core V13 fires the old
+// hook whenever anything listens to it, so a failed version read would have
+// double-fired every card handler AND put a deprecation warning on the
+// console, for a failure it could not even name. `game.release.generation` is
+// the number Foundry itself keeps; if that is somehow missing we assume the
+// version we actually ship on and SAY SO, rather than silently reaching for
+// the deprecated path.
 Hooks.on("renderChatMessageHTML", _aceOnRenderChatMessage);
 Hooks.once("init", () => {
-  try {
-    const major = parseInt(game?.version);
-    if (isNaN(major) || major < 13) {
-      Hooks.on("renderChatMessage", _aceOnRenderChatMessage);
-    }
-  } catch (_) {
-    // Version check failed — register legacy hook as safety fallback
-    Hooks.on("renderChatMessage", _aceOnRenderChatMessage);
+  const generation = game.release?.generation ?? parseInt(game.version);
+  if (!Number.isFinite(generation)) {
+    console.warn(`${MODULE_ID} | could not read the Foundry generation `
+      + `(game.release.generation and game.version were both unreadable). `
+      + `Assuming V13+ and using renderChatMessageHTML.`);
+    return;
   }
+  if (generation < 13) Hooks.on("renderChatMessage", _aceOnRenderChatMessage);
 });
 
 // ── Button dispatcher ──────────────────────────────────────────
