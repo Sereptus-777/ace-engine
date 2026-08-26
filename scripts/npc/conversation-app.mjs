@@ -833,6 +833,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 npcLocks.set(actorId, lockInfo);
                 game.socket.emit(`module.${MODULE_ID}`, {
                     action: "lockSet", actorId, lockInfo,
+                    // The receiver checks the claim against lockInfo.userId.
+                    userId: game.user.id,
                 });
                 this._lockedActorId = actorId;
                 this._lockPlayerToken(true);
@@ -2588,6 +2590,13 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             try {
                 game.socket.emit(`module.${MODULE_ID}`, {
                     action:     "gmDismiss",
+                    // ⚠️🔴 NAME THE SENDER. The GM side of this spends a paid AI
+                    // call and writes the campaign journal, and it had no way to tell
+                    // who was asking - the payload carried no user id at all, so ANY
+                    // client could trigger it in a loop. The handler now refuses a
+                    // payload naming nobody, so omitting this line disables summaries
+                    // rather than silently reopening the hole. That is the safer failure.
+                    userId:     game.user.id,
                     actorId:    s.actor.id,
                     tokenId:    s.tokenDocument?.id || null,
                     source:     "player",
@@ -2978,6 +2987,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 this.renderMessage("system", "Conversation ended — you moved to another area.");
                 game.socket.emit(`module.${MODULE_ID}`, {
                     action:     "gmDismiss",
+                    // Named for the same reason as the close path above.
+                    userId:     game.user.id,
                     actorId:    this.actor.id,
                     tokenId:    this.tokenDocument?.id || null,
                     source:     "player",

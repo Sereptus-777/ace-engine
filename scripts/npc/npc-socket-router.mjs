@@ -31,7 +31,30 @@ import { maySpendOnAI as _maySpendOnAI, doneSpending as _doneSpending } from "./
 
 let _wired = false;
 
-/** True when THIS client is the one GM that answers proxied requests. */
+// ⚠️🔴 SPEECH IS ATTRIBUTABLE AND RATE-LIMITED. `browserTTS` makes EVERY
+// connected browser say whatever text the payload carries, and it had no
+// sender check at all - any console at the table could make every player's
+// machine speak. It is not GM-only, because a player's own browser voice is
+// legitimately mirrored to the others; what must not happen is anonymous or
+// unbounded speech.
+//
+// ⚠️ I MISSED THIS ON THE FIRST PASS and then wrote a comment in
+// ace-engine.mjs claiming it was fixed. The audit named it; I gated the four
+// actions on the OTHER listener and never came back to this one. Found by
+// reading my own diff, 2026-08-26.
+const _speechFloodGate = new Map();
+const SPEECH_MIN_GAP_MS = 1500;
+const SPEECH_MAX_CHARS  = 5000;
+
+/** True when THIS client is the one GM that answers proxied requests.
+ *
+ * ⚠️ EXPORTED 2026-08-26. The listener in ace-engine.mjs had its own
+ * unguarded copy of a paid path (gmDismiss) sitting beside this file's guarded
+ * one, and the UI called the unguarded one. Two doors into the same spend is
+ * one door too many - so the guards are shared rather than re-typed.
+ */
+export function isAnsweringGM() { return _isAnsweringGM(); }
+
 function _isAnsweringGM() {
     try { return game.users?.activeGM === game.user; }
     catch (_) { return !!game.user?.isGM; }
@@ -45,6 +68,9 @@ function _isAnsweringGM() {
  * names a real, connected, NON-GM user — a GM never asks over the socket
  * because a GM does the work locally, so a GM claim is always forged.
  */
+/** Authorise a payload that claims to act for a player. See _claimingPlayer. */
+export function claimingPlayer(data, label) { return _claimingPlayer(data, label); }
+
 function _claimingPlayer(data, label) {
     const id = data?.userId ?? data?.senderId;
     const user = id ? game.users?.get?.(id) : null;
@@ -102,6 +128,31 @@ export function wireNpcSocketRouter() {
                 // ── Browser-voice speech, mirrored to the other clients. ──
                 case "browserTTS": {
                     if (_notForMe(data) || !data.text) return;
+                    {
+                        const id = data.userId ?? data.senderId ?? null;
+                        const from = id ? game.users?.get?.(id) : null;
+                        if (!from?.active) {
+                            console.warn(`${TAG} | browserTTS refused: names `
+                                + `${id ? "a user who is not connected" : "no sender at all"}. `
+                                + `Speech played on every client must be attributable.`);
+                            return;
+                        }
+                        if (String(data.text).length > SPEECH_MAX_CHARS) {
+                            console.warn(`${TAG} | browserTTS refused: "${from.name}" sent `
+                                + `${String(data.text).length} characters, over the limit.`);
+                            return;
+                        }
+                        if (!from.isGM) {
+                            const last = _speechFloodGate.get(from.id) ?? 0;
+                            const now = Date.now();
+                            if (now - last < SPEECH_MIN_GAP_MS) {
+                                console.warn(`${TAG} | browserTTS refused: "${from.name}" is `
+                                    + `speaking faster than once every ${SPEECH_MIN_GAP_MS}ms.`);
+                                return;
+                            }
+                            _speechFloodGate.set(from.id, now);
+                        }
+                    }
                     const { ttsEngine } = await import("./tts.mjs");
                     // ⚠️ broadcast:false is LOAD-BEARING. _speakBrowser defaults
                     // to re-broadcasting, so a receiving client would emit the

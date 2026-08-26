@@ -7,7 +7,9 @@ import { AcePanel }          from "./panel.mjs";
 import { installSliderGuard } from "./slider-guard.mjs";
 import { maySpendOnAI, doneSpending, lastRefusal } from "./npc/ai-spend-limit.mjs";
 import { isBioInFlight, openAutoLinkCleanup } from "./npc/bio-generator.mjs";
-import { setSharedElevenLabsKey, getSharedElevenLabsKey, getSharedElevenLabsKeyInfo } from "./npc/shared-credentials.mjs";
+// setSharedElevenLabsKey is deliberately NOT imported: the ElevenLabs key
+// comes from the module setting and nowhere else. See shared-credentials.mjs.
+import { getSharedElevenLabsKey, getSharedElevenLabsKeyInfo } from "./npc/shared-credentials.mjs";
 import { AceSettings }       from "./settings.mjs";
 import { initRemoteCatalog } from "./remote-catalog.mjs";
 import { SceneContext }       from "./scene-context.mjs";
@@ -998,10 +1000,74 @@ Hooks.once("ready", async () => {
 
   // ── Socket listener — runs for ALL users (GM + players) ──────
   // This lets players receive SFX broadcast by the GM.
-  game.socket.on(`module.${MODULE_ID}`, (data) => {
+  // ═══ WHO SENT THIS? ══════════════════════════════════════════
+  //
+  // ⚠️🔴 FOUNDRY ATTACHES NO TRUSTED SENDER TO A SOCKET MESSAGE. Whatever
+  // a payload says about who sent it is a claim, and the only thing we can do
+  // is check that the claim names a real, connected user and that the action
+  // suits them. An action with no check at all is open to any console at the
+  // table.
+  //
+  // An external audit on 2026-08-26 found four actions on THIS listener with
+  // no sender check: playAudio, endConversationForPlayers, npcDied and
+  // lockSet. A player could blast audio at the whole table, close everyone's
+  // NPC window, or death-lock a conversation. All four are gated below.
+  //
+  // ⚠️ THE FIFTH ONE THE AUDIT NAMED, browserTTS, IS NOT ON THIS LISTENER.
+  // It lives in npc/npc-socket-router.mjs, and the first version of this
+  // comment listed it here as though it had been handled. It had not. Naming
+  // a fix in a comment while the code sits in another file is precisely the
+  // "essay as camouflage" the audit warned about, and I did it in the same
+  // change that was supposed to answer that warning. It is gated now, there.
+
+  /** The real, connected user a payload claims to be, or null. */
+  const _sender = (data, label) => {
+    const id = data?.userId ?? data?.senderId ?? null;
+    const u = id ? game.users?.get?.(id) : null;
+    if (!u)        { console.warn(`${MODULE_ID} | ${label} refused: names no real user.`); return null; }
+    if (!u.active) { console.warn(`${MODULE_ID} | ${label} refused: "${u.name}" is not connected.`); return null; }
+    return u;
+  };
+
+  /** True when the payload names a real, connected GM. */
+  const _senderIsGM = (data, label) => {
+    const u = _sender(data, label);
+    if (!u) return false;
+    if (!u.isGM) {
+      console.warn(`${MODULE_ID} | ${label} refused: "${u.name}" is not a GM.`);
+      return false;
+    }
+    return true;
+  };
+
+  // ⚠️ AUDIO IS ATTRIBUTABLE AND RATE-LIMITED, NOT GM-ONLY. A player whose
+  // own client generated an NPC voice legitimately broadcasts it so spectators
+  // hear the same line (see _ttsMode: a player holding their own key runs in
+  // "local" mode). Refusing players outright would break that. What must not
+  // happen is ANONYMOUS or UNBOUNDED audio, so: name yourself, and wait your
+  // turn. GMs are not throttled - they drive every NPC voice at the table.
+  const _audioFloodGate = new Map();
+  const AUDIO_MIN_GAP_MS = 1500;
+  const AUDIO_MAX_BYTES  = 6_000_000;   // ~6 MB of base64; a long line is far less
+
+  game.socket.on(`module.${MODULE_ID}`, async (data) => {
     if (data?.type === "sfx") {
-      // Only accept SFX from GM users (prevents player socket spoofing)
-      if (data.userId && !game.users.get(data.userId)?.isGM) return;
+      // ⚠️🔴 AN OMITTED FIELD USED TO PASS THIS CHECK.
+      //
+      // It read `if (data.userId && !isGM) return` - so a payload that named
+      // NO user skipped the whole test, and anyone could play a sound on
+      // every client at the table by leaving one field out. A check that only
+      // runs when the sender chooses to identify themselves is not a check;
+      // it is an honour system. External audit, 2026-08-26.
+      //
+      // ⚠️ REQUIRE the id, and require it to be a real, connected GM.
+      const _sfxFrom = data.userId ? game.users.get(data.userId) : null;
+      if (!_sfxFrom?.isGM) {
+        console.warn(`${MODULE_ID} | refused an SFX broadcast: it names `
+          + `${data.userId ? `"${data.userId}", who is not a GM` : "no sender at all"}. `
+          + `Only a GM may play sound on everyone's client.`);
+        return;
+      }
       // If targeted to a specific player, only that player plays it
       if (data.targetUserId && data.targetUserId !== game.user.id) return;
       _handleRemoteSfx(data);
@@ -1138,6 +1204,10 @@ Hooks.once("ready", async () => {
     // here. Players are locked out; a GM window stays usable so the GM can
     // still speak as the body if they choose to.
     if (data?.action === "npcDied") {
+      // A death lock closes players out of a conversation. It comes from the
+      // GM's death hook; anyone else claiming it is locking a chat they do
+      // not own.
+      if (!_senderIsGM(data, "npcDied")) return;
       if (data.senderId === game.user.id) return;   // already handled locally
       try {
         for (const [, app] of (npcChatState?.openConversations ?? new Map())) {
@@ -1167,6 +1237,9 @@ Hooks.once("ready", async () => {
     // require the window to be readOnly: the player's own live window is the
     // one being closed here.
     if (data?.action === "endConversationForPlayers") {
+      // Closing every player's NPC window is a GM action. Unchecked, any
+      // player could shut the table's conversations mid-scene.
+      if (!_senderIsGM(data, "endConversationForPlayers")) return;
       if (game.user.isGM) return;                   // the GM's window stays
       try {
         const map = npcChatState?.openConversations;
@@ -1251,9 +1324,84 @@ Hooks.once("ready", async () => {
       }
 
       // ── Second: GM-only persistence + journal summary ─────────────
+      //
+      // ⚠️🔴 THIS BLOCK SPENDS MONEY AND WRITES THE CAMPAIGN RECORD, AND IT
+      // USED TO DO BOTH FOR ANYONE WHO ASKED.
+      //
+      // `if (!game.user.isGM) return` reads like an authorisation check and is
+      // not one. It answers "am I a GM receiving this", never "was the sender
+      // allowed to ask". Foundry attaches no trusted sender to a socket
+      // message, and this payload carried no userId at all, so there was
+      // nothing to check even in principle.
+      //
+      // What that allowed, from any player's console, in a loop:
+      //   · unbounded paid AI calls (summarizeAndSaveSession)
+      //   · unbounded journal entries in the campaign record
+      //   · memoryLog written onto ANY actor id the payload named — and that
+      //     log is later fed into the NPC system prompt, so poisoning it
+      //     poisons what the NPC says next session
+      //
+      // ⚠️ AND THE GUARDED VERSION ALREADY EXISTED. `summarizeSession` in
+      // npc/npc-socket-router.mjs has the sender check, the ownership check,
+      // the spend limit and the single-GM gate. The UI never called it. Two
+      // doors into the same spend, and the unlocked one was the one in use.
+      // Found by an external audit, 2026-08-26.
+      //
+      // Rather than re-type those guards here, they are imported. One set of
+      // rules, one place to fix them.
       if (!game.user.isGM) return;
       if (!Array.isArray(data.history) || !data.history.length) return;
       try {
+        // ⚠️ maySpendOnAI/doneSpending are ALREADY imported at the top of
+        // this file. Re-importing them here would shadow the module binding
+        // with a block-scoped copy of the same thing - harmless, and exactly
+        // the kind of duplicate that later reads as "there must be a reason".
+        //
+        // ⚠️ AND THE FIRST VERSION OF THIS COMMENT INVENTED ONE. It said a
+        // static import of the router would close a cycle "because
+        // ace-engine.mjs and npc-socket-router.mjs already reference each
+        // other". They do not: the router imports ai-spend-limit.mjs and
+        // nothing else, and that is a leaf. A confident wrong reason in a
+        // comment is worse than no comment - it is what sends the next person
+        // hunting in a file that was never involved.
+        //
+        // The real reason it is lazy: the router is only pulled in when NPC
+        // chat activates (activate.mjs loads it on demand), and a static
+        // import here would drag it into the boot graph for every world,
+        // including ones that never open an NPC conversation. Importing it is
+        // inert - wiring happens only when wireNpcSocketRouter() is called.
+        const { claimingPlayer, isAnsweringGM } =
+          await import("./npc/npc-socket-router.mjs");
+
+        // ⚠️ ONE GM ANSWERS. With two GMs connected, both clients reach this
+        // line, and both would run a paid summarize for the same close.
+        if (!isAnsweringGM()) return;
+
+        // ⚠️ THE SENDER MUST NAME THEMSELVES, AND BE REAL, ONLINE, AND NOT
+        // CLAIMING TO BE A GM. A payload that names nobody is refused.
+        const sender = claimingPlayer(data, "gmDismiss");
+        if (!sender) return;
+
+        // ⚠️ CAP THE HISTORY. An actor flag is capped elsewhere in this file
+        // at 256 KB; this path had no limit, so a crafted payload could bloat
+        // the actor document and every AI prompt built from it afterwards.
+        const MAX_TURNS = 200;
+        const MAX_CHARS = 128_000;
+        let history = data.history.slice(-MAX_TURNS);
+        let budget = MAX_CHARS;
+        history = history.filter((turn) => {
+          const size = JSON.stringify(turn ?? "").length;
+          if (size > budget) return false;
+          budget -= size;
+          return true;
+        });
+        if (history.length !== data.history.length) {
+          console.warn(`${MODULE_ID} | gmDismiss: trimmed the conversation from `
+            + `${data.history.length} to ${history.length} turns before saving it. `
+            + `A history this large is either a very long session or a crafted payload.`);
+        }
+        if (!history.length) return;
+
         let actor = null;
         if (data.tokenId) {
           for (const scene of game.scenes) {
@@ -1266,15 +1414,32 @@ Hooks.once("ready", async () => {
           console.warn(`${MODULE_ID} | gmDismiss: target actor not found`);
           return;
         }
-        // Persist raw history to flag first (in case summarize fails)
-        actor.setFlag(MODULE_ID, "memoryLog", data.history).catch(err =>
-          console.warn(`${MODULE_ID} | gmDismiss: memoryLog persist failed:`, err)
-        );
-        // Then run the journal summarize on GM client
-        import("./npc/memory.mjs").then(({ summarizeAndSaveSession }) => {
-          summarizeAndSaveSession(actor, data.history, data.playerName || "(Player)")
+        // ⚠️ A PLAYER MAY NOT WRITE A CONVERSATION ONTO A CHARACTER THEY DO
+        // NOT OWN. The same rule the guarded twin applies: this is only ever
+        // a conversation with a CREATURE, never another player's PC.
+        if (actor.type === "character" && !actor.testUserPermission(sender, "OWNER")) {
+          console.warn(`${MODULE_ID} | gmDismiss REFUSED — "${sender.name}" tried to write a `
+            + `conversation onto "${actor.name}", a character they do not own.`);
+          return;
+        }
+
+        // ⚠️ AND IT COSTS. The spend limiter is per-user AND has an
+        // identity-free table ceiling, so a loop cannot outrun it.
+        if (!maySpendOnAI(sender, Date.now(), "gmDismiss")) return;
+        try {
+          // Persist raw history to flag first (in case summarize fails)
+          await actor.setFlag(MODULE_ID, "memoryLog", history).catch(err =>
+            console.warn(`${MODULE_ID} | gmDismiss: memoryLog persist failed:`, err)
+          );
+          const { summarizeAndSaveSession } = await import("./npc/memory.mjs");
+          await summarizeAndSaveSession(actor, history, data.playerName || "(Player)")
             .catch(err => console.warn(`${MODULE_ID} | gmDismiss summarize failed:`, err));
-        }).catch(err => console.warn(`${MODULE_ID} | gmDismiss memory import failed:`, err));
+        } finally {
+          // ⚠️ ALWAYS RELEASED. A throw between the claim and the release
+          // would leave the limiter believing this user is still spending,
+          // and their next legitimate close would be refused forever.
+          doneSpending(sender);
+        }
       } catch (err) {
         console.warn(`${MODULE_ID} | gmDismiss handler threw:`, err);
       }
@@ -1449,6 +1614,23 @@ Hooks.once("ready", async () => {
     // back to browser TTS locally — the robotic voice).
     if (data?.action === "playAudio" && data.base64) {
       if (data.exclude && data.exclude === game.user.id) return;
+      const _audioFrom = _sender(data, "playAudio");
+      if (!_audioFrom) return;
+      if (String(data.base64).length > AUDIO_MAX_BYTES) {
+        console.warn(`${MODULE_ID} | playAudio refused: "${_audioFrom.name}" sent `
+          + `${Math.round(String(data.base64).length / 1024)} KB of audio, over the limit.`);
+        return;
+      }
+      if (!_audioFrom.isGM) {
+        const _last = _audioFloodGate.get(_audioFrom.id) ?? 0;
+        const _now = Date.now();
+        if (_now - _last < AUDIO_MIN_GAP_MS) {
+          console.warn(`${MODULE_ID} | playAudio refused: "${_audioFrom.name}" is broadcasting `
+            + `faster than once every ${AUDIO_MIN_GAP_MS}ms.`);
+          return;
+        }
+        _audioFloodGate.set(_audioFrom.id, _now);
+      }
       try {
         const binary = atob(data.base64);
         const bytes = new Uint8Array(binary.length);
@@ -1544,7 +1726,8 @@ Hooks.once("ready", async () => {
           const pitch  = data.pitch ?? 1.0;
           // Spectators first, then the requester, exactly as the ElevenLabs
           // path does — the requester's promise awaits real playback.
-          game.socket.emit(`module.${MODULE_ID}`, { action: "playAudio", base64, pitch, exclude: data.userId });
+          game.socket.emit(`module.${MODULE_ID}`, { action: "playAudio", base64, pitch,
+            exclude: data.userId, userId: game.user.id });
           game.socket.emit(`module.${MODULE_ID}`, {
             action: "ttsResponse", requestId: data.requestId, ok: true, base64, pitch,
           });
@@ -1610,7 +1793,8 @@ Hooks.once("ready", async () => {
           // Broadcast to spectators (everyone except the requester). They
           // play it through the playAudio receiver and hear the same voice.
           game.socket.emit(`module.${MODULE_ID}`, {
-            action: "playAudio", base64, pitch, exclude: data.userId
+            action: "playAudio", base64, pitch, exclude: data.userId,
+            userId: game.user.id,
           });
           // Send the audio DIRECTLY to the requester so their speak()
           // promise can await playBuffer and advance segments in lockstep
@@ -1646,6 +1830,19 @@ Hooks.once("ready", async () => {
     // lockRequest — late-joining player asks GM for the current state.
     // lockSync    — GM's reply with a snapshot of the lock map.
     if (data?.action === "lockSet" && data.actorId && data.lockInfo) {
+      // ⚠️ A LOCK MUST BE CLAIMED BY ITS OWN HOLDER. The lock names the user
+      // who holds it; the sender has to BE that user, or a GM. Otherwise a
+      // player could lock an NPC in someone else's name and the token HUD
+      // would show the wrong person holding the conversation.
+      {
+        const _lockFrom = _sender(data, "lockSet");
+        if (!_lockFrom) return;
+        if (!_lockFrom.isGM && _lockFrom.id !== data.lockInfo.userId) {
+          console.warn(`${MODULE_ID} | lockSet refused: "${_lockFrom.name}" tried to set a lock `
+            + `held by someone else.`);
+          return;
+        }
+      }
       if (data.lockInfo.userId === game.user.id) return; // we already set it locally
       try {
         npcChatState?.npcLocks?.set?.(data.actorId, data.lockInfo);
@@ -1985,25 +2182,44 @@ Hooks.once("ready", async () => {
       if (resp.ok) {
         const cfg = await resp.json();
         const { elevenLabsApiKey, elevenLabsVoiceId, elevenLabsModel } = cfg;
-        if (elevenLabsApiKey  && !elevenLabsApiKey.includes("YOUR_")) {
-          localCredentials.elevenLabsApiKey = elevenLabsApiKey.trim();
-          setSharedElevenLabsKey(localCredentials.elevenLabsApiKey);   // one key, every consumer
+
+        // ── ⚠️🔴 THE KEY IS REFUSED. NOT WARNED ABOUT — REFUSED. ─────────
+        //
+        // The previous version loaded the key, used it, and told the GM it
+        // was public. That is a warning, not a fix: the key stayed live, and
+        // because this ran at boot it also BEAT the client-scoped setting, so
+        // a GM who had done the right thing and moved their key still had the
+        // public one win.
+        //
+        // ⚠️ AND A KEY THAT HAS SAT IN A WEB-SERVED DIRECTORY IS ALREADY
+        // COMPROMISED. Foundry hands that file to any client that asks, before
+        // a line of our code runs. We cannot un-serve it. So the honest advice
+        // is not "move it" — it is "rotate it, then put the new one in the
+        // setting", and that is what the GM is now told.
+        //
+        // Refusing costs a GM one re-paste. Loading it costs them their key.
+        // External audit, 2026-08-26: "A warning is not a fix. Delete the
+        // loader." Right about the key; the two fields below are not secrets.
+        if (elevenLabsApiKey && !elevenLabsApiKey.includes("YOUR_")) {
+          console.error(`${MODULE_ID} | REFUSED to load the ElevenLabs API key from `
+            + `config.local.json. Foundry serves that file to every connected client, so the key `
+            + `in it is readable by any player and must be treated as leaked. It has NOT been `
+            + `used. Rotate the key at elevenlabs.io, put the new one in the module's ElevenLabs `
+            + `setting (GM-only, never broadcast), and delete config.local.json.`);
+          ui.notifications?.error(
+            "ACE Engine: the API key in config.local.json was NOT loaded — that file is readable "
+            + "by every player, so treat that key as leaked. Rotate it, put the new one in the "
+            + "ElevenLabs setting, and delete the file.",
+            { permanent: true });
         }
+
+        // Not secrets: a voice id and a model name are public identifiers, and
+        // dropping them would break voice config for no security gain.
         if (elevenLabsVoiceId && !elevenLabsVoiceId.includes("YOUR_")) localCredentials.elevenLabsVoiceId = elevenLabsVoiceId.trim();
         if (elevenLabsModel)                                            localCredentials.elevenLabsModel   = elevenLabsModel.trim();
         if (Object.keys(localCredentials).length) {
-          console.log(`${MODULE_ID} | Loaded local credentials from config.local.json (${Object.keys(localCredentials).join(", ")})`);
-          // ⚠️ TELL THE HUMAN. A secret in a web-served directory is not a
-          // secret, and the GM cannot fix what nobody told them about.
-          if (localCredentials.elevenLabsApiKey) {
-            console.warn(`${MODULE_ID} | ⚠️ SECURITY: config.local.json holds a real API key and Foundry ` +
-              `serves it to EVERY connected client. Any player can read it. Move the key into the ` +
-              `module's ElevenLabs setting (GM-only, never broadcast) and delete the file.`);
-            ui.notifications?.error(
-              "ACE Engine: your API key in config.local.json is readable by every player. " +
-              "Move it into the ElevenLabs setting and delete that file.",
-              { permanent: true });
-          }
+          console.log(`${MODULE_ID} | Read non-secret voice settings from config.local.json `
+            + `(${Object.keys(localCredentials).join(", ")}). Keys are never read from this file.`);
         }
       }
     }

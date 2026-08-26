@@ -26,19 +26,40 @@
 
 const MODULE_ID = "ace-engine";
 
-/** Key found in config.local.json, deposited once at boot. Highest precedence. */
-let _fileKey = "";
+// ⚠️🔴 THE config.local.json KEY IS GONE, AND SO IS ITS PRECEDENCE.
+//
+// `_fileKey` held the key read out of config.local.json and OUTRANKED the
+// module setting. Two problems in one variable:
+//
+//   1. Foundry serves that file to every connected client over HTTP, before
+//      any of our code runs. A key in it is readable by any player.
+//   2. Because it won, a GM who had already done the right thing and moved
+//      their key into the (client-scoped, never broadcast) setting still had
+//      the public one used instead. Doing the safe thing changed nothing.
+//
+// The loader in ace-engine.mjs now refuses to read the key at all, so the
+// setting is the only source. The setter below stays as a REFUSAL rather than
+// being deleted: if anything ever calls it again - a re-added loader, an
+// older build, a third-party patch - it says so instead of quietly restoring
+// the precedence that caused this. External audit, 2026-08-26.
 
-/** Deposit the config.local.json key. Called at boot by ace-engine.mjs. */
-export function setSharedElevenLabsKey(k) { _fileKey = (k || "").trim(); }
+/**
+ * Refuses. Kept so a caller that reopens the hole is heard, not obeyed.
+ * @deprecated The ElevenLabs key comes from the module setting and nowhere else.
+ */
+export function setSharedElevenLabsKey(k) {
+  if (!k) return;
+  console.error(`${MODULE_ID} | REFUSED an attempt to override the ElevenLabs key from outside `
+    + `the module setting. That path was config.local.json, which Foundry serves to every `
+    + `player. The setting is the only source. Nothing was changed.`);
+}
 
 /**
  * The effective key plus a human-readable source, for status badges.
- * @returns {{key: string, source: string}} source is "config.local.json",
- *          "Module Settings", or "none".
+ * @returns {{key: string, source: string}} source is "Module Settings" or
+ *          "none". config.local.json is no longer a source of keys.
  */
 export function getSharedElevenLabsKeyInfo() {
-  if (_fileKey) return { key: _fileKey, source: "config.local.json" };
   try {
     const settingsKey = (game.settings.get(MODULE_ID, "elevenLabsApiKey") || "").trim();
     if (settingsKey) return { key: settingsKey, source: "Module Settings" };

@@ -58,9 +58,21 @@ function registerSettings() {
       });
     } catch (_) { /* already registered */ }
   };
-  reg("monsterAutomation", true,
+  // ⚠️🔴 OFF BY DEFAULT (2026-08-26). This used to default ON, which meant a
+  // GM who installed Engine for its NPC chat got monster traits firing at
+  // their table without ever asking for them — Death Burst going off, Heated
+  // Body retaliating, Legendary Resistance spending itself. QOL's Conservative
+  // preset does not reach into Engine, so nothing anywhere turned it down.
+  //
+  // ⚠️ A FEATURE THAT ACTS ON ITS OWN MUST BE OPTED INTO, not out of. The
+  // first time a GM learns this exists should not be a creature exploding in
+  // the middle of their session. External audit, 2026-08-26.
+  //
+  // The sub-settings below stay ON: they only describe HOW the automation
+  // behaves once this master switch is deliberately turned on.
+  reg("monsterAutomation", false,
     "Monster Trait Automation",
-    "Master switch. Auto-fire SRD monster traits — Heated Body, Spider Climb, Pack Tactics, Death Burst, Regeneration, Legendary Resistance and more — when their tokens are placed and during combat.");
+    "Master switch, OFF by default. Auto-fire SRD monster traits — Heated Body, Spider Climb, Pack Tactics, Death Burst, Regeneration, Legendary Resistance and more — when their tokens are placed and during combat. Turn this on when you want ACE running your monsters' traits for you.");
   reg("monsterAutoVisuals", true,
     "Monster Trait Visuals",
     "Give trait-bearing tokens a fitting glow (e.g. a fiery aura for Heated Body creatures) and a status icon so the GM can see at a glance which automations are live.");

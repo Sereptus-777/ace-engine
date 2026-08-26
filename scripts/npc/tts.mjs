@@ -586,7 +586,10 @@ class TTSEngine {
                         action: "browserTTS",
                         text,
                         pitch,
-                        exclude: game.user.id
+                        exclude: game.user.id,
+                        // The receiver refuses anonymous speech; without this
+                        // the mirror is silently inaudible, not silently open.
+                        userId:  game.user.id
                     });
                 } catch (_) {}
             }
@@ -681,7 +684,10 @@ class TTSEngine {
                 action:  "playAudio",
                 base64,
                 pitch,
-                exclude: game.user.id
+                exclude: game.user.id,
+                // The receiver refuses anonymous audio; without this the
+                // spectator broadcast is silently inaudible.
+                userId:  game.user.id,
             });
         } catch(e) {
             console.warn("TTS | Socket broadcast failed (non-fatal):", e);
