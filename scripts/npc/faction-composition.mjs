@@ -215,12 +215,10 @@ export async function backfillCompositions({ dryRun = false } = {}) {
     if (guessed.length) lines.push(`  assumed, review these (${guessed.length}):`,    ...guessed.map(l => "    " + l));
     console.log(lines.join("\n"));
 
-    if (!dryRun && (filled.length || guessed.length)) {
-        ui.notifications?.info(
-            `ACE Engine gave ${filled.length + guessed.length} factions a base creature: ` +
-            `${filled.length} worked out from members or their name, ${guessed.length} assumed human. ` +
-            `Full list in the console. ⚠️ Species only spreads word among its own kind when the species is in the faction's NAME.`,
-            { permanent: true });
-    }
+    // ⚠️ NO TOAST. Johnny, 2026-09-02: "I don't want that fucking blue toast
+    // anymore." It was permanent, fired on every load, and told him the same
+    // thing every time: the guess is a guess. The console list above is the
+    // report, and it is there whenever he wants to read it. A notice that
+    // cannot be acted on is furniture, and permanent furniture is worse.
     return { filled, guessed };
 }
