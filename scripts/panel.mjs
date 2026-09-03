@@ -941,8 +941,25 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     `;
   }
 
+  /**
+   * ⚠️🔴 STRIPPING THE TAGS LEAVES THE ENRICHER SYNTAX ON SCREEN. This read
+   * `<p>[[lookup @name]] is a beholder</p>` and showed the square brackets, the
+   * same bug Johnny found on ACE QOL's action bar (2026-09-03): "I don't want to
+   * ever see that in any of our shit."
+   *
+   * ⚠️ ASKED OF ACE QOL, NOT IMPORTED FROM IT. This module has to stand alone,
+   * so the shared reader is reached through its published API and the fallback
+   * below strips the enricher syntax rather than showing it. Either way nothing
+   * bracketed reaches the card.
+   */
   _buildItemCard(item, actor) {
-    const desc = (item.system?.description?.value || "").replace(/<[^>]+>/g, "").trim();
+    const desc = (game.aceQol?.descriptionTextSync?.(item)
+      ?? String(item.system?.description?.value || "")
+          .replace(/@[A-Za-z]+\[[^\]]*\]\{([^}]*)\}/g, "$1")
+          .replace(/@[A-Za-z]+\[[^\]]*\]/g, "")
+          .replace(/\[\[[^\]]*\]\]/g, "")
+          .replace(/<[^>]+>/g, " ")
+    ).replace(/\s+/g, " ").trim();
     const hasDesc = desc.length > 20;
     const rarity = item.system?.rarity || "common";
 
