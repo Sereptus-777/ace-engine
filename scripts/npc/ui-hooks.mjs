@@ -9,6 +9,7 @@
 // cleanup) as part of the Envoy → Engine merger.
 
 import { onRenderSceneConfig } from "./voice-engine.mjs";
+import { onCanvasReady, onceCanvasReady } from "./../ready-utils.mjs";
 import { ConversationApp }     from "./conversation-app.mjs";
 import { AIConfigDialog }      from "./npc-config-dialog.mjs";
 import { npcChatState }        from "./activate.mjs";
@@ -203,7 +204,7 @@ export function registerUiHooks() {
     });
 
     // ── HUD Mutation Observer (player view only) ─────────────────────────
-    Hooks.once("canvasReady", _ensureHudObserver);
+    onceCanvasReady(_ensureHudObserver, "the player HUD observer");
 
     // ── Hide canvas overlays for players when NPC token selected/refreshed/hovered
     Hooks.on("controlToken", (token, controlled) => {
@@ -651,10 +652,10 @@ export function registerUiHooks() {
         }, true);
     };
     _attachPlayerRightClick();                       // handle current canvas (initial boot)
-    Hooks.on("canvasReady", _attachPlayerRightClick); // handle future scene switches
+    onCanvasReady( _attachPlayerRightClick); // handle future scene switches
 
     // ── Orphaned spectator window cleanup on scene change ───────────────
-    Hooks.on("canvasReady", async () => {
+    onCanvasReady( async () => {
         for (const [convoKey, app] of openConversations.entries()) {
             const isOwner = app._isOwner;
             if (!isOwner) {

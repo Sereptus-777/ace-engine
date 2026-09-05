@@ -1,3 +1,4 @@
+import { onCanvasReady } from "./../ready-utils.mjs";
 // ─── ACE: Engine — NPC Chat Subsystem Activation ───────────────────────────
 // Single entry point that wires the dormant npc/*.mjs files into Foundry
 // hooks. Called from ace-engine.mjs init/ready when the npcChatEnabled gate
@@ -298,7 +299,7 @@ function _registerHooks() {
     });
 
     // ── Scene scan for missing voices/bios ──────────────────────────────
-    Hooks.on("canvasReady", () => {
+    onCanvasReady( () => {
         if (!game.user.isGM) return;
         const tokens = canvas.tokens?.placeables ?? [];
         const npcs = tokens.filter(t => {

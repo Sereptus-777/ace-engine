@@ -7,6 +7,7 @@
 // and flag namespace switched ace-envoy.* -> ace-engine.*.
 
 import { AIHandler }                                 from "./conversation-engine.mjs";
+import { onCanvasReady } from "./../ready-utils.mjs";
 import { summarizeAndSaveSession }                   from "./memory.mjs";
 import { ttsEngine }                                 from "./tts.mjs";
 import { getVoiceConfig, getDynamicVoiceSettings }   from "./voice-engine.mjs";
@@ -2979,7 +2980,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
     _watchForSceneChange() {
         this._startingSceneId = canvas.scene?.id;
         // Use a Foundry hook instead of polling — fires when a new scene is drawn
-        this._sceneChangeHookId = Hooks.on("canvasReady", () => {
+        this._sceneChangeHookId = onCanvasReady( () => {
             if (canvas.scene?.id !== this._startingSceneId) {
                 console.warn("ACE: Engine | Conversing player changed scene — ending conversation");
                 Hooks.off("canvasReady", this._sceneChangeHookId);
