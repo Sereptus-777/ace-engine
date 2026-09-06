@@ -4468,8 +4468,21 @@ Hooks.on("updateActor", (actor, changes) => {
       // get a one-line tally entry on the killer's PC profile journal
       // instead. Linked NPC deaths are recorded via the full NPC Profile
       // pipeline (markDeceased). This branch only fires for unlinked.
-      const isUnlinked = !actor.prototypeToken?.actorLink && !actor.hasPlayerOwner;
-      if (isUnlinked && killer && killer !== actor.name) {
+      // ⚠️🔴 EVERY KILL, NOT JUST THE MOOKS. This was gated on `isUnlinked`,
+      // so a LINKED creature — which is every named, important thing in his
+      // world — was recorded on its own NPC profile and on the deeds ledger,
+      // and never once on the killer's Kill Log page.
+      //
+      // Johnny, 2026-09-06: "It says Deeds killed a shadow dragon, and under
+      // kill log, it doesn't say anything about killing a fucking dragon."
+      // Nothing was lost, and nothing was out of sync — but a page called Kill
+      // Log that silently omits the dragon is worse than no page. The one kill
+      // a player wants to see there is the big one.
+      //
+      // ⚠️ THE NPC PROFILE PIPELINE STILL RUNS. This is additive: a linked
+      // creature still gets marked deceased on its own journal exactly as
+      // before. This only adds the line to the killer's log.
+      if (killer && killer !== actor.name && !actor.hasPlayerOwner) {
         const killerActor = game.actors?.find(a => a.name === killer && a.hasPlayerOwner);
         if (killerActor) {
           (async () => {
