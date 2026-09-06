@@ -32,12 +32,28 @@ const MODULE_ID = "ace-engine";
  */
 export function onCanvasReady(fn, label = "a canvas listener") {
   const wrapped = (cnv) => {
+    // ⚠️🔴 TIMED, BECAUSE A SLOW SCENE SWITCH HAS NO OTHER WITNESS. On
+    // 2026-09-06 Johnny reported every scene change taking twenty seconds or
+    // more. Seventeen ACE listeners run on canvasReady across three modules and
+    // NOTHING said which one was expensive — reading the code cannot tell you,
+    // because the cost is in what the scene contains, not in the source.
+    //
+    // A listener that takes longer than a quarter second names itself. That is
+    // cheap enough to leave in permanently and it turns "the scenes are slow"
+    // into a line that says which feature and how long.
+    const started = performance.now();
     try { return fn(cnv ?? globalThis.canvas); }
     catch (err) {
       // ⚠️ ONE LISTENER'S THROW MUST NOT TAKE THE SCENE DOWN WITH IT, and it
       // must not be silent either — a canvas feature that quietly stopped is
       // indistinguishable from one that was never built.
       console.error(`${MODULE_ID} | ${label} threw on canvasReady:`, err);
+    } finally {
+      const ms = performance.now() - started;
+      if (ms > 250) {
+        console.warn(`${MODULE_ID} | SLOW canvasReady: ${label} took ${Math.round(ms)}ms. `
+          + `This is why switching scenes feels slow.`);
+      }
     }
   };
   Hooks.on("canvasReady", wrapped);
