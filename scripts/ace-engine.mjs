@@ -4,6 +4,7 @@
 // ============================================================
 
 import { AcePanel }          from "./panel.mjs";
+import { EarsPanel }         from "./ears-panel.mjs";
 import { installSliderGuard } from "./slider-guard.mjs";
 import { maySpendOnAI, doneSpending, lastRefusal } from "./npc/ai-spend-limit.mjs";
 import { isBioInFlight, openAutoLinkCleanup } from "./npc/bio-generator.mjs";
@@ -996,6 +997,15 @@ Hooks.once("ready", async () => {
     AttunementPrompt.register();
   } catch (err) {
     console.error(`${MODULE_ID} | AttunementPrompt init failed:`, err);
+  }
+
+  // ── The listening panel (ACE Ears, phase one) ──
+  // Watches, never acts. Opens as a real browser window so it can live on his
+  // second screen instead of over the map.
+  try {
+    EarsPanel.register();
+  } catch (err) {
+    console.error(`${MODULE_ID} | EarsPanel init failed:`, err);
   }
 
   // ── Socket listener — runs for ALL users (GM + players) ──────
@@ -2880,6 +2890,8 @@ Hooks.once("ready", async () => {
       // external consumers; if you need to mutate, use the helpers in
       // npc/npc-profile-journal.mjs instead.
       get memoryManager() { return aceMemory; },
+      openEars: () => EarsPanel.open(),
+      earsVocabulary: () => EarsPanel.pushVocabulary(),
 
       // ── v0.7.21 Triple-Backup Memory Sync Engine ──
       // Public API for manual snapshot triggers + status. The sync engine

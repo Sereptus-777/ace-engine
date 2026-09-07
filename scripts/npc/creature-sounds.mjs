@@ -224,7 +224,7 @@ export async function rebuildSpeakingWebpIndex() {
     } catch (err) {
         // An absent folder is normal — most tables have no speaking portraits.
         console.log(`${TAG} | No speaking-portrait folder at "${folder}" (that is fine — the feature is optional).`);
-        try { await game.settings.set(MODULE_ID, "speakingWebpIndex", { folder, stems: [], _builtAt: Date.now() }); } catch (_) {}
+        try { await game.settings.set(MODULE_ID, "speakingWebpIndex", { folder, stems: [], _builtAt: Date.now() }); } catch (err) { console.warn(`ace-engine | a set did not save:`, err); }
         return null;
     }
 }

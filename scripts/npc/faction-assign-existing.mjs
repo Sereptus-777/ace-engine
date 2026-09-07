@@ -182,7 +182,7 @@ export async function assignFactionsToExisting({ dryRun = false, force = false, 
     }
 
     if (!dryRun && assigned.length) {
-        try { await game.settings.set(MODULE_ID, DONE_FLAG, true); } catch (_) {}
+        try { await game.settings.set(MODULE_ID, DONE_FLAG, true); } catch (err) { console.warn(`ace-engine | a set did not save:`, err); }
     }
 
     const lines = [

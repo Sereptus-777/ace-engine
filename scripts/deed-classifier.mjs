@@ -227,7 +227,7 @@ ${prompt}`);
     // ⚠️ Only mark it done if it actually did something. A pass that classified
     // nothing has not "completed", and flagging it would mean it never retries.
     const didSomething = (tally.heroic + tally.villainous + tally.neutral) > 0;
-    if (!dryRun && didSomething) { try { await game.settings.set(MODULE_ID, DONE_FLAG, true); } catch (_) {} }
+    if (!dryRun && didSomething) { try { await game.settings.set(MODULE_ID, DONE_FLAG, true); } catch (err) { console.warn(`ace-engine | a set did not save:`, err); } }
     if (!dryRun && !didSomething) {
         console.error(`${TAG} | classified NOTHING out of ${deeds.length} deeds. Not marking this done; ` +
                       `it will run again next load. See the batch warnings above for what the model returned.`);

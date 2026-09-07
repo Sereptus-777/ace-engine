@@ -1067,18 +1067,11 @@ export class MemoryManager {
     const digest = dayEvents.map(e => this.history.eventToText(e)).filter(Boolean).join("\n");
     const narrations = dayEvents.filter(e => e.k === "narration").map(e => e.txt).filter(Boolean).join("\n- ");
 
-    // Extract party names from events (actors mentioned in combat, kills, crits)
-    const partyNamesSet = new Set();
-    for (const e of dayEvents) {
-      if (e.p && Array.isArray(e.p)) e.p.forEach(n => partyNamesSet.add(n));
-      if (e.a) {
-        const actor = game.actors?.find(a => a.name === e.a && a.hasPlayerOwner);
-        if (actor) partyNamesSet.add(e.a);
-      }
-    }
-    const partyNames = partyNamesSet.size > 0
-      ? [...partyNamesSet].join(", ")
-      : (game.actors?.filter(a => a.hasPlayerOwner && a.type === "character") ?? []).map(a => a.name).join(", ");
+    // ⚠️ THE SAME READER AS THE LIVE PATH. This one already derived the party
+    // from the events, which was right, and then fell back to EVERY character
+    // in the world when the events named nobody — so a quiet session listed the
+    // entire Actors directory. One reader, and it has no such fallback.
+    const partyNames = this._partyPresent(dayEvents).join(", ");
 
     // Extract scene names mentioned
     const sceneNames = [...new Set(dayEvents.filter(e => e.s).map(e => e.s))];
@@ -1126,13 +1119,125 @@ Write the session summary now. Be vivid but concise — this is a campaign journ
   }
 
   /**
+   * Who was actually at this session?
+   *
+   * ⚠️🔴 IT USED TO LIST EVERY CHARACTER THAT HAS EVER EXISTED. The old
+   * line was "every actor with a player owner and type character", which is the
+   * whole Actors directory: retired PCs, bench tests, the group map token, and
+   * the family members who were not playing that night. Johnny, 2026-09-06:
+   * *"under Party it says Hammer the Test Fighter and Jexxi is in there.
+   * Fucking anybody I ever had, it's got to stop saying that all those people
+   * are not there."*
+   *
+   * That is not a cosmetic problem. The party list goes into the PROMPT, so
+   * the model writes people into the story who were not in the room, and the
+   * summary then feeds the video pipeline, which repeats it.
+   *
+   * ⚠️ PRESENCE, NEVER NAMES. The obvious fix is to filter out anything
+   * called "Test" or "Dummy", and it is the wrong fix: it breaks the moment
+   * somebody plays a character with an unlucky name, and it would still list a
+   * real PC who stayed home. Two facts answer this honestly:
+   *   • the character DID something this session (it is in the events), or
+   *   • a player who is CONNECTED has it assigned as their character.
+   * Neither one reads a name, and a bench dummy satisfies neither.
+   *
+   * ⚠️ AND AN EMPTY ANSWER IS BETTER THAN EVERYBODY. If nothing matches, this
+   * returns nothing and the caller says "unknown", because a list of people who
+   * were not there is worse than no list at all — that is the actual complaint.
+   *
+   * @param {object[]} events  the session's events, if the caller has them
+   * @returns {string[]} character names, in a stable order
+   */
+  /**
+   * Who was actually at this session? THE SCENE ANSWERS THIS, NOTHING ELSE.
+   *
+   * ⚠️🔴 IT USED TO READ THE ACTORS SIDEBAR. The original line was "every
+   * actor with a player owner whose type is character", which is the entire
+   * Actors directory: retired PCs, bench fighters, the group map token, and
+   * family who were not playing. Johnny, 2026-09-06: *"under Party it says
+   * Hammer the Test Fighter and Jexxi is in there. Fucking anybody I ever had."*
+   *
+   * ⚠️ AND MY FIRST FIX WAS STILL THE SIDEBAR WEARING A HAT. It cross-checked
+   * the directory against the event log and the connected user list, which is
+   * cleverer and still answers the wrong question. He corrected it the same
+   * hour: *"All it's doing is reading whatever's in my actor sidebar for
+   * players... That's bullshit. It's got to read the scene."*
+   *
+   * He is right, and it is not a preference. This is a virtual tabletop: a
+   * character who was in the session HAS A TOKEN ON THE MAP, and one who was
+   * not, does not. The map is the room. A bench dummy sitting in a folder is
+   * not at the table no matter how many times it has rolled a die in the past.
+   *
+   * ⚠️ WHICH SCENES: the ones the session's events actually name, not just the
+   * one currently open, because a session that moved from the courtyard to the
+   * lower temple happened on both.
+   *
+   * ⚠️ AND NOTHING IS BETTER THAN EVERYBODY. No player tokens found means
+   * "unknown", never a fallback to the directory. That fallback is what put
+   * strangers into the prompt, and the prompt is what writes them into the
+   * story and then into the video.
+   *
+   * @param {object[]} events  the session's events, which carry scene names
+   * @returns {string[]} character names, one per character, in map order
+   */
+  _partyPresent(events = []) {
+    const scenes = this._scenesVisited(events);
+    const present = new Map();   // name -> which scene, kept for the log line
+
+    try {
+      for (const scene of scenes) {
+        for (const tokenDoc of (scene.tokens ?? [])) {
+          const a = tokenDoc.actor;
+          if (!a?.hasPlayerOwner || a.type !== "character") continue;
+          if (!present.has(a.name)) present.set(a.name, scene.name);
+        }
+      }
+    } catch (err) {
+      console.warn("ace-engine | could not read the scene to see who was there:", err);
+    }
+
+    if (present.size) {
+      console.debug("ace-engine | party present: "
+        + [...present].map(([n, sc]) => `${n} (on ${sc})`).join("; "));
+    } else {
+      console.debug("ace-engine | no player-character tokens on the session's scenes, "
+        + "so the party is reported as unknown rather than guessed.");
+    }
+    return [...present.keys()];
+  }
+
+  /**
+   * The scenes this session actually happened on.
+   *
+   * Events carry the scene NAME they happened on. Resolve those to real scenes;
+   * if the session recorded none, the one being viewed is the only honest
+   * answer. A name that no longer resolves is skipped rather than guessed at.
+   */
+  _scenesVisited(events = []) {
+    const out = new Map();
+    try {
+      for (const e of (events ?? [])) {
+        if (!e?.s) continue;
+        const sc = game.scenes?.find(x => x.name === e.s);
+        if (sc) out.set(sc.id, sc);
+      }
+      if (!out.size) {
+        const cur = canvas?.scene ?? game.scenes?.viewed;
+        if (cur) out.set(cur.id, cur);
+      }
+    } catch (err) {
+      console.warn("ace-engine | could not work out which scenes the session used:", err);
+    }
+    return [...out.values()];
+  }
+
+  /**
    * Ask the AI to generate a session summary.
    */
   async generateSessionSummary(aiProvider, sceneCtx, onChunk = null) {
     const digest     = this.getEventDigest(150);
     const narrations = this.getRecentNarrations(30).join("\n- ");
-    const partyNames = (game.actors?.filter(a => a.hasPlayerOwner && a.type === "character") ?? [])
-      .map(a => a.name).join(", ");
+    const partyNames = this._partyPresent(this.history?.events ?? []).join(", ");
     const sceneName  = canvas?.scene?.name ?? "unknown";
 
     const prompt = `You are ACE, the AI Campaign Engine chronicler for a tabletop RPG campaign.

@@ -285,7 +285,7 @@ export class GmPuppetApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
             if (result === "invalid") {
                 console.warn(`ACE: Engine | GM puppet: voice "${this._voiceId}" invalid, refetching`);
-                try { await this.actor.unsetFlag(MODULE_ID, "voiceId"); } catch (_) {}
+                try { await this.actor.unsetFlag(MODULE_ID, "voiceId"); } catch (err) { console.warn(`ace-engine | a unsetFlag did not save:`, err); }
                 const config = await getVoiceConfig(this.actor, this.tokenDocument);
                 this._voiceId       = config.voiceId;
                 this._voiceSettings = config.voiceSettings || {};

@@ -137,7 +137,7 @@ export async function repairFactionCreatureBases({ dryRun = false } = {}) {
         await game.settings.set(MODULE_ID, "factionRegistry", registry);
     }
     if (!dryRun) {
-        try { await game.settings.set(MODULE_ID, DONE_FLAG, true); } catch (_) {}
+        try { await game.settings.set(MODULE_ID, DONE_FLAG, true); } catch (err) { console.warn(`ace-engine | a set did not save:`, err); }
     }
 
     // ── Say it, and name names ──────────────────────────────────────────────

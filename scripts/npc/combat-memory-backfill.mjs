@@ -132,7 +132,7 @@ export async function backfillCombatMemory({ memory, dryRun = false } = {}) {
     // mark the job done forever — which is precisely how the faction repair
     // left fifteen factions on "hated" tonight.
     const hadAWorld = (game.actors?.size ?? 0) > 0;
-    if (!dryRun && hadAWorld) { try { await game.settings.set(MODULE_ID, DONE_FLAG, true); } catch (_) {} }
+    if (!dryRun && hadAWorld) { try { await game.settings.set(MODULE_ID, DONE_FLAG, true); } catch (err) { console.warn(`ace-engine | a set did not save:`, err); } }
     if (!dryRun && !hadAWorld) {
         console.error(`${TAG} | there were no actors loaded, so nothing could be matched. ` +
                       `Leaving this unmarked so it runs again next load.`);

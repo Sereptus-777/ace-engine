@@ -409,5 +409,5 @@ function _writeCache(provider, models) {
 
 /** Force-clear the cache (used by the Refresh Model List button) */
 export function clearModelCatalogCache() {
-    try { game.settings.set(MODULE_ID, CACHE_SETTING, {}); } catch (_) {}
+    try { game.settings.set(MODULE_ID, CACHE_SETTING, {}); } catch (err) { console.warn(`ace-engine | a set did not save:`, err); }
 }

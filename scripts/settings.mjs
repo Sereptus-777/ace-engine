@@ -2879,7 +2879,7 @@ export async function migrateSecretsToClientScope() {
 
   // 2. Empty the old names so nothing reads a stale second copy later.
   for (const n of ["apiKey", "chatApiKey", "digestApiKey", "apiKeySecure", "chatApiKeySecure", "digestApiKeySecure"]) {
-    try { if (game.settings.get(MODULE_ID, n)) await game.settings.set(MODULE_ID, n, ""); } catch (_) {}
+    try { if (game.settings.get(MODULE_ID, n)) await game.settings.set(MODULE_ID, n, ""); } catch (err) { console.warn(`ace-engine | a set did not save:`, err); }
   }
   for (const n of ["apiKeysByProvider", "apiKeysByProviderSecure"]) {
     try {

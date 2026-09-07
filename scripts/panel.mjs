@@ -5231,7 +5231,47 @@ Appropriate loot, XP, and story rewards.
     }
   }
 
+  /**
+   * Take the model's stage direction off the front of a line.
+   *
+   * ⚠️🔴 IT WAS SAYING THE WORD OUT LOUD. Johnny, 2026-09-06: *"when it
+   * would get a critical fumble or a critical hit... it would say 'Narration:
+   * you fumble', or whatever, but it would say it out loud too. It would say
+   * 'narration' and include it in the chat card. That's got to go."*
+   *
+   * The crit prompt tells the model it is a D&D narrator, and models answer a
+   * role by announcing it. The existing guard stripped "Here is..." and
+   * "Sure..." and nothing else, so a reply opening "Narration: You cleave the
+   * ghast" kept the label — into the card, and into the speech, where it is
+   * worse, because the voice reads it in the same dramatic tone as the rest.
+   *
+   * ⚠️ ONLY AT THE VERY FRONT, AND ONLY A KNOWN WORD FOLLOWED BY A COLON.
+   * Anything looser would eat a real line: "Narrator: a title he had earned"
+   * is a sentence somebody might actually write.
+   *
+   * ⚠️ AND IT LOOPS, because "**Narration:** Narrator: ..." happens.
+   */
+  _stripNarratorLabel(text) {
+    let out = String(text ?? "")
+      .replace(/\[\/?(?:NARRATION|narration)\]/g, "")
+      .trim();
+    const LABEL = /^\s*[[(*_"'“‘]*\s*(?:narration|narrator|narrate|gm|dm|description|response|output|answer|result)\s*[*_]*\s*[:—-]\s*/i;
+    const PREAMBLE = /^(?:here(?:'s| is)[^:]*:|sure[,!.]?\s*|okay[,!.]?\s*)/i;
+    for (let i = 0; i < 4; i++) {
+      const before = out;
+      out = out.replace(LABEL, "").replace(PREAMBLE, "").trim();
+      // A label can leave a dangling opening quote or bracket behind.
+      out = out.replace(/^[\])*_"'”’]+\s*/, "").trim();
+      if (out === before) break;
+    }
+    return out;
+  }
+
   _cleanForSpeech(text) {
+    // ⚠️ THE LAST GATE BEFORE THE VOICE. Every path that speaks comes through
+    // here, so a label leaking from anywhere — not only the crit line — is
+    // caught once rather than at each caller.
+    text = this._stripNarratorLabel(text);
     return text
       .replace(/```[\s\S]*?```/g, "")
       .replace(/`([^`]*)`/g, "$1")
@@ -6609,8 +6649,11 @@ Appropriate loot, XP, and story rewards.
 
       // Hard guardrail: take only the first sentence, cap at 25 words
       if (narrative) {
-        // Strip any "Here is…" or "Sure…" preamble the AI might add
-        narrative = narrative.replace(/^(?:here(?:'s| is)[^:]*:|sure[,!.]?\s*)/i, "").trim();
+        // ⚠️ THE LABEL FIRST, THEN THE SENTENCE CAP. Doing it the other way
+        // round keeps "Narration: You cleave the ghast." whole, because the
+        // first-sentence match below sees the colon as ordinary text and takes
+        // the label with it.
+        narrative = this._stripNarratorLabel(narrative);
         // Take first sentence only (split on sentence-ending punctuation followed by space/end)
         const firstSentence = narrative.match(/^[^.!?]*[.!?]/);
         if (firstSentence) narrative = firstSentence[0].trim();

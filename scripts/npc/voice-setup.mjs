@@ -37,7 +37,7 @@ export const VoiceSetup = {
     catch (_) { return false; }
   },
   async _markDone() {
-    try { await game.settings.set(MODULE_ID, "voiceSetupDone", true); } catch (_) {}
+    try { await game.settings.set(MODULE_ID, "voiceSetupDone", true); } catch (err) { console.warn(`ace-engine | a set did not save:`, err); }
   },
 
   /**

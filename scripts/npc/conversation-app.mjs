@@ -1310,7 +1310,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             // preference: it reads as a working setting.
             if (chromeId && [...sel.options].some(o => o.value === chromeId)) {
                 sel.value = chromeId;
-                try { await game.settings.set(MODULE_ID, "micDeviceId", chromeId); } catch (_) {}
+                try { await game.settings.set(MODULE_ID, "micDeviceId", chromeId); } catch (err) { console.warn(`ace-engine | a set did not save:`, err); }
             }
 
             this._chromeMicId    = chromeId;
@@ -1320,7 +1320,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             }
 
             sel.addEventListener("change", async () => {
-                try { await game.settings.set(MODULE_ID, "micDeviceId", sel.value); } catch (_) {}
+                try { await game.settings.set(MODULE_ID, "micDeviceId", sel.value); } catch (err) { console.warn(`ace-engine | a set did not save:`, err); }
                 this._startLevelMeter(sel.value, 4000);
                 // Changing this does NOT change what dictation listens to. Say
                 // so at the moment they change it, not after it fails.
@@ -2868,7 +2868,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 // crash, hard ESC) the flag would persist to the next session
                 // and block all player movement until manually cleared.
                 await token.document.unsetFlag(MODULE_ID, "conversationLocked");
-                try { await token.document.unsetFlag("npclink", "conversationLocked"); } catch(_) {}
+                try { await token.document.unsetFlag("npclink", "conversationLocked"); } catch (err) { console.warn(`ace-engine | a unsetFlag did not save:`, err); }
                 console.log(`ACE: Engine | Player token movement unlocked`);
             }
         } catch (err) {
