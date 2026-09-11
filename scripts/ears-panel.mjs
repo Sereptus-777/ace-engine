@@ -318,7 +318,7 @@ python server.py</pre>
       game.settings.register(MODULE_ID, "earsServiceUrl", {
         name: "ACE Ears service address",
         hint: "Where the local listening service is running. Leave this alone unless you moved it.",
-        scope: "client", config: true, type: String,
+        scope: "user", config: true, type: String,
         default: "http://127.0.0.1:7867",
       });
     } catch (_) { /* already registered */ }

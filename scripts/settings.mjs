@@ -569,7 +569,7 @@ export class AceSettings {
     // Has this browser been through the voice check? Client-scoped: the answer
     // is about THIS machine's microphone, not the world's.
     game.settings.register(MODULE_ID, "voiceSetupDone", {
-      scope: "client", config: false, type: Boolean, default: false,
+      scope: "user", config: false, type: Boolean, default: false,
     });
 
     s("customInstructions", {
@@ -756,7 +756,7 @@ export class AceSettings {
     });
 
     s("micDeviceId", {
-      scope: "client",
+      scope: "user",
       config: false,
       type: String,
       default: "",
@@ -798,7 +798,7 @@ export class AceSettings {
     }
 
     s("elevenLabsVoiceId", {
-      scope: "client",
+      scope: "user",
       name: "Narrator Voice",
       hint: "THE narrator voice — used for read-aloud narration and for NPC speech. Already set to a good one; most tables never change it.",
       type: String,
@@ -816,7 +816,7 @@ export class AceSettings {
     });
 
     s("elevenLabsFemaleVoiceId", {
-      scope: "client",
+      scope: "user",
       name: "Alternate Narrator Voice",
       hint: "Optional second voice, so not every NPC sounds identical. Leave blank to use the narrator voice for everyone.",
       type: String,
@@ -831,7 +831,7 @@ export class AceSettings {
     });
 
     s("narratorVoiceOverrideEnabled", {
-      scope: "client",
+      scope: "user",
       name: "Use a custom voice ID instead",
       hint: "Enable this to override the dropdown above with a custom ElevenLabs Voice ID for all narration.",
       type: Boolean,
@@ -839,7 +839,7 @@ export class AceSettings {
     });
 
     s("narratorVoiceOverrideId", {
-      scope: "client",
+      scope: "user",
       name: "Custom voice ID",
       hint: "Paste any ElevenLabs Voice ID here. Only used when the checkbox above is enabled.",
       type: String,
@@ -847,7 +847,7 @@ export class AceSettings {
     });
 
     s("elevenLabsModel", {
-      scope: "client",
+      scope: "user",
       name: "Voice quality / model",
       hint: "eleven_multilingual_v2 gives the best quality. eleven_turbo_v2_5 is faster.",
       type: String,
@@ -863,7 +863,7 @@ export class AceSettings {
 
     // ── Narration Volume (client-scoped — players control this) ──
     s("narrationVolume", {
-      scope: "client",
+      scope: "user",
       name: "Narration volume",
       hint: "Volume of narration audio from the GM. Each player sets their own level. 0 = muted, 1.0 = full volume.",
       type: Number,
@@ -873,7 +873,7 @@ export class AceSettings {
 
     // ── Voice Provider (NPC chat — moved from ACE: Envoy) ──
     s("voiceProvider", {
-      scope: "client",
+      scope: "user",
       name: "NPC Voice Provider",
       hint: "Where NPC speech comes from. ElevenLabs gives the best voices and players need no key of their own — the GM's client makes the audio and streams it to everyone. The browser voice is free and needs no account; it is what runs until an ElevenLabs key is set up.",
       type: String,
@@ -941,7 +941,7 @@ export class AceSettings {
     //  screen confusing enough to lose an evening to.
     // ═══════════════════════════════════════════════════════════════════════
     s("browserVoiceName", {
-      scope: "client",
+      scope: "user",
       name: "Browser Voice",
       hint: "Voice used when ElevenLabs is not configured. Type the exact voice name from your OS. Leave blank for auto-detect.",
       type: String,
@@ -949,7 +949,7 @@ export class AceSettings {
     });
 
     s("browserFemaleVoiceName", {
-      scope: "client",
+      scope: "user",
       name: "Alternate Browser Voice",
       hint: "Optional second browser voice. Leave blank to use the browser voice for everyone.",
       type: String,
@@ -957,7 +957,7 @@ export class AceSettings {
     });
 
     s("browserVoiceRate", {
-      scope: "client",
+      scope: "user",
       name: "Browser Voice Speed",
       hint: "Narration speed for browser TTS. 1.0 = natural, 1.1 = slightly faster.",
       type: Number,
@@ -966,7 +966,7 @@ export class AceSettings {
     });
 
     s("browserVoicePitch", {
-      scope: "client",
+      scope: "user",
       name: "Browser Voice Pitch",
       hint: "Narration pitch for browser TTS. 0.8 = deeper, 1.0 = natural, 1.2 = higher.",
       type: Number,
@@ -984,7 +984,7 @@ export class AceSettings {
 
     // ── Debug (client-scoped) ───────────────────────────────
     s("debugMode", {
-      scope: "client",
+      scope: "user",
       config: false,
       name: "Debug Mode",
       hint: "When ON, ACE writes detailed logs to the browser console (F12). Useful for troubleshooting and bug reports — leave OFF for normal play.",
@@ -1071,7 +1071,7 @@ export class AceSettings {
 
     // ── Visual Aids ──────────────────────────────────────────
     s("pcGlow", {
-      scope: "client",
+      scope: "user",
       name: "PC Token Glow",
       hint: "Add a subtle colored glow around player character tokens using each player's chosen color. Personal setting — each user controls their own.",
       type: Boolean,
@@ -1092,7 +1092,7 @@ export class AceSettings {
     });
 
     s("pcGlowSize", {
-      scope: "client",
+      scope: "user",
       name: "PC Glow Size",
       hint: "Scale the PC token glow disc. 1.00 = slightly larger than the token (default — peeks out as a ring). Drop to 0.50 to make it small enough to fit inside the token's own square. Personal setting — each user controls their own.",
       type: Number,
@@ -1106,7 +1106,7 @@ export class AceSettings {
     });
 
     s("pcGlowOpacity", {
-      scope: "client",
+      scope: "user",
       name: "PC Glow Opacity",
       hint: "How visible the PC token glow is. 1.00 = fully opaque (current default). Drop to 0.40 for a subtle hint.",
       type: Number,
@@ -1120,7 +1120,7 @@ export class AceSettings {
     });
 
     s("pcGlowStyle", {
-      scope: "client",
+      scope: "user",
       name: "PC Glow Style",
       hint: "Visual style for the under-token PC glow. Soft Disc = filled circle with dark outline (current default). Solid Ring = hollow circle outline only. Soft Glow = wider falloff halo. Pulse = breathing disc.",
       type: String,
@@ -1139,7 +1139,7 @@ export class AceSettings {
     });
 
     s("pcGlowColorMode", {
-      scope: "client",
+      scope: "user",
       name: "PC Glow Color Source",
       hint: "Where the glow color comes from. Player's chosen color (default — each player's Foundry color) or a single custom color applied to all PCs.",
       type: String,
@@ -1156,7 +1156,7 @@ export class AceSettings {
     });
 
     s("pcGlowCustomColor", {
-      scope: "client",
+      scope: "user",
       name: "PC Glow Custom Color",
       hint: "Hex color used when Color Source is set to 'Custom'. Default is gold (#d4af37).",
       type: String,
@@ -2914,3 +2914,55 @@ export async function migrateSecretsToClientScope() {
     }
   }
 }
+
+
+// ─── Settings that follow the person, not the browser ───────────────────────
+//
+// ⚠️🔴 THESE WERE SAVED IN EACH BROWSER SEPARATELY. Johnny, 2026-09-10, after a
+// new browser window opened his game with none of his preferences and an
+// ElevenLabs warning he had already dealt with: "Why aren't these saved and set
+// as soon as I open the game? Or any browser, for that matter. You're putting a
+// band-aid on something that should always be there."
+//
+// Foundry V13 has a USER scope: saved in the world, tagged with the user, and
+// handed to whichever browser that user logs in from. These moved to it.
+//
+// ⚠️ KEYS DID NOT MOVE, AND MUST NOT. Foundry's server sends every browser in
+// the world every Setting row, for every user (Setting.dump(), unfiltered), so
+// a key saved this way would sit in every player's browser. Keys stay in the
+// GM's own machine until the key-keeper exists.
+//
+// ⚠️ THE OLD VALUE IS LIFTED ONCE, AND NEVER OVER A SAVED ONE. The first time a
+// browser that still holds a per-browser value opens the game, it is copied to
+// the account, but only if the account has nothing saved for it yet, and a blank
+// is never treated as a value (the ElevenLabs key was lost twelve times to that).
+// The browser's copy is left where it is: nothing here deletes anything.
+//
+// ⚠️ THE MODULE ID IS WRITTEN OUT, NOT IMPORTED. This runs at the top level of a
+// file the entry file imports, and an imported const read here inside an import
+// cycle throws at load and takes the whole module down (2026-08-28).
+Hooks.once("ready", async () => {
+  const NS = "ace-engine";
+  const KEYS = ["debugMode", "earsServiceUrl", "elevenLabsFemaleVoiceId", "elevenLabsModel", "elevenLabsVoiceId", "narratorVoiceOverrideEnabled", "narratorVoiceOverrideId", "pcGlow", "pcGlowColorMode", "pcGlowCustomColor", "pcGlowOpacity", "pcGlowSize", "pcGlowStyle", "voiceProvider", "voiceSetupDone", "browserFemaleVoiceName", "browserVoiceName", "browserVoicePitch", "browserVoiceRate", "micDeviceId", "narrationVolume"];
+  const moved = [];
+  for (const key of KEYS) {
+    try {
+      const raw = globalThis.localStorage?.getItem?.(`${NS}.${key}`);
+      if (raw === null || raw === undefined) continue;            // this browser never saved one
+      const doc = game.settings.get(NS, key, { document: true });
+      if (doc?._id) continue;                                     // the account already has it: never overwrite
+      let value;
+      try { value = JSON.parse(raw); } catch (_) { value = raw; }
+      if (value === null || value === "") continue;               // a blank is never a value
+      await game.settings.set(NS, key, value);
+      moved.push(key);
+    } catch (err) {
+      console.warn(`${NS} | could not move "${key}" from this browser to your account `
+        + `(it keeps working with its default):`, err);
+    }
+  }
+  if (moved.length) {
+    console.log(`${NS} | moved ${moved.length} setting(s) from this browser to your account, `
+      + `so every browser you open now has them: ${moved.join(", ")}`);
+  }
+});
