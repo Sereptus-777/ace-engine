@@ -5562,6 +5562,7 @@ async function _aceRollSave(btn) {
           `<div style="font-size:1.8em;color:#eddfc5;text-align:center;font-weight:bold;padding:4px 0;">${roll.total}</div>` +
           `<div style="text-align:center;font-size:0.9em;">vs DC ${dc} — ${passTag}</div>` +
           condBtn;
+        // dice-ok: this branch runs only on systems other than dnd5e; no roll message was made and no dice are in the air.
         await ChatMessage.create({
           content: _aceCardHtml("#8a5bbf", "#c4a8f0", `${abUp} Save — ${safeActorName}`, body),
           speaker: { alias: actor.name },
@@ -5754,6 +5755,7 @@ async function _handleSubtleRollClick(btn) {
     });
     btn.textContent = "Rolled (blind)";
     // Persist so the button stays disabled after browser refresh
+    // dice-ok: this only marks the request button used; the result is on the GM's blind roll card, which Dice So Nice holds until its dice land.
     _persistCardState(btn.closest(".ace-subtle-request"));
   } catch (err) {
     console.error(`${MODULE_ID} | Subtle roll failed:`, err);
