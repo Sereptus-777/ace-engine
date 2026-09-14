@@ -478,6 +478,20 @@ export class MemoryManager {
   }
 
   /**
+   * Log damage a PC dealt without an attack roll (a Fireball's save). It counts
+   * toward damage dealt and never toward hits, which are attacks.
+   * @param {{ actorName: string, amount: number }} opts
+   */
+  logDamageDealt({ actorName, amount } = {}) {
+    if (!amount || amount <= 0) return;
+    const pc = this._findPcByName(actorName);
+    if (!pc) return;
+    pc.damageDealt = (pc.damageDealt ?? 0) + amount;
+    this.pcs.markDirty();
+    this._scheduleSaves(["pcs"]);
+  }
+
+  /**
    * Log HP damage taken by a PC.
    * @param {{ actorName: string, amount: number }} opts
    */

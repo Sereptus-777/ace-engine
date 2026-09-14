@@ -107,6 +107,15 @@ export function installPcStats({ memory } = {}) {
       if (!_mine()) return;
       const dealt = Number(data?.hpDelta ?? 0);
       if (dealt <= 0) return;
+      // ⚠️ A SIGNAL THAT NAMES WHO DEALT IT IS BELIEVED (2026-09-14). A save's
+      // damage sends this too now (a Fireball's APPLY ALL), naming its caster.
+      // It is not an attack, so it counts as damage dealt and never as a hit;
+      // crediting the last swing instead would hand the wizard's Fireball to
+      // whoever attacked a moment before.
+      if (data?.sourceActor) {
+        if (_isPC(data.sourceActor)) memory.logDamageDealt?.({ actorName: data.sourceActor.name, amount: dealt });
+        return;
+      }
       // Only credit a dealer we saw resolve an attack moments ago. A trap or an
       // environmental effect has no dealer, and inventing one would be worse
       // than recording none.
