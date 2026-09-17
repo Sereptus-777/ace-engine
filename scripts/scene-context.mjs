@@ -860,16 +860,29 @@ export class SceneContext {
     const byLevel = {};
     for (const spell of spellItems) {
       const level = spell.system?.level ?? spell.system?.spellLevel ?? 0;
-      // dnd5e 5.1+ uses .method / .prepared; older uses .preparation.mode / .preparation.prepared
-      const mode = spell.system?.method ?? spell.system?.preparation?.mode ?? "always";
-      const isPrepared = spell.system?.prepared ?? spell.system?.preparation?.prepared ?? true;
+      // ⚠️🔴 "prepared" IS NOT A CASTING METHOD IN dnd5e 5.x (found 2026-09-16
+      // while a Shield reaction was refusing every wizard alive). The system's
+      // own table of methods is atwill, innate, ritual, pact and spell, and
+      // `prepared` is a NUMBER: 0 unprepared, 1 prepared, 2 always prepared.
+      // Asking for the 3.x mode name meant this filter never once fired, so the
+      // narrator has been told about spells the creature cannot cast.
+      //
+      // ⚠️ The suite's one reader for this is
+      // `ace-qol/scripts/rules/spell-ready.mjs`. It is NOT imported here: a
+      // static import would take this whole module down with it if QOL is ever
+      // switched off, and this function is synchronous so it cannot await one.
+      // If the rule changes, it changes there first and here second.
+      const mode = spell.system?.method ?? spell.system?.preparation?.mode ?? null;
+      const rawPrepared = spell.system?.prepared ?? spell.system?.preparation?.prepared;
+      const prepared = (rawPrepared === true) ? 1 : (rawPrepared === false ? 0 : Number(rawPrepared ?? 0));
+      const prepares = (mode === "spell") || (mode === "pact") || (mode === "prepared");
 
-      // For prepared casters, skip spells that aren't prepared (except cantrips & always-prepared)
-      if (mode === "prepared" && !isPrepared && level > 0) continue;
+      // A cantrip needs no preparing; a prepared caster's levelled spell does.
+      if (prepares && prepared < 1 && level > 0) continue;
 
       // Skip spells without uses remaining if they're limited
       const uses = spell.system?.uses;
-      if (uses?.max > 0 && (uses.value ?? 0) <= 0 && mode !== "prepared") continue;
+      if (uses?.max > 0 && (uses.value ?? 0) <= 0 && !prepares) continue;
 
       const label = level === 0 ? "Cantrips" : `Level ${level}`;
       if (!byLevel[label]) byLevel[label] = [];
