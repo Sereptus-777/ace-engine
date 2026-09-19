@@ -443,16 +443,26 @@ async function onActorUpdate(actor, changes) {
 
   const trait = findTrait(actor, (t) => DEATH_EFFECTS.has(t.key));
   if (!trait) return;
+  // ACE QOL runs the burst with a real save card; one burst, not two.
+  if (qolOwnsTrait("death burst", trait.item)) {
+    console.log(`${TAG} | ${actor.name}'s ${trait.item.name} is left to ACE QOL, which runs death bursts from their words.`);
+    return;
+  }
   _deathFired.add(fireKey);
   setTimeout(() => _deathFired.delete(fireKey), 10000); // allow re-kill later
 
-  const dmg = parseDamageExpr(trait.text);
-  const save = parseSaveDC(trait.text);
+  // ⚠️ THE ITEM'S OWN NUMBERS FIRST, then its words. A 2024 Monster Manual copy
+  // writes its damage as a dice tag and its DC as a lookup, so the printed text
+  // has neither; its activity has both.
+  const dmg = activityDamage(trait.item) ?? parseDamageExpr(trait.text);
+  const save = activitySave(trait.item) ?? parseSaveDC(trait.text);
   if (!dmg) {
+    // ⚠️ NEVER THE RAW SHEET TEXT. It carries [[lookup]] and dice tags only
+    // dnd5e can read; rendered the way dnd5e renders it, it reads as the book.
     await postCard({
       title: `${actor.name}: ${trait.item.name}`,
       icon: "icons/magic/fire/explosion-fireball-medium-orange.webp",
-      body: trait.text || "Triggers its death effect.",
+      body: (await renderedWords(trait.item)) || "Triggers its death effect.",
     });
     return;
   }
@@ -465,6 +475,49 @@ async function onActorUpdate(actor, changes) {
     flavor: `${actor.name} is destroyed!`,
     body: `Each creature within range takes <b>${total}</b> ${dmg.type || ""} damage (${dmg.formula})${dc}.`,
   });
+}
+
+/** The first damage part of the item's own activities, as { formula, type }, or null. */
+function activityDamage(item) {
+  try {
+    const acts = item?.system?.activities;
+    for (const a of [...(acts?.values?.() ?? Object.values(acts ?? {}))]) {
+      const p = a?.damage?.parts?.[0];
+      if (!p) continue;
+      const custom = p.custom?.enabled ? String(p.custom.formula ?? "").trim() : "";
+      const formula = custom || (p.number && p.denomination ? `${p.number}d${p.denomination}${p.bonus ? ` + ${p.bonus}` : ""}` : "");
+      if (!formula) continue;
+      const types = p.types instanceof Set ? [...p.types] : [].concat(p.types ?? []);
+      return { formula, type: types[0] ?? "" };
+    }
+  } catch (err) { console.warn(`${TAG} | could not read ${item?.name}'s damage from its activity:`, err); }
+  return null;
+}
+
+/** The item's own save, as { ability, dc }, or null. dnd5e has worked the DC out. */
+function activitySave(item) {
+  try {
+    const acts = item?.system?.activities;
+    for (const a of [...(acts?.values?.() ?? Object.values(acts ?? {}))]) {
+      const ability = [...(a?.save?.ability ?? [])][0];
+      const dc = Number(a?.save?.dc?.value ?? a?.save?.dc?.formula);
+      if (ability && Number.isFinite(dc) && dc > 0) return { ability, dc };
+    }
+  } catch (err) { console.warn(`${TAG} | could not read ${item?.name}'s save from its activity:`, err); }
+  return null;
+}
+
+/** The item's words the way dnd5e shows them: lookups and dice tags answered. */
+async function renderedWords(item) {
+  const html = item?.system?.description?.value ?? "";
+  try {
+    const TE = foundry.applications?.ux?.TextEditor?.implementation ?? globalThis.TextEditor;
+    const out = await TE.enrichHTML(html, { relativeTo: item, rollData: item?.getRollData?.() ?? {} });
+    return _plainText(out);
+  } catch (err) {
+    console.warn(`${TAG} | could not render ${item?.name}'s words; showing none rather than raw tags:`, err);
+    return "";
+  }
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -536,8 +589,18 @@ async function onCombatTurn(combat, changed) {
  * QOL is the combat engine and its versions are wired into the save pipeline,
  * the damage chokepoint and the reaction system. So QOL wins, and Engine
  * stands down for exactly the traits it duplicates — not for the ones it
- * uniquely provides (Death Burst and the other on-death effects, Spider Climb's
- * movement change, the passive stat-block markers).
+ * uniquely provides (Spider Climb's movement change, the passive stat-block
+ * markers).
+ *
+ * ⚠️🔴 DEATH BURST IS NO LONGER ENGINE'S (his table, 2026-09-19). ACE QOL
+ * 0.34.72 runs every death burst from its words: one save card for the living
+ * in reach, the DC from the item, half on a success, the damage through the
+ * hit-point door after the dice. Engine went on firing its own by name, and on
+ * the 2024 Magmin, whose damage is a dice tag and whose "when it dies" is a
+ * lookup, it found no "(2d6) fire" to roll and posted the stat block's raw
+ * text, [[lookup]] tags and all, with no save and no damage. Only when QOL's
+ * burst engine is actually there (its API answers): an older QOL still leaves
+ * the burst to Engine.
  *
  * ⚠️ THIS COMMENT USED TO NAME "Heated Body" AS UNIQUELY ENGINE'S, and it was
  * wrong (Brock, 2026-08-19). QOL's retaliation engine has covered that whole
@@ -551,7 +614,7 @@ async function onCombatTurn(combat, changed) {
  * setting: if the GM turned QOL's Legendary Resistance off, Engine should NOT
  * silently take over — the GM asked for it off.
  */
-function qolOwnsTrait(traitKey) {
+function qolOwnsTrait(traitKey, item = null) {
   try {
     if (!game.modules?.get?.("ace-qol")?.active) return false;
     switch (traitKey) {
@@ -566,6 +629,13 @@ function qolOwnsTrait(traitKey) {
         // rename of them. QOL applies these from the damage chokepoint, where
         // it already knows the attacker's resistances.
         return true;
+      case "death burst": {
+        // Only the items QOL claims: its burst engine reads the words, and a
+        // death effect it does not run (a Death Curse) stays Engine's.
+        const ct = globalThis.game?.aceQol?.CreatureTriggers;
+        if (typeof ct?.onDeath !== "function") return false;
+        return typeof ct.claims === "function" ? ct.claims(item) === true : true;
+      }
       default:
         return false;
     }
