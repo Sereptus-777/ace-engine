@@ -1,21 +1,22 @@
 // ─── ACE Engine — one HUD button: put THIS token in a faction ────────────────
 //
 // Johnny, 2026-09-22: "ADD a GM-only way to assign a faction to the selected
-// token. Token-drop assign stays OFF. Use the existing showFactionAssignDialog
-// and assignToFaction. Do not write a second faction system. Put one button on
-// the token HUD, GM only, NPC or character. Click it, the existing picker
-// opens, pick a faction, stamp that token only. If nothing is selected, do
-// nothing."
+// token... Put one button on the token HUD, GM only, NPC or character. Click
+// it, the existing picker opens, pick a faction, stamp that token only."
+//
+// And his correction the same day: "The gold HUD flag must open the SAME popup
+// a manual token drop used to open: showNpcIdentityDialog, through
+// processTokenFaction with _aceManualDrop set. Not showFactionAssignDialog.
+// That is the leftover fallback."
 //
 // ⚠️ THIS FILE DECIDES NOTHING. It opens the picker that already exists, hands
 // what the GM chose to the assigner that already exists, and stops. Every
 // faction, every rank, every roster and every flag is the registry's; a second
 // opinion about any of them is the thing he asked not to have.
 //
-// ⚠️ AND IT NEVER INVENTS A FACTION. The legacy picker answers "make a new one"
-// with `{factionId: null, isNew: true}` and leaves the making to its caller.
-// Inventing one here — a name, a type, a purpose ACE made up — is exactly what
-// he ruled out, so that answer is reported and nothing is stamped.
+// ⚠️ AND IT INVENTS NOTHING. Whether a faction is made, which one is offered,
+// what rank a creature holds and what is written on it are all decisions the
+// drop path already owns. This file adds none of its own.
 //
 // ⚠️ TOKEN-DROP ASSIGN STAYS OFF. Nothing here touches the drop path or any of
 // its settings; this is a button a GM presses, and it is the only way in.
@@ -27,21 +28,27 @@
 // declare their own; so does this.
 const MODULE_ID = "ace-engine";
 
-import {
-    showFactionAssignDialog,
-    assignToFaction,
-    resolveCreatureBase,
-    findMatchingFactions,
-    getFaction,
-} from "./faction-registry.mjs";
+import { processTokenFaction, getFaction } from "./faction-registry.mjs";
 
 const TAG = "ace-engine | faction button";
 
 /**
- * Open the existing picker for one token and stamp whatever the GM chooses.
+ * Open the faction popup a manual token drop used to open, for ONE token.
+ *
+ * ⚠️ THE DROP'S OWN PATH, NOT A SECOND ONE (his correction, 2026-09-22:
+ * "WRONG DIALOG. The gold HUD flag must open the SAME popup a manual token drop
+ * used to open: showNpcIdentityDialog, through processTokenFaction with
+ * _aceManualDrop set. Not showFactionAssignDialog. That is the leftover
+ * fallback.").
+ *
+ * So this file does not pick, rank, match or assign anything. It marks the
+ * token the way a manual drop marks it and hands it to the one processor,
+ * which recommends, shows the smart setup, opens the identity dialog on
+ * "customize", and calls the assigner itself. Everything this button knows
+ * about factions, it knows by asking that.
  *
  * @param {TokenDocument} tokenDoc
- * @returns {Promise<{factionId: string, role: string}|null>} what was stamped
+ * @returns {Promise<object|null>} whatever the drop path decided
  */
 export async function assignFactionFromHud(tokenDoc) {
     const actor = tokenDoc?.actor ?? null;
@@ -50,57 +57,34 @@ export async function assignFactionFromHud(tokenDoc) {
         return null;
     }
 
-    const creatureBase = resolveCreatureBase(actor);
-    const worldTag = game.world?.title || "";
-    // The same list the drop path shows: what the registry already knows.
-    let matching = [];
-    try { matching = findMatchingFactions(creatureBase, worldTag) ?? []; }
-    catch (err) { console.warn(`${TAG} | could not list matching factions, showing the picker anyway:`, err); }
-
-    console.log(`${TAG} | ${tokenDoc.name}: opening the faction picker (${matching.length} `
-        + `match${matching.length === 1 ? "" : "es"} for "${creatureBase}").`);
-
-    let choice = null;
+    console.log(`${TAG} | ${tokenDoc.name}: opening the drop popup for this one token.`);
+    // The mark a manual drop sets, and the only reason the popup opens at all.
+    const held = tokenDoc._aceManualDrop;
+    tokenDoc._aceManualDrop = true;
     try {
-        choice = await showFactionAssignDialog(tokenDoc, matching, creatureBase);
+        const result = await processTokenFaction(tokenDoc);
+        const faction = result?.faction ?? null;
+        if (faction) {
+            console.log(`${TAG} | ${tokenDoc.name} is in "${faction.name}"${result.role ? ` as ${result.role}` : ""}.`);
+            ui.notifications?.info(`${tokenDoc.name} is in ${faction.name}${result.role ? ` (${result.role})` : ""}.`);
+        } else {
+            // ⚠️ SILENCE IS A BUG. "He closed it" and "he chose no faction" are
+            // different answers and the console says which.
+            console.log(`${TAG} | ${tokenDoc.name}: the popup ended with no faction`
+                + `${result?.role ? ` (role "${result.role}")` : ""}. Nothing else was changed.`);
+        }
+        return result ?? null;
     } catch (err) {
-        console.error(`${TAG} | the faction picker failed for ${tokenDoc.name}:`, err);
-        ui.notifications?.error("ACE: the faction picker could not open — see the console. Nothing was changed.");
+        console.error(`${TAG} | the faction popup failed for ${tokenDoc.name}:`, err);
+        ui.notifications?.error("ACE: the faction popup could not run — see the console. Nothing was changed.");
         return null;
+    } finally {
+        // ⚠️ THE MARK IS THIS PRESS'S, NOT THE TOKEN'S FOREVER. Leaving it on
+        // would make a later automatic pass treat this creature as a fresh
+        // manual drop.
+        if (held === undefined) delete tokenDoc._aceManualDrop;
+        else tokenDoc._aceManualDrop = held;
     }
-
-    if (!choice) {
-        console.log(`${TAG} | ${tokenDoc.name}: the picker was closed, so nothing was changed.`);
-        return null;
-    }
-
-    // "Make a new one" is a decision this button does not make for him.
-    if (!choice.factionId && choice.isNew) {
-        console.log(`${TAG} | ${tokenDoc.name}: "a new faction" was chosen, and this button does not invent one. `
-            + `Nothing was stamped.`);
-        ui.notifications?.info("ACE: this button puts a token into a faction that already exists. "
-            + "Nothing was changed.");
-        return null;
-    }
-    // "None" is an answer too, and it is not this button's job to take one away.
-    if (!choice.factionId) {
-        console.log(`${TAG} | ${tokenDoc.name}: "none" was chosen, so nothing was stamped.`);
-        return null;
-    }
-
-    try {
-        await assignToFaction(tokenDoc, choice.factionId, choice.role);
-    } catch (err) {
-        console.error(`${TAG} | ${tokenDoc.name} could not be put in that faction:`, err);
-        ui.notifications?.error(`ACE: ${tokenDoc.name} could not be put in that faction — see the console.`);
-        return null;
-    }
-
-    const faction = getFaction(choice.factionId);
-    const name = faction?.name ?? choice.factionId;
-    console.log(`${TAG} | ${tokenDoc.name} is in "${name}"${choice.role ? ` as ${choice.role}` : ""}.`);
-    ui.notifications?.info(`${tokenDoc.name} is in ${name}${choice.role ? ` (${choice.role})` : ""}.`);
-    return { factionId: choice.factionId, role: choice.role ?? "" };
 }
 
 export class FactionHudButton {
