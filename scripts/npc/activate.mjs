@@ -113,6 +113,9 @@ export function activateNpcChat() {
         // silent now, so this is how a GM deliberately fleshes somebody out
         // while building a dungeon rather than waiting for a player to walk up.
         import("./hud-give-a-life.mjs").then(({ wireGiveALifeHud }) => wireGiveALifeHud()),
+        // The flag beside it: put THIS token into a faction that already
+        // exists. Token drops stay silent; this is the deliberate way in.
+        import("./hud-faction.mjs").then(({ FactionHudButton }) => FactionHudButton.register()),
         import("./companion-link.mjs").then(({ registerActorDirectoryContext, registerInitiativeHooks }) => {
             registerActorDirectoryContext();
             registerInitiativeHooks();

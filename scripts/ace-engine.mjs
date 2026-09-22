@@ -3279,6 +3279,22 @@ Hooks.once("ready", async () => {
         return giveThisOneALife(doc, opts);
       },
 
+
+      /**
+       * Put one token into a faction that already exists, through the same
+       * picker the HUD button opens. GM-only, this token only; it invents
+       * nothing (2026-09-22).
+       */
+      assignFactionFromHud: async (tokenOrDoc = null) => {
+        const doc = tokenOrDoc?.document ?? tokenOrDoc
+          ?? canvas.tokens?.controlled?.[0]?.document ?? null;
+        if (!doc) {
+          ui.notifications?.warn("ACE: select a token first, then press the faction button on its HUD.");
+          return null;
+        }
+        const { assignFactionFromHud } = await import("./npc/hud-faction.mjs");
+        return assignFactionFromHud(doc);
+      },
       /**
        * Explain, without changing anything, which faction the selected creature
        * would join and why — every candidate, its score and the reasons behind
