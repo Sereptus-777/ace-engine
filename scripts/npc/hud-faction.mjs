@@ -66,6 +66,10 @@ export async function assignFactionFromHud(tokenDoc) {
     tokenDoc._aceGmPress = true;
     try {
         const result = await processTokenFaction(tokenDoc);
+        // The dialog has returned, so the press is over. The biography below
+        // runs a pipeline that asks the faction engine its own questions, and
+        // it must find a token nobody is pressing.
+        delete tokenDoc._aceGmPress;
         const faction = result?.faction ?? null;
         if (faction) {
             console.log(`${TAG} | ${tokenDoc.name} is in "${faction.name}"${result.role ? ` as ${result.role}` : ""}.`);

@@ -3430,6 +3430,19 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
     // only make sense for a drop and keeps the one that is about the creature.
     const isGmPress = !!tokenDoc._aceGmPress;
 
+    // ⚠️🔴 ONE CLICK, ONE DIALOG (his table, 2026-09-22: the flag opened the
+    // identity dialog twice, a second apart, with no second click).
+    //
+    // The mark is SPENT HERE, by the call that reads it. It used to sit on the
+    // token until the button's finally ran, and the button does not finish
+    // until the biography does — and the biography's own pipeline calls this
+    // function again. So the second call found the mark still on, read itself
+    // as a press, and opened the same dialog over work he had already done.
+    //
+    // Spending it at the door fixes the whole class: whatever re-enters, for
+    // whatever reason, it is not this press.
+    if (isGmPress) delete tokenDoc._aceGmPress;
+
     // Check if factions are enabled
     // ⚠️ THE SETTING GOVERNS DROPS, NOT HIS FINGER. His words: "run the global
     // factions anyway... I'm not dealing with the setting. I'm dealing with the
