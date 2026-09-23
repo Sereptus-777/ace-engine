@@ -701,6 +701,11 @@ export async function applyFlavorName(actor, tokenDocument, name) {
     const flavour = String(name ?? "").trim();
     if (!actor || !flavour || flavour === actor.name) return false;
     try {
+        // Already carrying exactly this name. Writing it again is four flag
+        // writes that broadcast to every client and change nothing.
+        if (String(actor.getFlag(MODULE_ID, "flavorName") ?? "") === flavour) return true;
+    } catch (_) { /* unreadable flags: write it the long way below */ }
+    try {
         const _species = resolveSpecies(actor, tokenDocument ?? null);
         // Keep what it IS, so search can find it by species or statblock name.
         await actor.setFlag(MODULE_ID, "originalName", actor.name);
@@ -722,6 +727,32 @@ export async function applyFlavorName(actor, tokenDocument, name) {
         console.warn(`${TAG} | Naming failed (non-fatal):`, err);
         return false;
     }
+}
+
+/**
+ * What this creature is CALLED, as against what its statblock is labelled.
+ *
+ * ⚠️ ONE READER (2026-09-22). The biography prompt had one name source,
+ * `actor.name`, and a single branch that knew about a chosen name; the other
+ * four told the model "this NPC is named Mind Flayer, use this name". So a
+ * creature whose name had already been picked still got a biography about a
+ * mind flayer. His words: "Drop picker already picks the flavor name.
+ * Biography is written before that name is in hand, so it uses the sheet name."
+ *
+ * The order is his: the name is picked, it is stamped on the nameplate and the
+ * flag, and THEN the biography is written knowing it.
+ *
+ * @returns {string} the flavour name it already carries, else the one just
+ *   chosen for it, else the statblock label.
+ */
+export function nameForBio(actor, tokenDocument = null) {
+    try {
+        const held = String(actor?.getFlag?.(MODULE_ID, "flavorName") ?? "").trim();
+        if (held) return held;
+    } catch (_) { /* a synthetic actor may not answer getFlag; fall through */ }
+    const chosen = String(tokenDocument?._aceChosenName ?? "").trim();
+    if (chosen) return chosen;
+    return actor?.name || "Unknown Creature";
 }
 
 export function isRealBiography(bioHtml) {
@@ -1405,6 +1436,23 @@ async function _buildPrompt(tokenDocument, factionResult = {}, socialProfile = n
         personalityInstruction = `\nAfter the biography, add TWO lines:\nPERSONALITY: [1-2 sentence description of how this NPC speaks, their mannerisms, speech patterns, and demeanor]\nTONE: [one word from this list ONLY: formal, casual, cryptic, cheerful, grim, sarcastic, threatening, nervous, stoic, theatrical]\n`;
     }
 
+    // ── ⚠️🔴 THE NAME IT IS CALLED BY WINS, WHATEVER BRANCH WE TOOK ───────
+    //
+    // Five branches above decide how to talk about this creature, and four of
+    // them had only one name to hand: the statblock label. That is the bug he
+    // reported: a mind flayer with a name already picked for it got a
+    // biography that called it "the mind flayer" throughout, because the name
+    // lived in a flag nothing here read.
+    //
+    // One line, after all five, so no branch can be the one that forgets:
+    // if this creature is called something, the biography is told so.
+    const calledName = nameForBio(actor, tokenDocument);
+    if (calledName && calledName !== name) {
+        nameInstruction = `\nThis NPC's name is "${calledName}". It is already decided — use it throughout the biography. `
+            + `Do NOT invent a different name and do NOT start with a NAME: line. `
+            + `"${name}" is the generic statblock label; never use it as the name.\n`;
+    }
+
     const systemPrompt = `You are a D&D 5e backstory generator for a tabletop RPG.
 Generate a concise NPC biography for use by an AI conversation system.
 Write in third person. Do NOT include stat blocks, abilities, or game mechanics.
@@ -1988,9 +2036,24 @@ async function _generateBio(tokenDocument) {
         const nameOf = actor?.name || "";
         const cType  = actor?.system?.details?.type?.value || "";
         const NO_NAME_TYPES = new Set(["beast", "ooze", "plant", "swarm", "construct"]);
-        const wantsName = !NO_NAME_TYPES.has(String(cType).toLowerCase())
+
+        // ⚠️ A NAME IT ALREADY HAS IS THE NAME. The picker on a token drop, and
+        // the box in the identity dialog, both settle this before we get here.
+        // Generating a second one would rename the creature he just named.
+        let heldFlavour = "";
+        try { heldFlavour = String(actor.getFlag(MODULE_ID, "flavorName") ?? "").trim(); }
+        catch (_) { heldFlavour = ""; }
+
+        const wantsName = !heldFlavour
+            && !NO_NAME_TYPES.has(String(cType).toLowerCase())
             && _isGenericName(nameOf, cType)
             && !tokenDocument._aceSkipRename;
+
+        if (heldFlavour) {
+            tokenDocument._aceChosenName = heldFlavour;
+            console.log(`${TAG} | "${nameOf}" is already called "${heldFlavour}" — keeping it. `
+                + `The biography is written AFTER this, and is told that name.`);
+        }
 
         if (wantsName) {
             const namer = await import("./namer.mjs");
@@ -2034,9 +2097,20 @@ async function _generateBio(tokenDocument) {
                 creatureType: cType,
             });
             tokenDocument._aceChosenName = result.name;
-            console.log(`${TAG} | "${nameOf}" will be named "${result.name}" `
+
+            // ⚠️🔴 STAMPED HERE, NOT AFTER THE BIOGRAPHY (2026-09-22, his order:
+            // "1. Pick flavorName. 2. Stamp it on the nameplate and the
+            // flavorName flag only. 3. Write the bio with that name."). It used
+            // to be written at the very end, so every early return between here
+            // and there — a refused AI call, an empty answer, a fallback string
+            // — threw away a name that had already been chosen, and the plate
+            // kept the statblock label. The stamp is the nameplate and the flag.
+            // The sheet, the prototype and the token are not touched by it.
+            await applyFlavorName(actor, tokenDocument, result.name);
+
+            console.log(`${TAG} | "${nameOf}" is now called "${result.name}" `
                 + `(${species}${role ? `, ${role}` : ""}, ${gender} — ${genderSource}; from the ${result.source}). `
-                + `The biography is written AFTER this, and is told the name.`);
+                + `The nameplate says so already; the biography is written next, and is told the name.`);
         }
     } catch (err) {
         // ⚠️ NEVER LET NAMING KILL THE BIOGRAPHY. An unnamed creature with a good
