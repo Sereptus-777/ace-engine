@@ -1605,7 +1605,10 @@ function _buildFactionInfoHtml(meta) {
  * @param {FactionData[]} existingFactions
  * @param {string} creatureBase
  * @param {object|null} sceneIntel
- * @returns {Promise<{ factionId, isNew, role, origin, originCustom, autoLink } | null>}
+ * @returns {Promise<{ factionId, isNew, role, origin, originCustom, autoLink, rename,
+ *   genderOverride, speciesOverride, flavorName, rewriteBio } | null>}
+ *   `flavorName` is only set when he typed a name of his own; `rewriteBio` is
+ *   his tick, off unless he asks for one (2026-09-22).
  */
 export async function showNpcIdentityDialog(tokenDoc, existingFactions, creatureBase, sceneIntel = null, worldDigestFactions = [], bibleFactions = [], recommendations = []) {
     const actor = tokenDoc.actor;
@@ -1839,10 +1842,16 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
 
         // ── Build faction dropdown with optgroups ──
         let factionOptionsHtml = "";
-        const defaultFactionValue = topCanonicalFiltered.length
+        // ⚠️ WHAT IT ALREADY IS COMES UP SELECTED (2026-09-22). He opens this
+        // to CHANGE a creature, so the faction it is in has to be the one
+        // showing; anything else means accepting the dialog quietly moves it.
+        const _heldFactionId = actor.getFlag(MODULE_ID, "factionId") ?? null;
+        const _heldIsListed = !!_heldFactionId && existingFactions.some(f => f.id === _heldFactionId);
+        const defaultFactionValue = _heldIsListed ? _heldFactionId
+          : (topCanonicalFiltered.length
           ? `__canonical__:${topCanonicalFiltered[0]._idx}`
           : (existingFactions.length ? existingFactions[0].id
-          : (_isCivilianBase(creatureBase) ? "__none__" : "__new__"));
+          : (_isCivilianBase(creatureBase) ? "__none__" : "__new__")));
 
         if (topCanonicalFiltered.length) {
           factionOptionsHtml += `<optgroup label="Scene: ${sceneName}">`;
@@ -2000,6 +2009,38 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
               </label>
             </div>
 
+            <!-- The name itself, typed (2026-09-22, his rule: "I want to be
+                 able to change the flavor name if I want, so I need a box for
+                 that."). Prefilled with what is on the plate now, so leaving it
+                 alone changes nothing and typing in it wins over the AI. -->
+            <div style="padding:8px 10px; background:#f5f5f5; border:1px solid #ccc; border-radius:6px; margin-bottom:8px;">
+              <label style="display:block; font-size:1.05em; color:#222; font-weight:600; margin-bottom:4px;">Name on the token</label>
+              <input type="text" name="flavorName" value="${foundry.utils.escapeHTML(String(tokenDoc.name ?? ""))}"
+                     placeholder="Leave as is, or type the name you want"
+                     style="width:100%; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1.05em; color-scheme:light;">
+              <div style="font-size:0.9em; color:#555; margin-top:4px;">
+                Yours beats the AI's. The sheet in the sidebar is never renamed.
+              </div>
+            </div>
+
+            <!-- Write a new biography (2026-09-22, his rule: "I might want to
+                 keep the bio... I just want a checkmark on whether it's going to
+                 rewrite the bio or not."). OFF by default: nothing he already
+                 has is replaced unless he asks for it.
+                 ⚠️ ONLY ON A PRESS. A token drop writes its biography through
+                 its own pipeline as it always has; putting the tick there would
+                 be a second switch over the same thing. -->
+            <div style="padding:8px 10px; background:#f5f5f5; border:1px solid #ccc; border-radius:6px; margin-bottom:8px;
+                        display:${tokenDoc._aceGmPress ? "block" : "none"};">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input type="checkbox" name="rewriteBio" style="accent-color:#d4af37; width:16px; height:16px;">
+                <div>
+                  <strong style="font-size:1.05em; color:#222;">Write a new biography</strong>
+                  <span style="font-size:0.95em; color:#555;"> \u2014 the AI writes one for this creature, using the name above. Leave it off to keep the biography it has.</span>
+                </div>
+              </label>
+            </div>
+
             <!-- Persistent NPC Checkbox -->
             <div style="padding:8px 10px; background:#f5f5f5; border:1px solid #ccc; border-radius:6px;">
               <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
@@ -2065,7 +2106,16 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                             factionId = factionChoice;
                         }
 
-                        resolve({ factionId, isNew, role, origin, originCustom, autoLink, rename, genderOverride, speciesOverride });
+                        // The name he typed, and only when it is actually
+                        // different from what is on the plate: an untouched box
+                        // must never be read as a rename.
+                        const typedName = String(html.find('input[name="flavorName"]').val() ?? "").trim();
+                        const flavorName = (typedName && typedName !== String(tokenDoc.name ?? "").trim())
+                            ? typedName : "";
+                        const rewriteBio = html.find('input[name="rewriteBio"]').is(':checked');
+
+                        resolve({ factionId, isNew, role, origin, originCustom, autoLink, rename, genderOverride,
+                                  speciesOverride, flavorName, rewriteBio });
                     }
                 },
                 skip: {
@@ -3369,16 +3419,31 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
     const actor = tokenDoc.actor;
     if (!actor) return { faction: null, isSpy: false, spyFaction: null, role: "" };
 
+    // ⚠️🔴 A GM PRESSING A BUTTON IS NOT A TOKEN DROP (his table, 2026-09-22:
+    // "I don't see anything because it says it already has a fucking faction,
+    // and that's what it's supposed to do on token drop. Is this a token drop?
+    // No, this is not a token drop. This is a button I'm fucking pushing.").
+    //
+    // Everything below that turns a DROP away is asking "does this new creature
+    // need setting up". A press is asking "let me change this one", and the two
+    // questions have different answers. The press mode skips the guards that
+    // only make sense for a drop and keeps the one that is about the creature.
+    const isGmPress = !!tokenDoc._aceGmPress;
+
     // Check if factions are enabled
+    // ⚠️ THE SETTING GOVERNS DROPS, NOT HIS FINGER. His words: "run the global
+    // factions anyway... I'm not dealing with the setting. I'm dealing with the
+    // pop-up." It is read, never written, and a press is not refused by it.
     try {
-        if (!game.settings.get(MODULE_ID, "enableFactions")) {
+        if (!isGmPress && !game.settings.get(MODULE_ID, "enableFactions")) {
             return { faction: null, isSpy: false, spyFaction: null, role: "" };
         }
     } catch (err) { console.warn("ACE: Engine | faction-registry enableFactions setting check failed:", err); }
 
-    // Skip if already assigned
+    // Skip if already assigned — on a DROP. On a press, what it already has is
+    // the thing he opened the popup to change, so it is carried in instead.
     const existingFactionId = actor.getFlag(MODULE_ID, "factionId");
-    if (existingFactionId) {
+    if (existingFactionId && !isGmPress) {
         const existing = getFaction(existingFactionId);
         if (existing) {
             console.log(`${TAG} | ${actor.name} already assigned to "${existing.name}"`);
@@ -3397,6 +3462,13 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
     const SKIP_TYPES = new Set(["beast", "ooze", "plant"]);
     // Constructs skip UNLESS they have a humanoid subtype (animated armor serving a faction)
     if (SKIP_TYPES.has(creatureType) || (creatureType === "construct" && !template.canSpy)) {
+      // ⚠️ A REFUSAL HE CANNOT SEE IS NOTHING HAPPENING (his words, 2026-09-22:
+      // "It does no good to say something in the console, okay? I'm not running
+      // the fucking game with a console open."). He kept this rule, so when he
+      // presses the button on a beast it tells him on screen why nothing opened.
+      if (isGmPress) {
+        ui.notifications?.info(`${actor.name} is a ${creatureType} and does not join factions.`);
+      }
       console.log(`${TAG} | ${actor.name} (${creatureType}) — skipping faction assignment (non-sentient)`);
       return { faction: null, isSpy: false, spyFaction: null, role: "" };
     }
@@ -3577,7 +3649,7 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
       }
     }
 
-    if (isManualDrop) {
+    if (isManualDrop || isGmPress) {
         // ── Read the persistent tier setting ───────────────────────────
         let defaultTier = "full";
         try { defaultTier = game.settings.get(MODULE_ID, "tokenDropAI") ?? "full"; }
@@ -3597,7 +3669,14 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
         // If tokenDoc has _aceAutoAccept set (auto-pipeline mode), skip
         // the dialog entirely and accept the AI's #1 recommendation.
         let setup;
-        if (tokenDoc._aceAutoAccept) {
+        if (isGmPress) {
+            // ⚠️ THE FULL DIALOG, EVERY TIME (his answer, 2026-09-22: "When it
+            // does open, I want the full identity dialog every time."). The
+            // smart-setup screen is the drop's triage; a press has already
+            // decided it wants the whole thing.
+            setup = { choice: "customize", tier: defaultTier };
+            console.log(`${TAG} | ${actor.name}: he pressed the flag, so the full identity dialog opens.`);
+        } else if (tokenDoc._aceAutoAccept) {
             setup = {
                 choice: "accept",
                 selectedIndex: 0,
@@ -3707,6 +3786,34 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
         if (setup.choice === "customize") {
             // ── Full dialog: existing NPC Identity Dialog ───────────────
             const result = await showNpcIdentityDialog(tokenDoc, matching, creatureBase, sceneIntel, worldDigestFactions, bibleFactions, recommendations);
+
+            // ⚠️🔴 A NAME HE TYPED IS THE LAST WORD (2026-09-22). Two lines
+            // further down hand the AI's renamer back its permission from the
+            // dialog's rename tick, and they run AFTER this, so a name he typed
+            // with that tick still on would have been written and then written
+            // over. Both of those lines read this.
+            const _gmNamed = !!result?.flavorName;
+
+            // ⚠️ HIS NAME BEATS THE AI'S, AND IT IS WRITTEN THE ONE WAY
+            // (2026-09-22). A name he typed goes on the nameplate and the
+            // flavour flag through the single writer, and it switches the AI's
+            // rename off so nothing overwrites what he asked for. The sheet in
+            // the sidebar is never renamed, by him or by it.
+            if (result?.flavorName) {
+                try {
+                    const { applyFlavorName } = await import("./bio-generator.mjs");
+                    await applyFlavorName(actor, tokenDoc, result.flavorName);
+                    tokenDoc._aceSkipRename = true;
+                    console.log(`${TAG} | ${actor.name}: the GM named this one "${result.flavorName}".`);
+                } catch (err) {
+                    console.warn(`${TAG} | could not put the typed name on ${actor.name}:`, err);
+                    ui.notifications?.warn(`ACE: "${result.flavorName}" could not be written to the nameplate.`);
+                }
+            }
+            // His tick, carried out to whoever pressed the button: the bio is
+            // rewritten only when he asked for it.
+            tokenDoc._aceRewriteBio = !!result?.rewriteBio;
+
             if (!result) {
                 // GM cancelled/skipped — truly skip, no silent auto-assignment
                 return { faction: null, isSpy: false, spyFaction: null, role: "" };
@@ -3718,7 +3825,7 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                 // Rename: undo/set the outer smart-setup's _aceSkipRename flag.
                 // result.rename === true → user WANTS rename → clear skip flag
                 // result.rename === false → user does NOT want rename → set skip flag
-                if (result.rename !== undefined) tokenDoc._aceSkipRename = !result.rename;
+                if (result.rename !== undefined && !_gmNamed) tokenDoc._aceSkipRename = !result.rename;
                 if (result.genderOverride && result.genderOverride !== "auto") {
                     await tokenDoc.actor.setFlag(MODULE_ID, "genderOverride", result.genderOverride);
                 }
@@ -3740,7 +3847,7 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                     if (result.originCustom) await tokenDoc.actor.setFlag(MODULE_ID, "npcOriginCustom", result.originCustom);
                     if (result.autoLink !== undefined) tokenDoc._aceAutoLink = result.autoLink;
                     // Rename override (see comment above)
-                    if (result.rename !== undefined) tokenDoc._aceSkipRename = !result.rename;
+                    if (result.rename !== undefined && !_gmNamed) tokenDoc._aceSkipRename = !result.rename;
                     // Gender override: only save when user picked something other than auto.
                     // bio-generator reads this flag and hardcodes the gender in the AI prompt.
                     if (result.genderOverride && result.genderOverride !== "auto") {

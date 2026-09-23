@@ -57,10 +57,13 @@ export async function assignFactionFromHud(tokenDoc) {
         return null;
     }
 
-    console.log(`${TAG} | ${tokenDoc.name}: opening the drop popup for this one token.`);
-    // The mark a manual drop sets, and the only reason the popup opens at all.
-    const held = tokenDoc._aceManualDrop;
-    tokenDoc._aceManualDrop = true;
+    console.log(`${TAG} | ${tokenDoc.name}: opening the full identity dialog for this one token.`);
+    // ⚠️ THE PRESS MARK, NOT THE DROP MARK (2026-09-22). A drop asks "does this
+    // new creature need setting up" and turns back when it already has a
+    // faction; a press asks "let me change this one". The processor reads this
+    // and stands its drop-only guards down.
+    const held = tokenDoc._aceGmPress;
+    tokenDoc._aceGmPress = true;
     try {
         const result = await processTokenFaction(tokenDoc);
         const faction = result?.faction ?? null;
@@ -73,6 +76,19 @@ export async function assignFactionFromHud(tokenDoc) {
             console.log(`${TAG} | ${tokenDoc.name}: the popup ended with no faction`
                 + `${result?.role ? ` (role "${result.role}")` : ""}. Nothing else was changed.`);
         }
+        // ⚠️ HIS TICK, HONOURED HERE. The dialog only records whether he
+        // asked for a new biography; the press is what runs it, with force, so
+        // a creature that already has one is rewritten because he said so.
+        if (tokenDoc._aceRewriteBio) {
+            try {
+                ui.notifications?.info(`Writing a new biography for ${tokenDoc.name}…`);
+                const { queueBioGeneration } = await import("./bio-generator.mjs");
+                await queueBioGeneration(tokenDoc, { force: true });
+            } catch (err) {
+                console.error(`${TAG} | the biography could not be written for ${tokenDoc.name}:`, err);
+                ui.notifications?.error(`ACE: the biography for ${tokenDoc.name} could not be written — see the console.`);
+            }
+        }
         return result ?? null;
     } catch (err) {
         console.error(`${TAG} | the faction popup failed for ${tokenDoc.name}:`, err);
@@ -80,10 +96,10 @@ export async function assignFactionFromHud(tokenDoc) {
         return null;
     } finally {
         // ⚠️ THE MARK IS THIS PRESS'S, NOT THE TOKEN'S FOREVER. Leaving it on
-        // would make a later automatic pass treat this creature as a fresh
-        // manual drop.
-        if (held === undefined) delete tokenDoc._aceManualDrop;
-        else tokenDoc._aceManualDrop = held;
+        // would make a later pass treat this creature as a fresh press.
+        if (held === undefined) delete tokenDoc._aceGmPress;
+        else tokenDoc._aceGmPress = held;
+        delete tokenDoc._aceRewriteBio;
     }
 }
 

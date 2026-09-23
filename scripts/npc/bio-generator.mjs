@@ -681,6 +681,49 @@ const STUB_REFERENCE_PATTERNS = [
  * @param {string} bioHtml — raw HTML biography value
  * @returns {boolean} — true if the bio appears to be real content
  */
+/**
+ * Put a flavour name on a creature: the nameplate and the flag, and NOTHING
+ * else, ever.
+ *
+ * ⚠️ ONE WRITER (2026-09-22). This was written out by hand inside the bio
+ * generator, which meant anything else that wanted to name a creature — the
+ * GM's own typed name from the identity dialog, for one — had to copy the rule
+ * and could copy it wrong. The rule itself is unchanged and absolute: the
+ * actor, its prototype and the token all keep the creature's name; the flavour
+ * name lives in `flavorName` and is painted on the nameplate.
+ *
+ * @param {Actor} actor
+ * @param {TokenDocument|null} tokenDocument
+ * @param {string} name
+ * @returns {Promise<boolean>} whether it was written
+ */
+export async function applyFlavorName(actor, tokenDocument, name) {
+    const flavour = String(name ?? "").trim();
+    if (!actor || !flavour || flavour === actor.name) return false;
+    try {
+        const _species = resolveSpecies(actor, tokenDocument ?? null);
+        // Keep what it IS, so search can find it by species or statblock name.
+        await actor.setFlag(MODULE_ID, "originalName", actor.name);
+        if (_species) await actor.setFlag(MODULE_ID, "species", _species);
+
+        // THE ONLY PLACE A FLAVOUR NAME IS EVER WRITTEN.
+        await actor.setFlag(MODULE_ID, "flavorName", flavour);
+        await actor.setFlag(MODULE_ID, "nameRevealed", true);
+
+        if (tokenDocument && tokenDocument !== actor) {
+            try { await tokenDocument.update({ displayName: 50 }); }
+            catch (tokErr) { console.warn(`${TAG} | Nameplate visibility update failed (non-fatal):`, tokErr); }
+        }
+        console.log(`${TAG} | "${actor.name}" is known to the party as "${flavour}". `
+            + `The sheet, the prototype and the token keep the creature name — the flavour name is `
+            + `nameplate-only, and the sidebar finds it by either.`);
+        return true;
+    } catch (err) {
+        console.warn(`${TAG} | Naming failed (non-fatal):`, err);
+        return false;
+    }
+}
+
 export function isRealBiography(bioHtml) {
     if (!bioHtml) return false;
 
@@ -2229,26 +2272,7 @@ async function _generateBio(tokenDocument) {
                 // identity, the spell pipeline, the Multiattack parser, token
                 // art lookups, and every journal that references the creature by
                 // name. That is why the rule exists and why it is absolute.
-                const _species = resolveSpecies(actor, tokenDocument ?? null);
-
-                // Keep what it IS, so search can find it by species/statblock
-                // name as well as by the name the party knows it by.
-                await actor.setFlag(MODULE_ID, "originalName", actor.name);
-                if (_species) await actor.setFlag(MODULE_ID, "species", _species);
-
-                // THE ONLY PLACE THE GENERATED NAME IS EVER WRITTEN.
-                await actor.setFlag(MODULE_ID, "flavorName", generatedName);
-                await actor.setFlag(MODULE_ID, "nameRevealed", true);
-
-                // Nameplate visible, so the table sees the name they were told.
-                if (tokenDocument && tokenDocument !== actor) {
-                    try { await tokenDocument.update({ displayName: 50 }); }
-                    catch (tokErr) { console.warn(`${TAG} | Nameplate visibility update failed (non-fatal):`, tokErr); }
-                }
-
-                console.log(`${TAG} | "${actor.name}" is known to the party as "${generatedName}". `
-                    + `The sheet, the prototype and the token keep the creature name — the flavour name is `
-                    + `nameplate-only, and the sidebar finds it by either.`);
+                await applyFlavorName(actor, tokenDocument, generatedName);
             } catch (flavorErr) {
                 console.warn(`${TAG} | Naming failed (non-fatal — bio still saved):`, flavorErr);
             }
