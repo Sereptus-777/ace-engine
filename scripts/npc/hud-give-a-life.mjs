@@ -133,7 +133,9 @@ export function wireGiveALifeHud() {
 
             const token = canvas.tokens?.get(data?._id ?? app?.object?.id);
             const actor = token?.actor;
-            if (!actor || actor.type !== "npc") return;
+            // NPC or character, his rule when the flag existed: it is the only
+            // ACE button on the HUD now, so it has to cover what the flag did.
+            if (!actor || (actor.type !== "npc" && actor.type !== "character")) return;
 
             // A corpse does not get a biography written for it. ace-qol stamps
             // this the moment its death pipeline runs.
@@ -156,9 +158,16 @@ export function wireGiveALifeHud() {
             btn.classList.add("control-icon", "ace-engine-give-a-life");
             if (lived) btn.classList.add("active");
             btn.dataset.action = `${MODULE_ID}.give-a-life`;
+            // ⚠️ ONE BUTTON (his call, 2026-09-23): "You got a flag, and you got
+            // a book, and you got a quill. I want them all under the quill.
+            // When I push the quill, I want a pop-up to be able to change all
+            // this shift if I want it." So the flag and the book are gone from
+            // the HUD and this opens the setup popup: display name, faction,
+            // role, origin, gender, species, persistence, and a button in there
+            // that opens the biography window.
             btn.setAttribute("data-tooltip", lived
-                ? `${actor.name} already has a history — click to write a new one`
-                : `Give ${token.document.name || actor.name} a name, a history and a permanent place in your world`);
+                ? `Set up ${token.document.name || actor.name}: name, faction, biography`
+                : `Set up ${token.document.name || actor.name}: give it a name, a faction and a history`);
             // Gold so it reads as an ACE control among Foundry's white ones, and
             // fully opaque in BOTH states — the old 65%-opacity "already has a
             // life" version was invisible on a dark map.
@@ -167,22 +176,18 @@ export function wireGiveALifeHud() {
             btn.addEventListener("click", async (ev) => {
                 ev.preventDefault();
                 ev.stopPropagation();
-
-                if (lived) {
-                    const ok = await foundry.applications.api.DialogV2.confirm({
-                        window: { title: "Rewrite this character's history?" },
-                        content: `<p style="font-size:16px; color:#1a1a1a; line-height:1.5;">
-                            <strong>${foundry.utils.escapeHTML(actor.name)}</strong> already has a written history.
-                            Writing a new one replaces it permanently.</p>
-                            <p style="font-size:14px; color:#4a3a1a;">Their name, hit points, items and conditions are not touched.</p>`,
-                        yes: { label: "Write a new history" },
-                        no:  { label: "Keep the current one", default: true },
-                    }).catch(() => false);
-                    if (!ok) return;
-                }
-
                 canvas.hud?.token?.clear();
-                await giveThisOneALife(token.document, { force: lived });
+                // ⚠️ NOTHING IS WRITTEN BY PRESSING THIS. It used to write a
+                // whole history on the click, with a confirm in front of it.
+                // Now it asks him what he wants, and every write happens because
+                // he pressed something inside the popup.
+                try {
+                    const { assignFactionFromHud } = await import("./hud-faction.mjs");
+                    await assignFactionFromHud(token.document);
+                } catch (err) {
+                    console.error(`${TAG} | the setup popup could not open for ${actor.name}:`, err);
+                    ui.notifications?.error("ACE: the setup popup could not open — see the console.");
+                }
             });
 
             col.appendChild(btn);
@@ -191,5 +196,5 @@ export function wireGiveALifeHud() {
         }
     });
 
-    console.log(`${TAG} | Token-HUD button registered (GM only, NPC tokens, in the HUD control column).`);
+    console.log(`${TAG} | The quill is the one ACE button on the token HUD: it opens the setup popup (GM only, NPC tokens).`);
 }

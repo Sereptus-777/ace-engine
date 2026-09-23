@@ -3905,7 +3905,18 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
     // adoptOnly is the silent drop: pure registry lookup, no dialog, no
     // invention, no AI call. It is deliberately treated as an auto-scan.
     const isManualDrop = !adoptOnly && !!tokenDoc._aceManualDrop;
-    if (!isManualDrop) {
+
+    // ⚠️🔴 A PRESS IS NOT THE SILENT PATH EITHER (2026-09-23). I gave the press
+    // its own mark yesterday and then only taught the DIALOG branch about it.
+    // This branch, thirty lines earlier, still asked "is this a manual drop",
+    // decided no, quietly adopted the best-scoring faction and returned before
+    // any popup existed. His table: "When I press the flag it just told me that
+    // it was in the Thousand Fists. Didn't do anything at all."
+    //
+    // Both branches read the press now. Fix the class, not the one that
+    // surfaced: every test of isManualDrop in this file is listed here, and
+    // there are exactly two.
+    if (!isManualDrop && !isGmPress) {
       // Silent path: auto-assign faction or skip for civilians
       if (_isCivilianBase(creatureBase)) {
         console.log(`${TAG} | ${actor.name} (${creatureBase}) — auto-scan, civilian, skipping faction`);

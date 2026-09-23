@@ -100,7 +100,23 @@ export async function assignFactionFromHud(tokenDoc) {
 
 export class FactionHudButton {
 
+    /**
+     * ⚠️ NOT ON THE HUD ANY MORE (2026-09-23). His words: "on the token HUD, I
+     * want only one button to push... You got a flag, and you got a book, and
+     * you got a quill. I want them all under the quill."
+     *
+     * The popup this drew a button for is now what the quill opens, and the
+     * work still lives in assignFactionFromHud above, which the quill calls.
+     * Kept as a method so a table that wants the flag back is one call away,
+     * and so nothing that referenced it breaks.
+     */
     static register() {
+        console.log(`${TAG} | the faction flag is not drawn on the token HUD: the quill opens this popup instead (2026-09-23).`);
+        return;
+    }
+
+    /** The flag as it was, for a table that wants it back. Nothing calls this. */
+    static registerHudFlag() {
         if (this._registered) return;
         this._registered = true;
 

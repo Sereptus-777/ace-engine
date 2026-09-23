@@ -44,7 +44,19 @@ export class BiographyEditor {
     // His words, 2026-09-23: "There's going to have to be a new bio button on
     // this list, which opens a different pop-up." Beside the quill, which
     // WRITES one, and the flag, which handles identity.
+    /**
+     * ⚠️ NOT ON THE HUD ANY MORE (2026-09-23), same call as the faction flag:
+     * one button on the token HUD, the quill, and the biography is reached by a
+     * button inside the popup it opens. This window is unchanged; only the way
+     * in moved.
+     */
     static register() {
+        console.log(`${TAG} | the book is not drawn on the token HUD: the setup popup has a Biography button instead (2026-09-23).`);
+        return;
+    }
+
+    /** The book as it was, for a table that wants it back. Nothing calls this. */
+    static registerHudBook() {
         if (BiographyEditor._registered) return;
         BiographyEditor._registered = true;
 
