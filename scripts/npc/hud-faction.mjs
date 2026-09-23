@@ -80,19 +80,11 @@ export async function assignFactionFromHud(tokenDoc) {
             console.log(`${TAG} | ${tokenDoc.name}: the popup ended with no faction`
                 + `${result?.role ? ` (role "${result.role}")` : ""}. Nothing else was changed.`);
         }
-        // ⚠️ HIS TICK, HONOURED HERE. The dialog only records whether he
-        // asked for a new biography; the press is what runs it, with force, so
-        // a creature that already has one is rewritten because he said so.
-        if (tokenDoc._aceRewriteBio) {
-            try {
-                ui.notifications?.info(`Writing a new biography for ${tokenDoc.name}…`);
-                const { queueBioGeneration } = await import("./bio-generator.mjs");
-                await queueBioGeneration(tokenDoc, { force: true });
-            } catch (err) {
-                console.error(`${TAG} | the biography could not be written for ${tokenDoc.name}:`, err);
-                ui.notifications?.error(`ACE: the biography for ${tokenDoc.name} could not be written — see the console.`);
-            }
-        }
+        // ⚠️ THE BIOGRAPHY IS ITS OWN WINDOW NOW (2026-09-23). It was a tick
+        // here, which could only ever mean "replace it with an AI one"; the
+        // dialog's Biography button opens a window that can also take one he
+        // pastes or add to what is there. Nothing about a biography is decided
+        // by pressing this flag.
         return result ?? null;
     } catch (err) {
         console.error(`${TAG} | the faction popup failed for ${tokenDoc.name}:`, err);
@@ -103,7 +95,6 @@ export async function assignFactionFromHud(tokenDoc) {
         // would make a later pass treat this creature as a fresh press.
         if (held === undefined) delete tokenDoc._aceGmPress;
         else tokenDoc._aceGmPress = held;
-        delete tokenDoc._aceRewriteBio;
     }
 }
 

@@ -1457,6 +1457,13 @@ export class AceSettings {
       scope: "world", config: false, type: Object, default: {},
     });
 
+    // How many belong to a faction, kept by faction name. Filled from the
+    // world bible's own words where it says, from one AI estimate where it does
+    // not, and by hand when he types a number (2026-09-23).
+    s("factionStrength", {
+      scope: "world", config: false, type: Object, default: {},
+    });
+
     s("voiceLibraryCache", {
       scope: "world", config: false, type: Object, default: {},
     });

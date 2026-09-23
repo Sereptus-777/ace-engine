@@ -1576,7 +1576,13 @@ function _buildFactionInfoHtml(meta) {
     const details = [];
     if (meta.leader) details.push(`<strong>Leader:</strong> ${meta.leader}`);
     if (meta.region) details.push(`<strong>Region:</strong> ${meta.region}`);
-    if (meta.members !== undefined) details.push(`<strong>Members on scene:</strong> ${meta.members}`);
+    if (meta.members !== undefined) details.push(`<strong>In ACE's roster:</strong> ${meta.members}`);
+    if (meta.strength) {
+        details.push(`<strong>Strength:</strong> about ${meta.strength.text}`
+            + `<span style="font-weight:500; color:#555;"> (${meta.strength.source})</span>`);
+    } else if (meta.name && meta.name !== "No Faction" && meta.name !== "Generate New Faction") {
+        details.push(`<strong>Strength:</strong> <span class="ace-strength-pending" style="font-weight:500; color:#555;">working it out…</span>`);
+    }
     if (details.length) {
         parts.push(`<div style="color:#111; font-size:1.15em; font-weight:600; margin-bottom:8px; line-height:1.6;">${details.join("<br>")}</div>`);
     }
@@ -1586,6 +1592,17 @@ function _buildFactionInfoHtml(meta) {
     if (rawDesc) {
         const desc = rawDesc.length > 3000 ? rawDesc.substring(0, 2997) + "..." : rawDesc;
         parts.push(`<div style="color:#111; font-size:1.1em; font-weight:500; line-height:1.55; border-top:2px solid #b8ae8e; padding-top:8px; margin-top:4px;">${desc}</div>`);
+    }
+
+    // ⚠️ HIS NUMBER OUTRANKS BOTH (2026-09-23). The bible's figure and the
+    // estimate are both guesses about his world; he is not.
+    if (meta.name && meta.name !== "No Faction" && meta.name !== "Generate New Faction") {
+        parts.push(`<div style="margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <label style="font-size:1em; color:#333;">Know the real number?</label>
+            <input type="text" class="ace-strength-manual" value="${foundry.utils.escapeHTML(String(meta.strength?.source === "yours" ? meta.strength.text : ""))}"
+                   placeholder="e.g. 2,000 to 3,000"
+                   style="flex:1; min-width:140px; padding:6px 8px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1em;">
+        </div>`);
     }
 
     // If no details AND no description, show a "no info" notice so the panel isn't blank
@@ -1606,11 +1623,236 @@ function _buildFactionInfoHtml(meta) {
  * @param {string} creatureBase
  * @param {object|null} sceneIntel
  * @returns {Promise<{ factionId, isNew, role, origin, originCustom, autoLink, rename,
- *   genderOverride, speciesOverride, flavorName, rewriteBio } | null>}
- *   `flavorName` is only set when he typed a name of his own; `rewriteBio` is
- *   his tick, off unless he asks for one (2026-09-22).
+ *   genderOverride, speciesOverride, nameChoice, flavorName } | null>}
+ *   `nameChoice` is "leave", "ace" or "manual", and it is the ONLY thing that
+ *   decides the display name; `flavorName` carries the typed one, and only when
+ *   he picked that row (2026-09-23).
  */
-export async function showNpcIdentityDialog(tokenDoc, existingFactions, creatureBase, sceneIntel = null, worldDigestFactions = [], bibleFactions = [], recommendations = []) {
+
+
+// ═══ HOW MANY OF THEM ARE THERE ══════════════════════════════════════════
+//
+// His table, 2026-09-23: "It said there's only one member, and that's fair
+// enough on this map, but I want an estimate... there are 9,000 members of that
+// orc tribe somewhere else, scattered throughout the world. That is fine."
+//
+// The number ACE had was its own roster: creatures it has personally put in the
+// faction. That is acount of nothing the world cares about.
+//
+// ⚠️ THE AI NEVER WRITES A NUMBER. It picks one of six bands, and the band
+// carries the range, so "three billion orcs" is not an answer it can give. A
+// figure the bible states beats the estimate, and a figure he types beats both.
+const STRENGTH_BANDS = [
+    { key: "a handful",   text: "3 to 10",          examples: "a warband, a cell, a family" },
+    { key: "a band",      text: "10 to 50",         examples: "a gang, a cult cell, a hunting party" },
+    { key: "a company",   text: "50 to 200",        examples: "a mercenary company, a small tribe, a temple" },
+    { key: "a stronghold", text: "200 to 1,000",    examples: "a large tribe, a guild, a garrison" },
+    { key: "a power",     text: "1,000 to 5,000",   examples: "a major tribe, a knightly order, a city guild" },
+    { key: "a nation",    text: "5,000 or more",    examples: "an army, a church, a realm's forces" },
+];
+
+/** Bands by the kind of thing it is, for when there is nothing else to go on. */
+function _bandFromShape(f) {
+    const scope = String(f?.scope ?? "").toLowerCase();
+    const type  = String(f?.type ?? "").toLowerCase();
+    if (/global|continental/.test(scope)) return "a nation";
+    if (/national|regional/.test(scope)) return "a power";
+    if (/^(gang|cell|pack)$/.test(type)) return "a band";
+    if (/tribe|military|government|church|religious/.test(type)) return "a stronghold";
+    if (/cult|guild|mercantile|noble|secret/.test(type)) return "a company";
+    return "a company";
+}
+
+/**
+ * A figure the faction's own words already state.
+ * "2,000-3,000 strong", "roughly one hundred", "about 500 members".
+ * @returns {string} the figure as written, or ""
+ */
+function _strengthFromWords(text) {
+    const t = String(text ?? "");
+    if (!t) return "";
+    const NUM = String.raw`\d[\d,]*(?:\s*(?:-|–|to)\s*\d[\d,]*)?`;
+    const patterns = [
+        new RegExp(String.raw`(?:estimated at|numbering|some|roughly|about|around|nearly)\s+(${NUM})\s*(?:strong|members|warriors|souls|of them)?`, "i"),
+        new RegExp(String.raw`(${NUM})\s+(?:strong|members|warriors|souls)\b`, "i"),
+    ];
+    for (const re of patterns) {
+        const m = t.match(re);
+        if (m?.[1]) return m[1].replace(/\s*(?:-|–|to)\s*/, " to ");
+    }
+    return "";
+}
+
+/** The strength cache, kept by name so a scene or world faction can hold one. */
+function _strengthStore() {
+    try { return game.settings.get(MODULE_ID, "factionStrength") ?? {}; } catch (_) { return {}; }
+}
+
+/**
+ * What to show for "how many". Synchronous: rows are rendered, not awaited.
+ * @returns {{text:string, source:string}|null} null when nothing is known yet
+ */
+export function factionStrength(f) {
+    if (!f?.name) return null;
+    const key = _normaliseFactionName(f.name);
+    const held = _strengthStore()[key];
+
+    // 1. His own figure, typed. It beats everything.
+    if (held?.manual) return { text: held.manual, source: "yours" };
+
+    // 2. What the bible, the digest or the faction's own record says.
+    const words = _strengthFromWords([f.description, f.purpose, f.lore, f.goals].filter(Boolean).join(" "));
+    if (words) return { text: words, source: "the world bible" };
+
+    // 3. The estimate, made once and kept.
+    if (held?.band) {
+        const band = STRENGTH_BANDS.find(b => b.key === held.band);
+        if (band) return { text: band.text, source: "estimated" };
+    }
+    return null;
+}
+
+/** Write a strength down, so it is the same answer every time it is asked. */
+async function _rememberStrength(name, patch) {
+    const key = _normaliseFactionName(name);
+    if (!key) return;
+    try {
+        const store = foundry.utils.deepClone(_strengthStore());
+        store[key] = { ...(store[key] ?? {}), ...patch, at: Date.now() };
+        await game.settings.set(MODULE_ID, "factionStrength", store);
+    } catch (err) {
+        console.warn(`${TAG} | could not remember how many are in "${name}":`, err);
+    }
+}
+
+/** The GM's own number, which outranks the bible and the estimate. */
+export async function setFactionStrength(name, figure) {
+    const text = String(figure ?? "").trim();
+    if (!text) return false;
+    await _rememberStrength(name, { manual: text });
+    console.log(`${TAG} | "${name}" is ${text} strong, because he said so.`);
+    return true;
+}
+
+/**
+ * Ask the AI ONCE how big a faction is, and only ever accept one of six answers.
+ * @returns {Promise<{text:string, source:string}|null>}
+ */
+export async function estimateFactionStrength(f) {
+    const known = factionStrength(f);
+    if (known) return known;
+    if (!f?.name) return null;
+
+    const shapeBand = _bandFromShape(f);
+    let chosen = "";
+    try {
+        const AIHandler = await _getAIHandler();
+        const { provider, apiKey } = getEnvoyAIConfig();
+        const list = STRENGTH_BANDS.map(b => `- ${b.key} (${b.text}): ${b.examples}`).join("\n");
+        const sys = `You size fictional organisations for a tabletop game. You answer with ONE of the listed sizes, exactly as written, and nothing else.`;
+        const msg = `Faction: ${f.name}\nKind: ${f.type || "organisation"}\n`
+            + `Reach: ${f.scope || "unknown"}\n`
+            + `What is known about it: ${String(f.description || f.purpose || f.lore || "nothing").slice(0, 600)}\n\n`
+            + `How many members does it have across the whole world? Choose one:\n${list}\n\n`
+            + `Answer with the size only.`;
+        const answer = await AIHandler.callAI(sys, [], msg, provider, apiKey, [], { context: "faction-strength" });
+        const lower = String(answer ?? "").toLowerCase();
+        // ⚠️ VALIDATED, NOT TRUSTED. Anything that is not one of the six is
+        // thrown away and the shape of the faction answers instead.
+        chosen = STRENGTH_BANDS.find(b => lower.includes(b.key))?.key ?? "";
+        if (!chosen) console.warn(`${TAG} | the AI answered "${String(answer).slice(0, 60)}" for "${f.name}", which is not one of the six sizes. Using its shape instead.`);
+    } catch (err) {
+        console.warn(`${TAG} | could not ask how big "${f.name}" is:`, err);
+    }
+
+    const band = STRENGTH_BANDS.find(b => b.key === (chosen || shapeBand)) ?? STRENGTH_BANDS[2];
+    await _rememberStrength(f.name, { band: band.key });
+    console.log(`${TAG} | "${f.name}" is about ${band.text} strong (${chosen ? "the AI chose that size" : "read off its own shape"}).`);
+    return { text: band.text, source: "estimated" };
+}
+
+// ═══ THE FACTION LIST: ONE ORDER, ONE RENDERER ═══════════════════════════
+//
+// ⚠️🔴 THE SORT WAS BEING THROWN AWAY (2026-09-23). Every candidate was scored
+// and sorted best first, and then the display split the list into a Scene group
+// and a World group, so a world faction scoring ninety sat underneath a scene
+// faction scoring ten. On top of that, the factions ACE actually recommends
+// were force-appended to the END of the list. His words: "The suggested
+// factions I notice are not on top. They should be the first ones at the top of
+// the list."
+//
+// One list now, in score order, with a tag on each row saying where it came
+// from. The recommendation keeps its star instead of its own section.
+
+/** Everything a row needs: its value, what it says, and what it matches on. */
+function _factionRow(f, { value, where, members = null, rec = false, score = 0 }) {
+    const searchBits = [f.name, f.type, f.alignment, f.scope, f.region, f.territory,
+                        f.description, f.purpose, f.goals, f.lore, f.leader, f.nation]
+        .filter(Boolean).join(" ").toLowerCase();
+    let strength = "";
+    try { strength = factionStrength(f)?.text ?? ""; } catch (_) { strength = ""; }
+    return {
+        value, where, members, rec, score, strength,
+        name: f.name || "",
+        type: f.type || "faction",
+        alignment: f.alignment || "",
+        search: searchBits,
+    };
+}
+
+/**
+ * Build the option list.
+ *
+ * @param {Array} rows      every candidate, in any order
+ * @param {object} opts
+ * @param {string} [opts.query]     his search text; when set, NOTHING is capped
+ * @param {string} [opts.selected]  the value to keep selected
+ * @param {number} [opts.limit]     how many to show when he is not searching
+ * @returns {{html:string, shown:number, total:number}}
+ */
+function _renderFactionOptions(rows, { query = "", selected = "", limit = 20 } = {}) {
+    const esc = (t) => foundry.utils.escapeHTML(String(t ?? ""));
+    const q = String(query ?? "").trim();
+    const terms = q ? q.toLowerCase().split(/\s+/).filter(Boolean) : [];
+
+    const ordered = [...rows].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    // ⚠️ A SEARCH READS EVERYTHING. The cap exists so a dropdown he has not
+    // asked anything of is not four hundred rows long; the moment he types, it
+    // is not in the way.
+    const matched = terms.length ? ordered.filter(r => terms.every(t => r.search.includes(t))) : ordered;
+    const shown = (!terms.length && limit && matched.length > limit) ? matched.slice(0, limit) : matched;
+
+    let html = "";
+    if (shown.length) {
+        html += `<optgroup label="Best match first">`;
+        html += shown.map(r => {
+            const al = _abbreviateAlignment(r.alignment);
+            const bits = [r.type || "faction"];
+            if (al) bits.push(`[${al}]`);
+            bits.push(r.where);
+            // ⚠️ THE TWO NUMBERS ARE DIFFERENT QUESTIONS (2026-09-23). How many
+            // ACE has put in it, and how many there are in the world.
+            if (r.members !== null) bits.push(`${r.members} in ACE`);
+            if (r.strength) bits.push(`~${r.strength} strong`);
+            const star = r.rec ? "\u2b50 " : "";
+            const sel = r.value === selected ? "selected" : "";
+            return `<option value="${esc(r.value)}" ${sel}>${star}${esc(r.name)} \u2014 ${esc(bits.join(" \u00b7 "))}</option>`;
+        }).join("");
+        html += `</optgroup>`;
+    }
+
+    html += `<optgroup label="Other">`;
+    // ⚠️ HIS OWN FACTION, BY NAME (2026-09-23): "I want to be able to type in my
+    // own faction." Typed text that matches nothing is not a dead end.
+    if (q) html += `<option value="__named__:${esc(q)}">\u2795 Create a faction called "${esc(q)}"</option>`;
+    html += `<option value="__new__" ${"__new__" === selected ? "selected" : ""}>\u2728 Generate New Faction</option>`;
+    html += `<option value="__none__" ${"__none__" === selected ? "selected" : ""}>\u2014 No Faction</option>`;
+    html += `</optgroup>`;
+
+    return { html, shown: shown.length, total: matched.length };
+}
+
+export async function showNpcIdentityDialog(tokenDoc, existingFactions, creatureBase, sceneIntel = null, worldDigestFactions = [], bibleFactions = [], recommendations = [], { gmPress = false } = {}) {
     const actor = tokenDoc.actor;
     const sceneName = canvas.scene?.name || "Unknown Scene";
     const template = getTemplate(creatureBase);
@@ -1768,11 +2010,14 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
     // Re-split by source for display (keeps section headers meaningful)
     const topCanonicalFiltered = topCombined.filter(f => f._source === "canonical");
     const topWorldFiltered = topCombined.filter(f => f._source === "world");
-    console.log(`${TAG} | Faction dialog: ${combined.length} candidates → top ${topCombined.length} shown (${topCanonicalFiltered.length} scene + ${topWorldFiltered.length} world)`);
+    console.log(`${TAG} | Faction dialog: ${combined.length} candidates scored; the 20 best are listed and the search box reaches all of them.`);
 
     // ── Build faction metadata lookup for the info panel ──
     const factionMeta = {};
-    topCanonicalFiltered.forEach(f => {
+    // ⚠️ META FOR EVERY CANDIDATE, not just the ones on screen at open: the
+    // search reaches the whole list, and an info panel that goes blank on a
+    // searched row reads as a broken row.
+    scoredCanonical.forEach(f => {
       // Combine all available text — purpose, description, lore, goals (digest field)
       const descParts = [f.purpose, f.description, f.lore, f.goals].filter(Boolean);
       const fullDesc = descParts.join(" ").trim() || "";
@@ -1790,7 +2035,7 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
         : (f.territory || "");
       factionMeta[`__canonical__:${f._idx}`] = { name: f.name, type: f.type || "faction", alignment: f.alignment || "", leader: f.leader || "", description: fullDesc + extraText, region };
     });
-    topWorldFiltered.forEach(f => {
+    scoredWorld.forEach(f => {
       // Digest factions use "goals" not "purpose"/"description" — check all fields
       const descParts = [f.purpose, f.description, f.lore, f.goals].filter(Boolean);
       const fullDesc = descParts.join(" ").trim() || "";
@@ -1847,50 +2092,50 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
         // showing; anything else means accepting the dialog quietly moves it.
         const _heldFactionId = actor.getFlag(MODULE_ID, "factionId") ?? null;
         const _heldIsListed = !!_heldFactionId && existingFactions.some(f => f.id === _heldFactionId);
+        // ⚠️ THE BEST ROW, not the best SCENE row (2026-09-23). The old default
+        // reached for the top canonical faction even when a world faction had
+        // outscored it, which is the same sort-thrown-away bug as the display.
+        const _best = topCombined[0] ?? combined[0] ?? null;
         const defaultFactionValue = _heldIsListed ? _heldFactionId
-          : (topCanonicalFiltered.length
-          ? `__canonical__:${topCanonicalFiltered[0]._idx}`
+          : (_best
+          ? (_best._source === "canonical" ? `__canonical__:${_best._idx}` : `__world__:${_best._widx}`)
           : (existingFactions.length ? existingFactions[0].id
           : (_isCivilianBase(creatureBase) ? "__none__" : "__new__")));
 
-        if (topCanonicalFiltered.length) {
-          factionOptionsHtml += `<optgroup label="Scene: ${sceneName}">`;
-          factionOptionsHtml += topCanonicalFiltered.map(f => {
-            const val = `__canonical__:${f._idx}`;
-            const alAbbr = _abbreviateAlignment(f.alignment);
-            const alStr = alAbbr ? ` [${alAbbr}]` : "";
-            const sel = val === defaultFactionValue ? "selected" : "";
-            return `<option value="${val}" ${sel}>${f.name} \u2014 ${f.type || "faction"}${alStr}</option>`;
-          }).join("");
-          factionOptionsHtml += `</optgroup>`;
+        // ⚠️ EVERY CANDIDATE STAYS IN HAND. The cap is a display choice, not a
+        // filter: his search has to be able to reach the four hundredth one.
+        const _recNames = new Set((recommendations ?? [])
+            .map(r => String(r?.name ?? "").toLowerCase()).filter(Boolean));
+        const allRows = [];
+        // combined is every candidate that scored; topCombined additionally
+        // carries any recommendation that scored out and was forced back in.
+        const _forced = topCombined.filter(f => !combined.includes(f));
+        for (const f of [...combined, ..._forced]) {
+            allRows.push(_factionRow(f, {
+                value: f._source === "canonical" ? `__canonical__:${f._idx}` : `__world__:${f._widx}`,
+                where: f._source === "canonical" ? `this scene` : `your world`,
+                rec: _recNames.has((f.name || "").toLowerCase()),
+                score: f._score ?? 0,
+            }));
+        }
+        for (const f of existingFactions) {
+            // Scored by the same rule as everything else, because "best first"
+            // has to mean the same thing for a faction already in play.
+            let sc = 0;
+            try { sc = _scoreFactionForDialog(f, creatureType, creatureSubtype, creatureBase, sceneIntel, sceneName, actor); }
+            catch (_) { sc = 0; }
+            allRows.push(_factionRow(f, {
+                value: f.id,
+                where: `already in play`,
+                members: f.members?.length ?? 0,
+                rec: _recNames.has((f.name || "").toLowerCase()),
+                // A faction he is already using is never scored out of the list.
+                score: Math.max(sc, 1),
+            }));
         }
 
-        if (topWorldFiltered.length) {
-          factionOptionsHtml += `<optgroup label="World Digest">`;
-          factionOptionsHtml += topWorldFiltered.map(f => {
-            const val = `__world__:${f._widx}`;
-            const alAbbr = _abbreviateAlignment(f.alignment);
-            const alStr = alAbbr ? ` [${alAbbr}]` : "";
-            const sel = val === defaultFactionValue ? "selected" : "";
-            return `<option value="${val}" ${sel}>${f.name} \u2014 ${f.type || "faction"}${alStr}</option>`;
-          }).join("");
-          factionOptionsHtml += `</optgroup>`;
-        }
-
-        if (existingFactions.length) {
-          factionOptionsHtml += `<optgroup label="Already on Scene">`;
-          factionOptionsHtml += existingFactions.map(f => {
-            const mc = f.members?.length ?? 0;
-            const sel = f.id === defaultFactionValue ? "selected" : "";
-            return `<option value="${f.id}" ${sel}>${f.name} \u2014 ${f.type} (${mc} member${mc !== 1 ? "s" : ""})</option>`;
-          }).join("");
-          factionOptionsHtml += `</optgroup>`;
-        }
-
-        factionOptionsHtml += `<optgroup label="Other">`;
-        factionOptionsHtml += `<option value="__new__" ${"__new__" === defaultFactionValue ? "selected" : ""}>\u2728 Generate New Faction</option>`;
-        factionOptionsHtml += `<option value="__none__" ${"__none__" === defaultFactionValue ? "selected" : ""}>\u2014 No Faction</option>`;
-        factionOptionsHtml += `</optgroup>`;
+        const _initialList = _renderFactionOptions(allRows, { selected: defaultFactionValue, limit: 20 });
+        factionOptionsHtml = _initialList.html;
 
         // ── Build the default info panel content ──
         const defaultMeta = factionMeta[defaultFactionValue] || factionMeta["__none__"];
@@ -1943,6 +2188,20 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
               <div style="font-size:1em; text-transform:uppercase; letter-spacing:0.05em; color:#8b6914; font-weight:bold; margin-bottom:6px;">
                 <i class="fas fa-flag"></i> Faction
               </div>
+              <!-- ⚠️ SEARCH (2026-09-23). His case: "Let's say I want it to belong
+                   to the lawful good god of Lathander... I want to be able to type
+                   in the search bar for factions, like whatever lawful good, and
+                   for it to come give me a lawful good faction. Real ones that
+                   exist, because we're trying to stay away from creating
+                   factions." So it searches what the world already has, across
+                   name, type, alignment, region and the faction's own words, and
+                   creating one by hand is the last resort at the bottom. -->
+              <input type="text" name="factionSearch" value="" placeholder="Search factions: name, type, alignment, or words in their description…"
+                     autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+                     style="width:100%; padding:8px 10px; margin-bottom:6px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1em; color-scheme:light;">
+              <div class="ace-faction-count" style="font-size:0.85em; color:#666; margin-bottom:6px;">
+                Showing the ${_initialList.shown} best of ${_initialList.total}. Type above to search all of them.
+              </div>
               <select name="factionChoice" style="width:100%; padding:12px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1.1em; font-weight:600; margin-bottom:8px; line-height:1.4; color-scheme:light;">
                 ${factionOptionsHtml}
               </select>
@@ -1958,10 +2217,10 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
               </div>
               <div style="display:flex; gap:6px; flex-wrap:wrap;">
                 <label style="flex:1; min-width:90px; cursor:pointer; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; font-size:0.95em; color:#222; display:flex; align-items:center; gap:6px;">
-                  <input type="radio" name="genderOverride" value="auto" checked style="accent-color:#d4af37;"> Auto
+                  <input type="radio" name="genderOverride" value="auto" style="accent-color:#d4af37;"> Auto
                 </label>
                 <label style="flex:1; min-width:90px; cursor:pointer; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; font-size:0.95em; color:#222; display:flex; align-items:center; gap:6px;">
-                  <input type="radio" name="genderOverride" value="male" style="accent-color:#d4af37;"> Male
+                  <input type="radio" name="genderOverride" value="male" checked style="accent-color:#d4af37;"> Male
                 </label>
                 <label style="flex:1; min-width:90px; cursor:pointer; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; font-size:0.95em; color:#222; display:flex; align-items:center; gap:6px;">
                   <input type="radio" name="genderOverride" value="female" style="accent-color:#d4af37;"> Female
@@ -1971,7 +2230,7 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 </label>
               </div>
               <div style="font-size:0.85em; color:#666; margin-top:4px; line-height:1.4;">
-                Auto = ACE decides from the portrait and the statblock, then writes the answer down so the voice matches the name. Pick one to lock it.
+                Male unless you say otherwise. Auto lets ACE decide from the portrait and the statblock, then writes the answer down so the voice matches the name.
               </div>
             </div>
 
@@ -1998,47 +2257,66 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
               </div>
             </div>
 
-            <!-- Rename NPC Checkbox -->
-            <div style="padding:8px 10px; background:#f5f5f5; border:1px solid #ccc; border-radius:6px; margin-bottom:8px;">
-              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                <input type="checkbox" name="rename" ${(creatureType === "beast" || creatureType === "ooze" || creatureType === "plant" || creatureType === "swarm") ? "" : "checked"} ${(creatureType === "beast" || creatureType === "ooze" || creatureType === "plant" || creatureType === "swarm") ? "disabled" : ""} style="accent-color:#d4af37; width:16px; height:16px;">
-                <div>
-                  <strong style="font-size:1.05em; color:#222;">Rename NPC</strong>
-                  <span style="font-size:0.95em; color:#555;"> \u2014 AI gives the bio's protagonist a personal name (e.g. "Gronk" instead of "Goblin"). Uncheck to keep the species label.</span>
-                </div>
-              </label>
-            </div>
+            <!-- ⚠️🔴 DISPLAY NAME ONLY (his design, 2026-09-23, after three
+                 goes at it). What went wrong before: the heading said Display
+                 Name and the first line under it was the SHEET name, so the
+                 first thing read looked like the answer. "People read from up
+                 to down." So: the scope first, the three choices next, every
+                 one of them naming the same thing, and the sheet last as a
+                 reassurance rather than a choice.
+                 The two names below are read off THIS creature. Nothing here
+                 is a literal. -->
+            <div style="padding:10px 12px; background:#f5f5f5; border:1px solid #ccc; border-radius:6px; margin-bottom:8px;">
+              <div style="font-size:1.05em; color:#222; font-weight:700; margin-bottom:2px;">
+                DISPLAY NAME ONLY
+              </div>
+              <div style="font-size:0.95em; color:#555; margin-bottom:8px;">
+                Nothing here renames the sheet.
+              </div>
 
-            <!-- The name itself, typed (2026-09-22, his rule: "I want to be
-                 able to change the flavor name if I want, so I need a box for
-                 that."). Prefilled with what is on the plate now, so leaving it
-                 alone changes nothing and typing in it wins over the AI. -->
-            <div style="padding:8px 10px; background:#f5f5f5; border:1px solid #ccc; border-radius:6px; margin-bottom:8px;">
-              <label style="display:block; font-size:1.05em; color:#222; font-weight:600; margin-bottom:4px;">Name on the token</label>
-              <input type="text" name="flavorName" value="${foundry.utils.escapeHTML(String(tokenDoc.name ?? ""))}"
-                     placeholder="Leave as is, or type the name you want"
-                     style="width:100%; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1.05em; color-scheme:light;">
+              <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; margin-bottom:6px;">
+                <input type="radio" name="nameChoice" value="leave" checked style="accent-color:#d4af37; margin-top:3px;">
+                <span style="font-size:1em; color:#222;">Leave it. The display name stays &ldquo;${foundry.utils.escapeHTML(String(tokenDoc.name ?? actor.name ?? ""))}&rdquo;</span>
+              </label>
+
+              <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; margin-bottom:6px;">
+                <input type="radio" name="nameChoice" value="ace" style="accent-color:#d4af37; margin-top:3px;">
+                <span style="font-size:1em; color:#222;">Let ACE pick the display name</span>
+              </label>
+
+              <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer;">
+                <input type="radio" name="nameChoice" value="manual" style="accent-color:#d4af37; margin-top:3px;">
+                <span style="font-size:1em; color:#222;">Manually type the display name:</span>
+              </label>
+              <input type="text" name="flavorName" value="" placeholder="type it here"
+                     style="width:100%; margin-top:6px; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1.05em; color-scheme:light;">
               <div style="font-size:0.9em; color:#555; margin-top:4px;">
-                Yours beats the AI's. The sheet in the sidebar is never renamed.
+                Also used in any new biography.
+              </div>
+
+              <div style="font-size:0.9em; color:#555; margin-top:10px; padding-top:8px; border-top:1px solid #ddd;">
+                The sheet stays &ldquo;${foundry.utils.escapeHTML(String(actor.name ?? ""))}&rdquo;. Rules, art and search use that one.
               </div>
             </div>
 
-            <!-- Write a new biography (2026-09-22, his rule: "I might want to
-                 keep the bio... I just want a checkmark on whether it's going to
-                 rewrite the bio or not."). OFF by default: nothing he already
-                 has is replaced unless he asks for it.
-                 ⚠️ ONLY ON A PRESS. A token drop writes its biography through
-                 its own pipeline as it always has; putting the tick there would
-                 be a second switch over the same thing. -->
+            <!-- ⚠️ A BUTTON, NOT A TICK (his call, 2026-09-23: "I think I want
+                 a button where you press it, and it opens up a whole thing
+                 about the biography... a whole new window with the editable
+                 whatever"). A tick could only mean "replace it with an AI one";
+                 the window can write one, take one he pastes, or add to what is
+                 there. Press only: a token drop writes its biography through
+                 its own pipeline, and a second switch over the same thing is
+                 how the last one confused him. -->
             <div style="padding:8px 10px; background:#f5f5f5; border:1px solid #ccc; border-radius:6px; margin-bottom:8px;
-                        display:${tokenDoc._aceGmPress ? "block" : "none"};">
-              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                <input type="checkbox" name="rewriteBio" style="accent-color:#d4af37; width:16px; height:16px;">
-                <div>
-                  <strong style="font-size:1.05em; color:#222;">Write a new biography</strong>
-                  <span style="font-size:0.95em; color:#555;"> \u2014 the AI writes one for this creature, using the name above. Leave it off to keep the biography it has.</span>
-                </div>
-              </label>
+                        display:${gmPress ? "block" : "none"};">
+              <button type="button" name="editBio"
+                      style="width:100%; padding:10px 14px; font-size:1.05em; font-weight:700; cursor:pointer;
+                             background:#1d1710; color:#f0d98a; border:2px solid #d4af37; border-radius:6px;">
+                <i class="fas fa-feather-pointed"></i> Biography&hellip;
+              </button>
+              <div style="font-size:0.9em; color:#555; margin-top:4px;">
+                Opens its own window: write one with the AI, paste your own, or add to what is there.
+              </div>
             </div>
 
             <!-- Persistent NPC Checkbox -->
@@ -2073,12 +2351,21 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
 
                         // Read faction (dropdown)
                         const factionChoice = html.find('select[name="factionChoice"]').val() || "__none__";
+                        // "Create a faction called X" carries the name he typed.
+                        const namedFaction = String(factionChoice).startsWith("__named__:")
+                            ? String(factionChoice).slice("__named__:".length).trim() : "";
 
                         // Read auto-link
                         const autoLink = html.find('input[name="autoLink"]').is(':checked');
 
-                        // Read rename preference (overrides the outer smart-setup dialog's choice)
-                        const rename = html.find('input[name="rename"]').is(':checked');
+                        // ⚠️ ONE QUESTION, THREE ANSWERS (2026-09-23). "Leave
+                        // it", "let ACE pick" and "type it myself" all write the
+                        // same thing, the display name, and the old pair of
+                        // controls could contradict each other.
+                        const nameChoice = String(html.find('input[name="nameChoice"]:checked').val() || "leave");
+                        // The renamer's old permission flag, derived from his
+                        // choice: it may only act when he asked ACE to pick.
+                        const rename = nameChoice === "ace";
 
                         // Read gender override (auto / male / female / androgynous)
                         const genderOverride = html.find('input[name="genderOverride"]:checked').val() || "auto";
@@ -2110,12 +2397,14 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                         // different from what is on the plate: an untouched box
                         // must never be read as a rename.
                         const typedName = String(html.find('input[name="flavorName"]').val() ?? "").trim();
-                        const flavorName = (typedName && typedName !== String(tokenDoc.name ?? "").trim())
+                        // Only when he picked that row. A name left in the box
+                        // under an unpicked radio is not an instruction.
+                        const flavorName = (nameChoice === "manual"
+                            && typedName && typedName !== String(tokenDoc.name ?? "").trim())
                             ? typedName : "";
-                        const rewriteBio = html.find('input[name="rewriteBio"]').is(':checked');
 
                         resolve({ factionId, isNew, role, origin, originCustom, autoLink, rename, genderOverride,
-                                  speciesOverride, flavorName, rewriteBio });
+                                  speciesOverride, nameChoice, flavorName, namedFaction });
                     }
                 },
                 skip: {
@@ -2139,8 +2428,62 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
             const el = d.element?.[0] ?? document.querySelector(".ace-npc-identity-dialog");
             if (!el) return;
 
+            // ── Typing IS picking (2026-09-23) ──────────────────────────
+            // ⚠️ A name typed under an unticked radio would be thrown away on
+            // Save, and he would have no way of knowing why. Touching the box
+            // picks the row it belongs to.
+            const _nameBox = el.querySelector('input[name="flavorName"]');
+            const _manualRadio = el.querySelector('input[name="nameChoice"][value="manual"]');
+            if (_nameBox && _manualRadio) {
+                const _pickManual = () => { if (!_manualRadio.checked) _manualRadio.checked = true; };
+                _nameBox.addEventListener("input", _pickManual);
+                _nameBox.addEventListener("focus", _pickManual);
+            }
+
+            // ── The Biography button opens the one biography window ──────
+            const _bioBtn = el.querySelector('button[name="editBio"]');
+            if (_bioBtn) {
+                _bioBtn.addEventListener("click", async () => {
+                    try {
+                        const { BiographyEditor } = await import("./bio-editor.mjs");
+                        BiographyEditor.open(tokenDoc);
+                    } catch (err) {
+                        console.error(`${TAG} | the biography window could not open:`, err);
+                        ui.notifications?.error("ACE: the biography window could not open — see the console.");
+                    }
+                });
+            }
+
             // Faction metadata for info panel (closure reference — mutable)
             let _factionMeta = factionMeta;
+            // Every candidate, so the search reaches past what is on screen.
+            let _allRows = allRows;
+            const _recNames2 = _recNames;
+
+            const _syncCount = (r) => {
+                const cnt = el.querySelector(".ace-faction-count");
+                if (!cnt) return;
+                cnt.textContent = r.total === r.shown
+                    ? `${r.total} faction${r.total === 1 ? "" : "s"} listed.`
+                    : `Showing the ${r.shown} best of ${r.total}. Type above to search all of them.`;
+            };
+
+            // ── The search box ─────────────────────────────────────────
+            const _searchBox = el.querySelector('input[name="factionSearch"]');
+            if (_searchBox) {
+                _searchBox.addEventListener("input", () => {
+                    const sel = el.querySelector('select[name="factionChoice"]');
+                    if (!sel) return;
+                    const keep = sel.value;
+                    const rendered = _renderFactionOptions(_allRows, { query: _searchBox.value, selected: keep, limit: 20 });
+                    sel.innerHTML = rendered.html;
+                    _syncCount(rendered);
+                    // ⚠️ A FILTER MUST NEVER UN-CHOOSE WHAT WAS CHOSEN. Same rule
+                    // as the origin rebuild, same reason (2026-08-23, live).
+                    if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+                    sel.dispatchEvent(new Event("change"));
+                });
+            }
 
             // ── Closure data for dynamic origin-based faction rebuild ──
             const _sceneName = sceneName;
@@ -2251,41 +2594,32 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 // Update closure reference
                 _factionMeta = newMeta;
 
-                // Rebuild dropdown HTML
-                const sectionLabel = isLocal ? `Scene: ${_sceneName}` : `Scene: ${_sceneName} (all regions)`;
-                let html = "";
-                if (capCanon.length) {
-                    html += `<optgroup label="${sectionLabel}">`;
-                    html += capCanon.map(f => {
-                        const val = `__canonical__:${f._idx}`;
-                        const alAbbr = _abbreviateAlignment(f.alignment);
-                        const alStr = alAbbr ? ` [${alAbbr}]` : "";
-                        return `<option value="${val}">${f.name} \u2014 ${f.type || "faction"}${alStr}</option>`;
-                    }).join("");
-                    html += `</optgroup>`;
+                // ⚠️ ONE RENDERER (2026-09-23). This used to build its own
+                // option list, in its own order, with its own labels — a second
+                // copy of the thing that was already wrong in the first one.
+                const _rows = [];
+                for (const f of capped) {
+                    _rows.push(_factionRow(f, {
+                        value: f._source === "canonical" ? `__canonical__:${f._idx}` : `__world__:${f._widx}`,
+                        where: f._source === "canonical" ? `this scene` : `your world`,
+                        rec: _recNames.has((f.name || "").toLowerCase()),
+                        score: f._score ?? 0,
+                    }));
                 }
-                if (capWorld.length) {
-                    html += `<optgroup label="World${isLocal ? " Digest" : " — All Regions"}">`;
-                    html += capWorld.map(f => {
-                        const val = `__world__:${f._widx}`;
-                        const alAbbr = _abbreviateAlignment(f.alignment);
-                        const alStr = alAbbr ? ` [${alAbbr}]` : "";
-                        return `<option value="${val}">${f.name} \u2014 ${f.type || "faction"}${alStr}</option>`;
-                    }).join("");
-                    html += `</optgroup>`;
+                for (const f of _existingFactions) {
+                    _rows.push(_factionRow(f, {
+                        value: f.id,
+                        where: `already in play`,
+                        members: f.members?.length ?? 0,
+                        rec: _recNames.has((f.name || "").toLowerCase()),
+                        score: 1,
+                    }));
                 }
-                if (_existingFactions.length) {
-                    html += `<optgroup label="Already on Scene">`;
-                    html += _existingFactions.map(f => {
-                        const mc = f.members?.length ?? 0;
-                        return `<option value="${f.id}">${f.name} \u2014 ${f.type} (${mc} member${mc !== 1 ? "s" : ""})</option>`;
-                    }).join("");
-                    html += `</optgroup>`;
-                }
-                html += `<optgroup label="Other">`;
-                html += `<option value="__new__">\u2728 Generate New Faction</option>`;
-                html += `<option value="__none__">\u2014 No Faction</option>`;
-                html += `</optgroup>`;
+                _allRows = _rows;
+                const _q = el.querySelector('input[name="factionSearch"]')?.value ?? "";
+                const _rendered = _renderFactionOptions(_rows, { query: _q, selected: chosenBefore, limit: MAX });
+                const html = _rendered.html;
+                _syncCount(_rendered);
 
                 factionSelect.innerHTML = html;
 
@@ -2357,11 +2691,46 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
             const factionSelect = el.querySelector('select[name="factionChoice"]');
             const infoPanel = el.querySelector('.ace-faction-info');
             if (factionSelect && infoPanel) {
-                factionSelect.addEventListener("change", () => {
-                    const val = factionSelect.value;
+                const _paintInfo = async (val) => {
                     const meta = _factionMeta[val] || { name: val, type: "", description: "" };
+                    try { meta.strength = factionStrength(meta) ?? null; } catch (_) { meta.strength = null; }
                     infoPanel.innerHTML = _buildFactionInfoHtml(meta);
-                });
+
+                    // His own figure, typed here, wins from now on.
+                    const box = infoPanel.querySelector(".ace-strength-manual");
+                    if (box) {
+                        box.addEventListener("change", async () => {
+                            const typed = String(box.value ?? "").trim();
+                            if (!typed) return;
+                            await setFactionStrength(meta.name, typed);
+                            _paintInfo(factionSelect.value);
+                        });
+                    }
+
+                    // ⚠️ ASKED ONCE, AND ONLY WHEN HE IS LOOKING AT IT. An
+                    // estimate for four hundred factions on open would be four
+                    // hundred AI calls; this is one, for the one he selected,
+                    // and it is remembered.
+                    if (!meta.strength && meta.name
+                        && meta.name !== "No Faction" && meta.name !== "Generate New Faction") {
+                        const asked = val;
+                        estimateFactionStrength(meta).then(res => {
+                            if (!res || factionSelect.value !== asked) return;
+                            meta.strength = res;
+                            const pending = infoPanel.querySelector(".ace-strength-pending");
+                            if (pending) pending.outerHTML = `about ${res.text} <span style="font-weight:500; color:#555;">(${res.source})</span>`;
+                        }).catch(err => {
+                            console.warn(`${TAG} | the strength estimate failed for "${meta.name}":`, err);
+                            const pending = infoPanel.querySelector(".ace-strength-pending");
+                            if (pending) pending.textContent = "unknown";
+                        });
+                    }
+                };
+
+                factionSelect.addEventListener("change", () => { _paintInfo(factionSelect.value); });
+                // Paint it for whatever is selected when the dialog opens, so
+                // the first faction he sees is described like all the others.
+                _paintInfo(factionSelect.value);
             }
 
             // ── Force dropdown text visibility (bypasses ALL theme CSS) ──
@@ -3798,7 +4167,12 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
 
         if (setup.choice === "customize") {
             // ── Full dialog: existing NPC Identity Dialog ───────────────
-            const result = await showNpcIdentityDialog(tokenDoc, matching, creatureBase, sceneIntel, worldDigestFactions, bibleFactions, recommendations);
+            // ⚠️ TOLD, NOT SNIFFED (2026-09-23). The press mark is spent the
+            // moment this function reads it, so by the time the dialog drew
+            // itself the mark was gone and the press-only controls hid. His
+            // screenshot caught it: no Biography button on a press.
+            const result = await showNpcIdentityDialog(tokenDoc, matching, creatureBase, sceneIntel,
+                worldDigestFactions, bibleFactions, recommendations, { gmPress: isGmPress });
 
             // ⚠️🔴 A NAME HE TYPED IS THE LAST WORD (2026-09-22). Two lines
             // further down hand the AI's renamer back its permission from the
@@ -3823,9 +4197,22 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                     ui.notifications?.warn(`ACE: "${result.flavorName}" could not be written to the nameplate.`);
                 }
             }
-            // His tick, carried out to whoever pressed the button: the bio is
-            // rewritten only when he asked for it.
-            tokenDoc._aceRewriteBio = !!result?.rewriteBio;
+            // ⚠️ "LET ACE PICK" ACTS NOW (2026-09-23). It used to be a note
+            // the biography writer read later, so with no biography asked for
+            // it renamed nothing and said nothing. His words: "I have rename
+            // NPC checkmarked. That's really all I wanted to do, and it did
+            // not rename it."
+            if (isGmPress && result?.nameChoice === "ace") {
+                try {
+                    const { pickAndStampName } = await import("./bio-generator.mjs");
+                    const named = await pickAndStampName(actor, tokenDoc, { force: true });
+                    if (named.ok) ui.notifications?.info(`${actor.name} is shown as "${named.name}".`);
+                    else ui.notifications?.warn(`ACE could not name ${actor.name}: ${named.reason}.`);
+                } catch (err) {
+                    console.error(`${TAG} | naming ${actor.name} failed:`, err);
+                    ui.notifications?.error(`ACE could not name ${actor.name} — see the console.`);
+                }
+            }
 
             if (!result) {
                 // GM cancelled/skipped — truly skip, no silent auto-assignment
@@ -3870,6 +4257,35 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                         await tokenDoc.actor.setFlag(MODULE_ID, "speciesOverride", result.speciesOverride);
                     }
                 } catch (err) { console.debug("ACE: Engine | faction-registry origin/autoLink flag save non-fatal:", err); }
+            }
+
+            // ⚠️ HIS OWN FACTION, BY NAME (2026-09-23). The list is built from
+            // what his world already has, and "Generate New Faction" hands the
+            // name to the AI. Neither of those is "I want one called this".
+            if (result?.namedFaction) {
+                const wanted = String(result.namedFaction).trim();
+                // ⚠️ registerNamedFaction ALREADY joins one of that name rather
+                // than making a second. I wrote that check again here and then
+                // deleted it: building beside an engine that already does the
+                // job is the habit he called out on 08-11.
+                const made = await registerNamedFaction({
+                    name: wanted,
+                    type: getTemplate(creatureBase)?.type || "organization",
+                    description: "Created by hand from the NPC setup dialog.",
+                }, { sceneName, droppedBase: creatureBase });
+
+                if (made?.id) {
+                    await assignToFaction(tokenDoc, made.id, result.role || "");
+                    ui.notifications?.info(made.adopted
+                        ? `"${made.faction.name}" already existed — ${actor.name} joined it.`
+                        : `Created "${made.faction.name}" and put ${actor.name} in it.`);
+                    return { faction: made.faction, isSpy: false, spyFaction: null, role: result.role || "" };
+                }
+                // ⚠️ SAY IT. A creation that quietly failed looks exactly like a
+                // dialog that ignored him.
+                console.warn(`${TAG} | could not create the faction "${wanted}" for ${actor.name}.`);
+                ui.notifications?.error(`ACE could not create the faction "${wanted}". Nothing was changed.`);
+                return { faction: null, isSpy: false, spyFaction: null, role: result.role || "" };
             }
 
             if (result?.factionId?.startsWith("__canonical__:")) {

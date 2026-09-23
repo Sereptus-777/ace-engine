@@ -116,6 +116,9 @@ export function activateNpcChat() {
         // The flag beside it: put THIS token into a faction that already
         // exists. Token drops stay silent; this is the deliberate way in.
         import("./hud-faction.mjs").then(({ FactionHudButton }) => FactionHudButton.register()),
+        // The book beside them: the one window where a biography is read,
+        // written, pasted into or added to.
+        import("./bio-editor.mjs").then(({ BiographyEditor }) => BiographyEditor.register()),
         import("./companion-link.mjs").then(({ registerActorDirectoryContext, registerInitiativeHooks }) => {
             registerActorDirectoryContext();
             registerInitiativeHooks();

@@ -8,7 +8,7 @@
 
 import { AIHandler }                                             from "./conversation-engine.mjs";
 import { isAIFailure }                                           from "./ai-failure.mjs";
-import { writeBiography }                                        from "../bio-writer.mjs";
+import { writeBiography, appendToBiography }                                        from "../bio-writer.mjs";
 import { processTokenFaction, buildFactionBioContext,
          resolveCreatureBase, getAllFactions }                   from "./faction-registry.mjs";
 import { SocialProfileEngine }                                   from "./social-profile.mjs";
@@ -697,13 +697,53 @@ const STUB_REFERENCE_PATTERNS = [
  * @param {string} name
  * @returns {Promise<boolean>} whether it was written
  */
+/**
+ * Change the name a biography already written uses, without rewriting it.
+ *
+ * ⚠️ HIS POINT, 2026-09-23: "If it doesn't rename this token in the token's
+ * bio, then it's going to be all fucked up." Right. A creature renamed after
+ * its history was written had a history about somebody else, and the only fix
+ * on offer was spending an AI call to replace prose he might have liked.
+ *
+ * Whole words only, and nothing else in the text is touched.
+ */
+async function _renameInBiography(actor, oldName, newName) {
+    const from = String(oldName ?? "").trim();
+    const to   = String(newName ?? "").trim();
+    if (!actor || !from || !to || from === to) return false;
+    let changed = false;
+    try {
+        const esc = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        // Proven against "Grizzle's axe", "Grizzled veteran", "O'Grizzle" and
+        // "(Grizzle)": the possessive is renamed, the longer word and the other
+        // name are left alone. An apostrophe is barred BEFORE the name and
+        // allowed after it, which is exactly the difference between those two.
+        const re = new RegExp(`(?<![\\w'])${esc}(?![\\w])`, "g");
+        await appendToBiography(actor, (bio) => {
+            if (!bio) return null;
+            const next = bio.replace(re, to);
+            if (next === bio) return null;
+            changed = true;
+            return next;
+        }, "bio-rename");
+        console.log(changed
+            ? `${TAG} | the biography now calls ${actor.name} "${to}" instead of "${from}".`
+            : `${TAG} | the biography never used "${from}", so there was nothing to rename in it.`);
+    } catch (err) {
+        console.warn(`${TAG} | could not rename "${from}" inside the biography (non-fatal):`, err);
+    }
+    return changed;
+}
+
 export async function applyFlavorName(actor, tokenDocument, name) {
     const flavour = String(name ?? "").trim();
     if (!actor || !flavour || flavour === actor.name) return false;
+    let previous = "";
     try {
+        previous = String(actor.getFlag(MODULE_ID, "flavorName") ?? "").trim();
         // Already carrying exactly this name. Writing it again is four flag
         // writes that broadcast to every client and change nothing.
-        if (String(actor.getFlag(MODULE_ID, "flavorName") ?? "") === flavour) return true;
+        if (previous === flavour) return true;
     } catch (_) { /* unreadable flags: write it the long way below */ }
     try {
         const _species = resolveSpecies(actor, tokenDocument ?? null);
@@ -719,6 +759,11 @@ export async function applyFlavorName(actor, tokenDocument, name) {
             try { await tokenDocument.update({ displayName: 50 }); }
             catch (tokErr) { console.warn(`${TAG} | Nameplate visibility update failed (non-fatal):`, tokErr); }
         }
+        // ⚠️ A RENAME REACHES THE HISTORY TOO. Only when it HAD a name: a
+        // biography that says "the mind flayer" is talking about the species,
+        // and swapping those words would wreck the sentence rather than fix it.
+        if (previous) await _renameInBiography(actor, previous, flavour);
+
         console.log(`${TAG} | "${actor.name}" is known to the party as "${flavour}". `
             + `The sheet, the prototype and the token keep the creature name — the flavour name is `
             + `nameplate-only, and the sidebar finds it by either.`);
@@ -753,6 +798,131 @@ export function nameForBio(actor, tokenDocument = null) {
     const chosen = String(tokenDocument?._aceChosenName ?? "").trim();
     if (chosen) return chosen;
     return actor?.name || "Unknown Creature";
+}
+
+/**
+ * Pick a display name for a creature and put it on the token, in that order.
+ *
+ * ⚠️ ONE NAMER (2026-09-23). This lived inside the biography writer, so "let
+ * ACE pick the display name" could only happen while a biography was being
+ * written. His table found that the hard way: the Rename tick was on, no
+ * biography was asked for, and nothing renamed anything, in silence.
+ *
+ * @param {Actor} actor
+ * @param {TokenDocument} tokenDocument
+ * @param {object} [opts]
+ * @param {boolean} [opts.force]  he asked for this out loud, so the gates that
+ *   exist to stop AUTOMATIC renaming stand down: a name it already carries, a
+ *   name ACE does not judge generic, and the keep-the-label mark. What he
+ *   cannot override is a creature type that takes no personal name.
+ * @returns {Promise<{ok:boolean, name:string, reason:string}>} never throws.
+ */
+export async function pickAndStampName(actor, tokenDocument, { force = false } = {}) {
+    if (!actor || !tokenDocument) return { ok: false, name: "", reason: "no creature" };
+    try {
+        let _keptName = "";
+        let _pickedName = "";
+
+        const nameOf = actor?.name || "";
+        const cType  = actor?.system?.details?.type?.value || "";
+        const NO_NAME_TYPES = new Set(["beast", "ooze", "plant", "swarm", "construct"]);
+
+        // ⚠️ A NAME IT ALREADY HAS IS THE NAME. The picker on a token drop, and
+        // the box in the identity dialog, both settle this before we get here.
+        // Generating a second one would rename the creature he just named.
+        let heldFlavour = "";
+        try { heldFlavour = String(actor.getFlag(MODULE_ID, "flavorName") ?? "").trim(); }
+        catch (_) { heldFlavour = ""; }
+        // He asked for a new one out loud, so a name it already has is not an answer.
+        if (force) heldFlavour = "";
+
+        // ⚠️ THESE GATES ARE ABOUT AUTOMATIC RENAMING. Every one of them exists to
+        // stop ACE renaming a creature nobody asked it to, and every one of them was
+        // able to swallow a request he made by hand. `force` is that request.
+        const noNameType = NO_NAME_TYPES.has(String(cType).toLowerCase());
+        const wantsName = force
+            ? !noNameType
+            : (!heldFlavour && !noNameType && _isGenericName(nameOf, cType) && !tokenDocument._aceSkipRename);
+
+        if (force && noNameType) {
+            return { ok: false, name: "", reason: `a ${cType} is not given a personal name` };
+        }
+
+        if (heldFlavour) {
+            tokenDocument._aceChosenName = heldFlavour;
+            _keptName = heldFlavour;
+            console.log(`${TAG} | "${nameOf}" is already called "${heldFlavour}" — keeping it. `
+                + `The biography is written AFTER this, and is told that name.`);
+        }
+
+        if (wantsName) {
+            const namer = await import("./namer.mjs");
+            const { gender, source: genderSource } = await namer.resolveAndRecordGender(actor, tokenDocument);
+
+            // Species. ⚠️ resolveSpecies ALREADY EXISTS in npc-identity.mjs and
+            // already honours the GM's speciesOverride first, then dnd5e's
+            // custom/subtype/type fields, then the base actor's name. I started
+            // writing a second one and stopped: building beside an engine that
+            // already does the job is the exact habit Johnny called out on
+            // 08-11. Grep for the capability, not the feature name.
+            //
+            // The override is what answers "this isn't a goblin, it's a
+            // hobgoblin" — the GM is looking at the creature and ACE is reading
+            // a label, so the GM wins.
+            const { resolveSpecies } = await import("./npc-identity.mjs");
+            const species = resolveSpecies(actor, tokenDocument)
+                || String(nameOf).toLowerCase().replace(/\s*\(.*$/, "").split(/\s+/)[0]
+                || cType;
+
+            const role = (() => {
+                try { return actor.getFlag(MODULE_ID, "factionRole") || ""; } catch (_) { return ""; }
+            })();
+
+            // Kin, purely as a style anchor, so a warband reads like one culture.
+            // ⚠️ Their NAMES only. The faction's own name is never sent — that is
+            // how "Mind Flayers" got in — and the validator bars it regardless.
+            const kin = [];
+            try {
+                for (const t of canvas.scene?.tokens ?? []) {
+                    if (t.id === tokenDocument.id || kin.length >= 3) continue;
+                    const n = t.actor?.getFlag?.(MODULE_ID, "flavorName") || t.name;
+                    if (n && !_isGenericName(n, cType)) kin.push(n);
+                }
+            } catch (_) { /* style anchors are optional */ }
+
+            const taken  = namer.takenNames();
+            const barred = await namer.barredNames();
+            const result = await namer.generateName({
+                species, role, gender, kin, taken, barred,
+                creatureType: cType,
+            });
+            tokenDocument._aceChosenName = result.name;
+
+            // ⚠️🔴 STAMPED HERE, NOT AFTER THE BIOGRAPHY (2026-09-22, his order:
+            // "1. Pick flavorName. 2. Stamp it on the nameplate and the
+            // flavorName flag only. 3. Write the bio with that name."). It used
+            // to be written at the very end, so every early return between here
+            // and there — a refused AI call, an empty answer, a fallback string
+            // — threw away a name that had already been chosen, and the plate
+            // kept the statblock label. The stamp is the nameplate and the flag.
+            // The sheet, the prototype and the token are not touched by it.
+            await applyFlavorName(actor, tokenDocument, result.name);
+
+            _pickedName = result.name;
+            console.log(`${TAG} | "${nameOf}" is now called "${result.name}" `
+                + `(${species}${role ? `, ${role}` : ""}, ${gender} — ${genderSource}; from the ${result.source}). `
+                + `The nameplate says so already; the biography is written next, and is told the name.`);
+        }
+
+        if (_pickedName) return { ok: true, name: _pickedName, reason: "named" };
+        if (_keptName)   return { ok: true, name: _keptName, reason: "already named" };
+        return { ok: false, name: "", reason: `"${nameOf}" is not a name ACE replaces on its own` };
+    } catch (err) {
+        // ⚠️ NEVER LET NAMING KILL THE BIOGRAPHY. An unnamed creature with a
+        // good bio is a small problem; no bio at all is a broken feature.
+        console.warn(`${TAG} | Naming failed for ${actor?.name}:`, err);
+        return { ok: false, name: "", reason: String(err?.message ?? err) };
+    }
 }
 
 export function isRealBiography(bioHtml) {
@@ -2032,91 +2202,10 @@ async function _generateBio(tokenDocument) {
     // ⚠️ THE NAMER GETS THREE THINGS AND NOTHING ELSE: what it is, what it does,
     // which gender. No faction, no scene, no location, no biography — those were
     // exactly the inputs that poisoned the old guess.
-    try {
-        const nameOf = actor?.name || "";
-        const cType  = actor?.system?.details?.type?.value || "";
-        const NO_NAME_TYPES = new Set(["beast", "ooze", "plant", "swarm", "construct"]);
-
-        // ⚠️ A NAME IT ALREADY HAS IS THE NAME. The picker on a token drop, and
-        // the box in the identity dialog, both settle this before we get here.
-        // Generating a second one would rename the creature he just named.
-        let heldFlavour = "";
-        try { heldFlavour = String(actor.getFlag(MODULE_ID, "flavorName") ?? "").trim(); }
-        catch (_) { heldFlavour = ""; }
-
-        const wantsName = !heldFlavour
-            && !NO_NAME_TYPES.has(String(cType).toLowerCase())
-            && _isGenericName(nameOf, cType)
-            && !tokenDocument._aceSkipRename;
-
-        if (heldFlavour) {
-            tokenDocument._aceChosenName = heldFlavour;
-            console.log(`${TAG} | "${nameOf}" is already called "${heldFlavour}" — keeping it. `
-                + `The biography is written AFTER this, and is told that name.`);
-        }
-
-        if (wantsName) {
-            const namer = await import("./namer.mjs");
-            const { gender, source: genderSource } = await namer.resolveAndRecordGender(actor, tokenDocument);
-
-            // Species. ⚠️ resolveSpecies ALREADY EXISTS in npc-identity.mjs and
-            // already honours the GM's speciesOverride first, then dnd5e's
-            // custom/subtype/type fields, then the base actor's name. I started
-            // writing a second one and stopped: building beside an engine that
-            // already does the job is the exact habit Johnny called out on
-            // 08-11. Grep for the capability, not the feature name.
-            //
-            // The override is what answers "this isn't a goblin, it's a
-            // hobgoblin" — the GM is looking at the creature and ACE is reading
-            // a label, so the GM wins.
-            const { resolveSpecies } = await import("./npc-identity.mjs");
-            const species = resolveSpecies(actor, tokenDocument)
-                || String(nameOf).toLowerCase().replace(/\s*\(.*$/, "").split(/\s+/)[0]
-                || cType;
-
-            const role = (() => {
-                try { return actor.getFlag(MODULE_ID, "factionRole") || ""; } catch (_) { return ""; }
-            })();
-
-            // Kin, purely as a style anchor, so a warband reads like one culture.
-            // ⚠️ Their NAMES only. The faction's own name is never sent — that is
-            // how "Mind Flayers" got in — and the validator bars it regardless.
-            const kin = [];
-            try {
-                for (const t of canvas.scene?.tokens ?? []) {
-                    if (t.id === tokenDocument.id || kin.length >= 3) continue;
-                    const n = t.actor?.getFlag?.(MODULE_ID, "flavorName") || t.name;
-                    if (n && !_isGenericName(n, cType)) kin.push(n);
-                }
-            } catch (_) { /* style anchors are optional */ }
-
-            const taken  = namer.takenNames();
-            const barred = await namer.barredNames();
-            const result = await namer.generateName({
-                species, role, gender, kin, taken, barred,
-                creatureType: cType,
-            });
-            tokenDocument._aceChosenName = result.name;
-
-            // ⚠️🔴 STAMPED HERE, NOT AFTER THE BIOGRAPHY (2026-09-22, his order:
-            // "1. Pick flavorName. 2. Stamp it on the nameplate and the
-            // flavorName flag only. 3. Write the bio with that name."). It used
-            // to be written at the very end, so every early return between here
-            // and there — a refused AI call, an empty answer, a fallback string
-            // — threw away a name that had already been chosen, and the plate
-            // kept the statblock label. The stamp is the nameplate and the flag.
-            // The sheet, the prototype and the token are not touched by it.
-            await applyFlavorName(actor, tokenDocument, result.name);
-
-            console.log(`${TAG} | "${nameOf}" is now called "${result.name}" `
-                + `(${species}${role ? `, ${role}` : ""}, ${gender} — ${genderSource}; from the ${result.source}). `
-                + `The nameplate says so already; the biography is written next, and is told the name.`);
-        }
-    } catch (err) {
-        // ⚠️ NEVER LET NAMING KILL THE BIOGRAPHY. An unnamed creature with a good
-        // bio is a small problem; no bio at all is a broken feature.
-        console.warn(`${TAG} | Naming failed for ${actor?.name}; the biography will be written without a name:`, err);
-    }
+    // ⚠️ ONE NAMER, CALLED HERE. The picking, the gates and the stamp all live
+    // in pickAndStampName, because the identity dialog needs exactly the same
+    // thing without writing a biography at all.
+    await pickAndStampName(actor, tokenDocument);
 
     //── Build prompt and call AI ─────────────────────────────────────────
     const { systemPrompt, userMsg, tokenImage } = await _buildPrompt(tokenDocument, factionResult, socialProfile, canonBio);

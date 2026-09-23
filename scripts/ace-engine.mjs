@@ -3295,6 +3295,21 @@ Hooks.once("ready", async () => {
         const { assignFactionFromHud } = await import("./npc/hud-faction.mjs");
         return assignFactionFromHud(doc);
       },
+
+      /**
+       * Open the one biography window on a creature: read it, change it, paste
+       * one in, add to it, or have the AI write one (2026-09-23). Same window
+       * the book on the token HUD opens.
+       */
+      editBiography: async (target = null) => {
+        const t = target ?? canvas.tokens?.controlled?.[0]?.document ?? null;
+        if (!t) {
+          ui.notifications?.warn("ACE: select a token first, then press the book on its HUD.");
+          return null;
+        }
+        const { BiographyEditor } = await import("./npc/bio-editor.mjs");
+        return BiographyEditor.open(t);
+      },
       /**
        * Explain, without changing anything, which faction the selected creature
        * would join and why — every candidate, its score and the reasons behind
