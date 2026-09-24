@@ -2134,6 +2134,38 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
             }));
         }
 
+        // ⚠️🔴 WHAT IT ALREADY IS CANNOT FALL OFF THE LIST (2026-09-23). The
+        // rows come from the factions that SCORED against this creature plus the
+        // ones already in play, and its own faction is not guaranteed to be in
+        // either. His: "it didn't list 1,000 Fists as an option when that was
+        // the original fucking option. I had to search it."
+        //
+        // So it is added by hand, first, outside the scoring and outside the
+        // cap. A creature's current faction is a fact, not a recommendation.
+        if (_heldFactionId) {
+            const heldFaction = getFaction(_heldFactionId);
+            if (heldFaction) {
+                const already = allRows.findIndex(r => r.value === _heldFactionId);
+                if (already >= 0) allRows.splice(already, 1);
+                allRows.unshift(_factionRow(heldFaction, {
+                    value: _heldFactionId,
+                    where: `in it now`,
+                    members: heldFaction.members?.length ?? 0,
+                    rec: false,
+                    score: Number.MAX_SAFE_INTEGER,
+                }));
+                if (!factionMeta[_heldFactionId]) {
+                    const descParts = [heldFaction.purpose, heldFaction.lore, heldFaction.description].filter(Boolean);
+                    factionMeta[_heldFactionId] = {
+                        name: heldFaction.name, type: heldFaction.type || "faction",
+                        alignment: heldFaction.alignment || "", leader: heldFaction.leader || "",
+                        description: descParts.join(" ").trim(), region: heldFaction.region || "",
+                        members: heldFaction.members?.length ?? 0,
+                    };
+                }
+            }
+        }
+
         const _initialList = _renderFactionOptions(allRows, { selected: defaultFactionValue, limit: 20 });
         factionOptionsHtml = _initialList.html;
 
@@ -2281,12 +2313,14 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
 
               <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; margin-bottom:6px;">
                 <input type="radio" name="nameChoice" value="ace" style="accent-color:#d4af37; margin-top:3px;">
-                <span style="font-size:1em; color:#222;">Let ACE pick the display name</span>
+                <span style="font-size:1em; color:#222;">Let ACE pick the display name.
+                  <span style="color:#666;">(Opens biography)</span></span>
               </label>
 
               <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer;">
                 <input type="radio" name="nameChoice" value="manual" style="accent-color:#d4af37; margin-top:3px;">
-                <span style="font-size:1em; color:#222;">Manually type the display name:</span>
+                <span style="font-size:1em; color:#222;">Manually type the display name.
+                  <span style="color:#666;">(Opens biography)</span></span>
               </label>
               <input type="text" name="flavorName" value="" placeholder="type it here"
                      style="width:100%; margin-top:6px; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1.05em; color-scheme:light;">
@@ -2337,8 +2371,11 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
             content: dialogHtml,
             buttons: {
                 create: {
-                    icon: '<i class="fas fa-star"></i>',
-                    label: "Create NPC",
+                    icon: '<i class="fas fa-floppy-disk"></i>',
+                    // ⚠️ "Create NPC" did not read as "save what I picked", and
+                    // he could not find the save button because it was not
+                    // called one (2026-09-23).
+                    label: "Save",
                     callback: (html) => {
                         // Read role (chip or custom)
                         const chipRole = html.find('input[name="npcRole"]:checked').val() || "";
@@ -2409,7 +2446,7 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 },
                 skip: {
                     icon: '<i class="fas fa-times"></i>',
-                    label: "Skip",
+                    label: "Cancel",
                     callback: () => resolve(null)
                 }
             },
@@ -2438,6 +2475,38 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 const _pickManual = () => { if (!_manualRadio.checked) _manualRadio.checked = true; };
                 _nameBox.addEventListener("input", _pickManual);
                 _nameBox.addEventListener("focus", _pickManual);
+            }
+
+            // ── An empty name box stops the save ───────────────────────
+            // ⚠️ NO SILENT FALLBACK (2026-09-23). If he picked "manually type"
+            // and typed nothing, the old behaviour would have quietly treated it
+            // as "leave it" and he would have every reason to say it ignored
+            // him. The placeholder is ghost text, never a value, so an untouched
+            // box really is empty.
+            const _saveBtn = el.querySelector("button.create, button[data-button='create'], .dialog-button.create");
+            if (_saveBtn && _nameBox && _manualRadio) {
+                const _warn = document.createElement("div");
+                Object.assign(_warn.style, {
+                    display: "none", marginTop: "4px", fontSize: "0.95em",
+                    color: "#a3261f", fontWeight: "600",
+                });
+                _warn.textContent = "Type the display name, or pick one of the other two choices.";
+                _nameBox.insertAdjacentElement("afterend", _warn);
+
+                _saveBtn.addEventListener("click", (ev) => {
+                    if (!_manualRadio.checked) return;
+                    if (String(_nameBox.value ?? "").trim()) return;
+                    ev.preventDefault();
+                    ev.stopImmediatePropagation();
+                    _warn.style.display = "block";
+                    _nameBox.style.border = "2px solid #a3261f";
+                    _nameBox.focus();
+                }, true);
+
+                _nameBox.addEventListener("input", () => {
+                    _warn.style.display = "none";
+                    _nameBox.style.border = "1px solid #bbb";
+                });
             }
 
             // ── The Biography button opens the one biography window ──────
@@ -2607,6 +2676,7 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                     }));
                 }
                 for (const f of _existingFactions) {
+                    if (f.id === _heldFactionId) continue;   // added first, below
                     _rows.push(_factionRow(f, {
                         value: f.id,
                         where: `already in play`,
@@ -2614,6 +2684,18 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                         rec: _recNames.has((f.name || "").toLowerCase()),
                         score: 1,
                     }));
+                }
+                // ⚠️ Changing the ORIGIN filter must not hide what it already is
+                // any more than the ranking may.
+                if (_heldFactionId) {
+                    const heldNow = getFaction(_heldFactionId);
+                    if (heldNow) {
+                        _rows.unshift(_factionRow(heldNow, {
+                            value: _heldFactionId, where: `in it now`,
+                            members: heldNow.members?.length ?? 0, rec: false,
+                            score: Number.MAX_SAFE_INTEGER,
+                        }));
+                    }
                 }
                 _allRows = _rows;
                 const _q = el.querySelector('input[name="factionSearch"]')?.value ?? "";
@@ -4192,6 +4274,29 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
             // over. Both of those lines read this.
             const _gmNamed = !!result?.flavorName;
 
+            // What the table was calling it a second ago. Read BEFORE anything
+            // is applied, because that is the name the biography will be using.
+            const _nameBefore = String(tokenDoc.name ?? actor.name ?? "").trim();
+
+            // ⚠️ A RENAME OPENS THE BIOGRAPHY (his rule, 2026-09-23). Both
+            // renaming rows say "(Opens biography)" on them, and this is the
+            // promise being kept: the window comes up with the old name, the new
+            // name and a one-press swap that says how many places it will touch.
+            // A biography written about somebody who no longer exists is the
+            // whole reason he asked for it.
+            const _openBiographyOnRename = (to) => {
+                const after = String(to ?? "").trim();
+                if (!isGmPress || !after || after === _nameBefore) return;
+                import("./bio-editor.mjs")
+                    .then(({ BiographyEditor }) => BiographyEditor.open(tokenDoc, {
+                        renamedFrom: _nameBefore, renamedTo: after,
+                    }))
+                    .catch(err => {
+                        console.error(`${TAG} | the biography window could not open after renaming ${actor.name}:`, err);
+                        ui.notifications?.error("ACE: renamed it, but the biography window could not open — see the console.");
+                    });
+            };
+
             // ⚠️ HIS NAME BEATS THE AI'S, AND IT IS WRITTEN THE ONE WAY
             // (2026-09-22). A name he typed goes on the nameplate and the
             // flavour flag through the single writer, and it switches the AI's
@@ -4203,6 +4308,7 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                     await applyFlavorName(actor, tokenDoc, result.flavorName);
                     tokenDoc._aceSkipRename = true;
                     console.log(`${TAG} | ${actor.name}: the GM named this one "${result.flavorName}".`);
+                    _openBiographyOnRename(result.flavorName);
                 } catch (err) {
                     console.warn(`${TAG} | could not put the typed name on ${actor.name}:`, err);
                     ui.notifications?.warn(`ACE: "${result.flavorName}" could not be written to the nameplate.`);
@@ -4217,8 +4323,12 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
                 try {
                     const { pickAndStampName } = await import("./bio-generator.mjs");
                     const named = await pickAndStampName(actor, tokenDoc, { force: true });
-                    if (named.ok) ui.notifications?.info(`${actor.name} is shown as "${named.name}".`);
-                    else ui.notifications?.warn(`ACE could not name ${actor.name}: ${named.reason}.`);
+                    if (named.ok) {
+                        ui.notifications?.info(`${actor.name} is shown as "${named.name}".`);
+                        _openBiographyOnRename(named.name);
+                    } else {
+                        ui.notifications?.warn(`ACE could not name ${actor.name}: ${named.reason}.`);
+                    }
                 } catch (err) {
                     console.error(`${TAG} | naming ${actor.name} failed:`, err);
                     ui.notifications?.error(`ACE could not name ${actor.name} — see the console.`);

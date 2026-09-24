@@ -107,14 +107,20 @@ export class BiographyEditor {
 
     /**
      * @param {Actor|Token|TokenDocument} target
+     * @param {object} [opts]
+     * @param {string} [opts.renamedFrom]  the display name it had a moment ago
+     * @param {string} [opts.renamedTo]    the display name it has now
+     *   Together those draw the bar across the top: a rename is the one moment
+     *   a biography is guaranteed to be talking about somebody who no longer
+     *   exists (2026-09-23).
      */
-    static open(target) {
+    static open(target, opts = {}) {
         try {
             if (!game.user?.isGM) { ui.notifications?.warn("Only the GM can edit a biography."); return; }
             const { actor, tokenDoc } = _resolve(target);
             if (!actor) { ui.notifications?.warn("ACE: there is no creature to write a biography for."); return; }
             BiographyEditor.close();
-            BiographyEditor._render(actor, tokenDoc);
+            BiographyEditor._render(actor, tokenDoc, opts);
         } catch (err) {
             console.error(`${TAG} | could not open the biography window:`, err);
             ui.notifications?.error("ACE: the biography window could not open — see the console.");
@@ -141,7 +147,7 @@ export class BiographyEditor {
         ui.notifications?.warn("You have changes in the biography. Press Save, or Discard to throw them away.");
     }
 
-    static _render(actor, tokenDoc) {
+    static _render(actor, tokenDoc, opts = {}) {
         const backdrop = document.createElement("div");
         Object.assign(backdrop.style, {
             position: "fixed", inset: "0", zIndex: "100001",
@@ -204,6 +210,58 @@ export class BiographyEditor {
         // a trap the next edit falls into.
         let syncState = () => {};
         body.addEventListener("input", () => { BiographyEditor._dirty = true; syncState(); });
+
+        // ── The rename bar ──────────────────────────────────────────────
+        // ⚠️ HIS CASE, 2026-09-23: "I've changed the name on this token, and I
+        // looked at the biography, and it still says all the same shit under the
+        // old name." The silent swap only fires when it HAD a display name to
+        // replace; a creature showing its sheet name has none, which is the
+        // common case. So the rename says so, counts the places out loud, and
+        // lets him press once.
+        const from = String(opts.renamedFrom ?? "").trim();
+        const to   = String(opts.renamedTo ?? "").trim();
+        let renameBar = null;
+        if (to && to !== from) {
+            renameBar = document.createElement("div");
+            Object.assign(renameBar.style, {
+                flex: "0 0 auto", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap",
+                padding: "12px 16px", borderBottom: "1px solid #4a3a28",
+                background: "linear-gradient(180deg,#1a2414,#111a0e)",
+            });
+
+            const current = String(actor.system?.details?.biography?.value ?? "");
+            const hits = from ? _countName(current, from) : 0;
+
+            const said = document.createElement("div");
+            Object.assign(said.style, { fontSize: "15px", color: "#e9dcb0", marginRight: "auto", lineHeight: "1.45" });
+            said.innerHTML = !current.trim()
+                ? `This one is now called <strong style="color:#ffe75a;">${foundry.utils.escapeHTML(to)}</strong>. There is no biography yet.`
+                : (hits
+                    ? `This one is now called <strong style="color:#ffe75a;">${foundry.utils.escapeHTML(to)}</strong>. The biography still says <strong style="color:#ffb4b4;">${foundry.utils.escapeHTML(from)}</strong>.`
+                    : `This one is now called <strong style="color:#ffe75a;">${foundry.utils.escapeHTML(to)}</strong>. The biography does not use ${from ? `&ldquo;${foundry.utils.escapeHTML(from)}&rdquo;` : "the old name"} anywhere, so there is nothing to swap.`);
+            renameBar.appendChild(said);
+
+            if (hits) {
+                const swap = document.createElement("button");
+                swap.type = "button";
+                swap.innerHTML = `<i class="fas fa-right-left"></i> Replace "${foundry.utils.escapeHTML(from)}" with "${foundry.utils.escapeHTML(to)}" (${hits} place${hits === 1 ? "" : "s"})`;
+                Object.assign(swap.style, {
+                    fontSize: "15px", fontWeight: "700", padding: "9px 16px", borderRadius: "6px", cursor: "pointer",
+                    border: "2px solid #7bd88f", background: "linear-gradient(180deg,#1f8a45,#116030)", color: "#f4ffe9",
+                });
+                swap.addEventListener("click", () => {
+                    // ⚠️ IN THE WINDOW, NOT ON THE SHEET. Nothing is written
+                    // until Save, so a swap he did not mean is one Discard away.
+                    body.innerHTML = _swapName(body.innerHTML, from, to);
+                    BiographyEditor._dirty = true;
+                    syncState();
+                    swap.disabled = true;
+                    swap.style.opacity = "0.5";
+                    said.innerHTML = `Swapped. <strong style="color:#ffe75a;">Press Save</strong> to keep it, or Discard to put it back.`;
+                });
+                renameBar.appendChild(swap);
+            }
+        }
 
         // ── Footer ──
         const footer = document.createElement("div");
@@ -300,6 +358,7 @@ export class BiographyEditor {
         footer.appendChild(saveBtn);
 
         panel.appendChild(header);
+        if (renameBar) panel.appendChild(renameBar);
         panel.appendChild(body);
         panel.appendChild(footer);
         backdrop.appendChild(panel);
@@ -311,6 +370,28 @@ export class BiographyEditor {
         body.focus();
         console.log(`${TAG} | biography window open for ${actor.name}.`);
     }
+}
+
+/**
+ * One boundary rule for both counting and swapping.
+ *
+ * ⚠️ Proven against "Grizzle's axe" (renamed), "Grizzled veteran" (left alone),
+ * "O'Grizzle" (left alone) and "(Grizzle)" (renamed). An apostrophe is barred
+ * BEFORE the name and allowed after it; that one difference is the whole rule.
+ */
+function _nameRe(name) {
+    const esc = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?<![\\w'])${esc}(?![\\w])`, "g");
+}
+
+function _countName(html, name) {
+    if (!html || !name) return 0;
+    return (html.match(_nameRe(name)) ?? []).length;
+}
+
+function _swapName(html, from, to) {
+    if (!html || !from) return html;
+    return html.replace(_nameRe(from), to);
 }
 
 /** A yes/no the GM actually sees, rather than a silent assumption. */
