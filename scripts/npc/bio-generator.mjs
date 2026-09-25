@@ -13,6 +13,7 @@ import { processTokenFaction, buildFactionBioContext,
          resolveCreatureBase, getAllFactions }                   from "./faction-registry.mjs";
 import { SocialProfileEngine }                                   from "./social-profile.mjs";
 import npcProfileJournal                                         from "./npc-profile-journal.mjs";
+import { damageLine }                                            from "../read-item-damage.mjs";
 import { resolveSpecies, hasPersonalName, setGenericNameProbe } from "./npc-identity.mjs";
 import { getSecret, getSecretVault } from "../settings.mjs";
 
@@ -1309,8 +1310,10 @@ function _gatherStatBlock(actor) {
             if (iType === "feat") {
                 features.push(iDesc ? `${iName}: ${iDesc}` : iName);
             } else if (iType === "weapon" || (iType === "feat" && item.system?.activation?.type === "action")) {
-                const dmg = item.system?.damage?.parts?.[0];
-                const dmgStr = dmg ? ` [${dmg[0]} ${dmg[1] || ""}]` : "";
+                // ⚠️🔴 `damage.parts` IS GONE IN dnd5e 5.x, so every creature
+                // the model described arrived with its attacks' damage blank.
+                const dmgLine = damageLine(item);
+                const dmgStr = dmgLine ? ` [${dmgLine}]` : "";
                 actions.push(`${iName}${dmgStr}${iDesc ? ` — ${iDesc}` : ""}`);
             }
         }

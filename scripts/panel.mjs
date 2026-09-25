@@ -9,6 +9,7 @@ import { CanvasHighlight } from "./canvas-highlight.mjs";
 import { filterProfanity, buildProfanityPrompt } from "./profanity-filter.mjs";
 import { writeBiography, appendToBiography } from "./bio-writer.mjs";
 import { getSecret, getSecretVault } from "./settings.mjs";
+import { damageLine } from "./read-item-damage.mjs";
 
 // dnd5e 5.3 moved senses to `senses.ranges.*`; the old path logs a deprecation
 // on every read and is REMOVED in 6.1 (it would silently return 0 — every
@@ -1835,7 +1836,10 @@ Do NOT include the creature's stat block — just narrative flavor.`;
     if (!panel?.ai) throw new Error("AI provider not available");
 
     const rarity = item.system?.rarity || "common";
-    const damage = item.system?.damage?.parts?.map(p => p.join(" ")).join(", ") || "";
+    // ⚠️🔴 `damage.parts` IS GONE IN dnd5e 5.x (and `p.join` would have thrown
+    // on a 5.x damage object anyway), so every item bio was written with no
+    // damage at all — on magic weapons, the part that matters most.
+    const damage = damageLine(item);
     const price  = item.system?.price?.value ? `${item.system.price.value} ${item.system.price.denomination || "gp"}` : "";
     const weight = item.system?.weight?.value ?? item.system?.weight ?? "";
     const props  = item.system?.properties
