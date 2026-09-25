@@ -3271,10 +3271,16 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       ui.notifications?.warn("ACE: Memory system not available.");
       return;
     }
-    // Lazy-import the dialog to keep panel.mjs lightweight
+    // Lazy-import the dialog to keep panel.mjs lightweight.
+    // ⚠️ THE CLASS IS CALLED MemoryDialog (2026-09-25). This asked for
+    // AceMemoryDialog, which memory-dialog.mjs has never exported, so the name
+    // was undefined, `new undefined(...)` threw, and the catch below told him
+    // "Could not open Memory Management — see console." The button had never
+    // once opened the dialog. Found by tools/missing-export-check.mjs in ACE QOL,
+    // sweeping the same shape that hid two dead Forge trap animations.
     try {
-      const { AceMemoryDialog } = await import("./memory-dialog.mjs");
-      new AceMemoryDialog(this.lkMemory).render(true);
+      const { MemoryDialog } = await import("./memory-dialog.mjs");
+      new MemoryDialog(this.lkMemory).render(true);
     } catch (err) {
       console.error(`${MODULE_ID} | Failed to open Memory Management dialog:`, err);
       ui.notifications?.error("ACE: Could not open Memory Management — see console.");
