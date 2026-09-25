@@ -34,6 +34,25 @@ function _resolve(target) {
     return { actor: doc?.actor ?? null, tokenDoc: doc?.update ? doc : null };
 }
 
+/**
+ * What is actually written about this creature, and which box it is in.
+ *
+ * ⚠️🔴 dnd5e KEEPS TWO (2026-09-24). `value` is the GM's biography and `public`
+ * is the one players can read, and this window read only the first — so Aryel,
+ * whose history was in the other box, opened as "Nothing written yet" while the
+ * sheet plainly had one. It reads both now, and SAVES BACK TO THE ONE IT READ,
+ * because quietly moving his text from the public box into the private one
+ * would hide it from his table.
+ */
+function _readBiography(actor) {
+    const bio = actor?.system?.details?.biography ?? {};
+    const value = String(bio.value ?? "");
+    const shared = String(bio.public ?? "");
+    if (value.trim()) return { html: value, field: "system.details.biography.value", where: "the GM biography" };
+    if (shared.trim()) return { html: shared, field: "system.details.biography.public", where: "the public biography" };
+    return { html: "", field: "system.details.biography.value", where: "" };
+}
+
 export class BiographyEditor {
 
     static _el = null;
@@ -83,7 +102,7 @@ export class BiographyEditor {
                     return;
                 }
 
-                const written = String(actor.system?.details?.biography?.value ?? "").trim().length > 0;
+                const written = _readBiography(actor).html.trim().length > 0;
                 const btn = document.createElement("div");
                 btn.classList.add("control-icon", "ace-engine-biography");
                 if (written) btn.classList.add("active");
@@ -201,7 +220,11 @@ export class BiographyEditor {
             fontSize: "16px", lineHeight: "1.6", color: "#f0e4c0",
             background: "#0c0a08", outline: "none",
         });
-        body.innerHTML = String(actor.system?.details?.biography?.value ?? "");
+        const _held = _readBiography(actor);
+        body.innerHTML = _held.html;
+        if (_held.where === "the public biography") {
+            console.log(`${TAG} | ${actor.name}: this history is in the public biography, so that is the box it is saved back to.`);
+        }
         if (!body.innerHTML.trim()) {
             body.innerHTML = `<p style="color:#7a6a48;">Nothing written yet. Type here, paste something in, or press "Write one with the AI".</p>`;
         }
@@ -229,7 +252,7 @@ export class BiographyEditor {
                 background: "linear-gradient(180deg,#1a2414,#111a0e)",
             });
 
-            const current = String(actor.system?.details?.biography?.value ?? "");
+            const current = _readBiography(actor).html;
             // Every spelling it might be using, and how many times each appears.
             const candidates = _nameCandidates(from, actor)
                 .filter(n => n.toLowerCase() !== to.toLowerCase())
@@ -301,10 +324,19 @@ export class BiographyEditor {
         };
 
         const aiBtn = mkBtn("Write one with the AI", "fa-wand-magic-sparkles", false);
+        // ⚠️ SAY WHICH IT IS. "Write one" and "add to the one I have" are two
+        // different promises, and the window knows which one it can keep.
+        const _syncAiLabel = () => {
+            const has = body.innerHTML.replace(/<[^>]*>/g, "").trim().length > 0;
+            aiBtn.innerHTML = has
+                ? `<i class="fas fa-wand-magic-sparkles"></i> Build on this with the AI`
+                : `<i class="fas fa-wand-magic-sparkles"></i> Write one with the AI`;
+        };
         const discardBtn = mkBtn("Discard", "fa-rotate-left", false);
         const saveBtn = mkBtn("Save", "fa-floppy-disk", true);
 
         syncState = () => {
+            _syncAiLabel();
             discardBtn.style.opacity = BiographyEditor._dirty ? "1" : "0.45";
             saveBtn.style.opacity    = BiographyEditor._dirty ? "1" : "0.45";
         };
@@ -318,14 +350,19 @@ export class BiographyEditor {
                 ui.notifications?.warn("ACE: put a token for this creature on the scene first, then the AI can write with the scene in mind.");
                 return;
             }
-            if (BiographyEditor._dirty && !(await _confirm("Replace what is in this window with a new AI biography?"))) return;
-            const held = aiBtn.innerHTML;
-            aiBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Writing…`;
+            // ⚠️ IT ALWAYS READS WHAT IS THERE FIRST (his rule, 2026-09-24:
+            // "It always has to look at what's already on there and then
+            // create."). Whatever is in this window right now, including an
+            // edit he has not saved yet, is handed to the writer as history to
+            // carry forward rather than something to replace.
+            const _carry = body.innerHTML.replace(/<[^>]*>/g, "").trim() ? body.innerHTML : "";
+
+            aiBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${_carry ? "Adding to it…" : "Writing…"}`;
             aiBtn.disabled = true;
             try {
                 const { queueBioGeneration } = await import("./bio-generator.mjs");
-                const res = await queueBioGeneration(tokenDoc, { force: true });
-                const fresh = String(actor.system?.details?.biography?.value ?? "");
+                const res = await queueBioGeneration(tokenDoc, { force: true, buildOn: _carry });
+                const fresh = _readBiography(actor).html;
                 if (fresh.trim()) {
                     body.innerHTML = fresh;
                     BiographyEditor._dirty = false;
@@ -338,13 +375,13 @@ export class BiographyEditor {
                 console.error(`${TAG} | the AI write failed for ${actor.name}:`, err);
                 ui.notifications?.error("ACE: the AI could not write a biography — see the console.");
             } finally {
-                aiBtn.innerHTML = held;
+                _syncAiLabel();
                 aiBtn.disabled = false;
             }
         });
 
         discardBtn.addEventListener("click", () => {
-            body.innerHTML = String(actor.system?.details?.biography?.value ?? "");
+            body.innerHTML = _readBiography(actor).html;
             BiographyEditor._dirty = false;
             syncState();
         });
@@ -353,7 +390,11 @@ export class BiographyEditor {
             const html = body.innerHTML.trim();
             try {
                 const { writeBiography } = await import("../bio-writer.mjs");
-                await writeBiography(actor, html, "bio-editor");
+                if (_held.field === "system.details.biography.public") {
+                    await actor.update({ [_held.field]: html });
+                } else {
+                    await writeBiography(actor, html, "bio-editor");
+                }
                 BiographyEditor._dirty = false;
                 ui.notifications?.info(`Biography saved for ${actor.name}.`);
                 BiographyEditor.close();

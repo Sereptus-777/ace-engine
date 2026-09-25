@@ -399,7 +399,7 @@ Write the 5-10 line scene-context paragraph now. Just the paragraph — no pream
  *   Settles when generation ACTUALLY finishes — not when it is queued. Callers
  *   that report to the user must await this and read `ok`.
  */
-export async function queueBioGeneration(tokenDocument, { force = false, onContact = false } = {}) {
+export async function queueBioGeneration(tokenDocument, { force = false, onContact = false, buildOn = "" } = {}) {
     const actor = tokenDocument.actor;
     if (!actor) return { ok: false, error: "that token has no actor behind it" };
 
@@ -554,7 +554,7 @@ export async function queueBioGeneration(tokenDocument, { force = false, onConta
 
     let _settle;
     const done = new Promise(res => { _settle = res; });
-    _queue.push({ tokenDoc: tokenDocument, settle: _settle });
+    _queue.push({ tokenDoc: tokenDocument, settle: _settle, buildOn });
     _processQueue();
     return done;
 }
@@ -592,7 +592,7 @@ async function _processQueue() {
             // until the `finally` block below clears it.
 
             try {
-                await _generateBio(tokenDoc);
+                await _generateBio(tokenDoc, { buildOn: entry?.buildOn ?? "" });
             } catch (err) {
                 error = err;
                 console.error(`${TAG} | Generation failed for ${tokenDoc.actor?.name}:`, err);
@@ -1333,7 +1333,7 @@ function _gatherStatBlock(actor) {
 
 // ─── PROMPT BUILDER ──────────────────────────────────────────────────────────
 
-async function _buildPrompt(tokenDocument, factionResult = {}, socialProfile = null, canonBio = "") {
+async function _buildPrompt(tokenDocument, factionResult = {}, socialProfile = null, canonBio = "", buildOn = "") {
     const actor = tokenDocument.actor;
     const intScore = actor.system?.abilities?.int?.value ?? 10;
     const tier = _getIntTier(
@@ -1728,7 +1728,10 @@ ${personalityInstruction}`;
         // A statblock whose NAME is a generic label is a species entry. Say so,
         // and the same text becomes what it always was: a description of what
         // this creature IS, which is exactly the context that was missing.
-        const canonIsSpecies = _isGenericName(name, creatureType);
+        // ⚠️ Text he handed us to build on is about THIS creature by
+        // definition, whatever its statblock is called. Only text read off a
+        // statblock can be a species entry.
+        const canonIsSpecies = !buildOn && _isGenericName(name, creatureType);
         if (canonIsSpecies) {
             userMsg += `\n\nWHAT THIS CREATURE IS — from its own statblock entry. This describes the KIND of creature, not this individual:\n"${canonBio}"\n`
                 + `Use it to understand what this creature is, how its kind live, fight, and are regarded by others. `
@@ -1737,6 +1740,9 @@ ${personalityInstruction}`;
                 + `every one of its kind. Write THIS one as a specific individual whose own story is consistent with what its kind are.`;
         } else {
             userMsg += `\n\nEXISTING CANON BIOGRAPHY — this is established lore from the adventure module or GM notes. Your biography MUST be 100% consistent with every fact stated here. Expand and enrich this information with additional details, personality, and backstory, but NEVER contradict, change, or ignore any of these facts:\n"${canonBio}"`;
+            if (buildOn) {
+                userMsg += `\n\nThe GM wrote that himself and is keeping it. Carry it forward: every event, relationship and trait in it stays true and stays in your version. You are adding to it, not replacing it.`;
+            }
         }
     }
 
@@ -2006,7 +2012,7 @@ ${statBlock}`;
 
 // ─── GENERATE BIO ────────────────────────────────────────────────────────────
 
-async function _generateBio(tokenDocument) {
+async function _generateBio(tokenDocument, { buildOn = "" } = {}) {
     // `let`, not `const`: promotion below swaps this for the new persistent
     // actor, and everything after must write to that one.
     let actor = tokenDocument.actor;
@@ -2167,9 +2173,22 @@ async function _generateBio(tokenDocument) {
     // and feed it into the prompt so the AI expands without contradicting.
     let canonBio = "";
     try {
-        const rawBio = actor.system?.details?.biography?.value || "";
-        const stripped = rawBio
-            .replace(/<section class="ace-engine-bio">[\s\S]*?<\/section>/gi, "") // remove any ACE bio
+        // ⚠️🔴 dnd5e KEEPS TWO BIOGRAPHIES (2026-09-24): `value`, the GM's, and
+        // `public`, the one players can read. Everything here read only the
+        // first, so a creature whose history sits in the public box looked
+        // blank: "I have something on there in the biography of Aryel, and when
+        // the biography popped up it said nothing in there yet."
+        const _bio = actor.system?.details?.biography ?? {};
+        const rawBio = String(_bio.value || "").trim() || String(_bio.public || "");
+
+        // ⚠️ AND WHEN HE ASKS FOR MORE, WHAT IS THERE IS THE STARTING POINT.
+        // ACE's own section is normally cut out, because a rewrite should not be
+        // anchored to the thing being rewritten. `buildOn` is him saying the
+        // opposite out loud, so it is kept and fed in whole.
+        let _base = buildOn ? String(buildOn) : rawBio;
+        if (!buildOn) _base = _base.replace(/<section class="ace-engine-bio">[\s\S]*?<\/section>/gi, "");
+
+        const stripped = _base
             .replace(/<hr\s*\/?>/gi, "")                                          // remove separators
             .replace(/<[^>]+>/g, " ")                                              // strip HTML tags
             .replace(/Disclaimer[\s\S]*$/i, "")                                    // strip disclaimers
@@ -2208,7 +2227,7 @@ async function _generateBio(tokenDocument) {
     await pickAndStampName(actor, tokenDocument);
 
     //── Build prompt and call AI ─────────────────────────────────────────
-    const { systemPrompt, userMsg, tokenImage } = await _buildPrompt(tokenDocument, factionResult, socialProfile, canonBio);
+    const { systemPrompt, userMsg, tokenImage } = await _buildPrompt(tokenDocument, factionResult, socialProfile, canonBio, buildOn);
     let images = tokenImage ? [tokenImage] : [];
 
     // ── Vision capability check ─────────────────────────────────────────
