@@ -49,6 +49,49 @@ function bareName(raw) {
     .toLowerCase();
 }
 
+// ⚠️🔴 A SUBTYPE IS NOT ALWAYS A SPECIES (2026-09-24). dnd5e files a gold
+// dragon as type "dragon", subtype "metallic" — and "metallic" is a CATEGORY of
+// dragon, not a kind of creature. ACE read the subtype and told the namer, the
+// faction scorer and the GM that Aryel was a "metallic". His words: "it only
+// says metallic. It doesn't have dragon. Was this thing reading it as metallic,
+// but nothing else?"
+const VAGUE_SUBTYPES = new Set([
+    "metallic", "chromatic", "gem", "lung", "planar", "any race", "any lineage",
+    "shapechanger", "titan", "swarm", "template", "variant",
+]);
+
+// Words a statblock puts in front of a species to say how old or how big it is.
+const AGE_WORDS = /\b(wyrmling|young|juvenile|adult|mature|ancient|elder|greater|lesser|venerable|old)\b/gi;
+
+/**
+ * The species written into a creature's own name, when there is one.
+ *
+ * "Aryel (Young Gold Dragon)" → "gold dragon".  "Adult Red Dragon" → "red
+ * dragon".  A parenthetical wins, because that is where a GM puts the statblock
+ * when the creature has a name of its own.
+ *
+ * ⚠️ It is only used when the result actually contains the creature's TYPE, so
+ * "Aryel the Kind" cannot become a species. That one test is what keeps this
+ * from renaming every creature after itself.
+ */
+function speciesFromName(rawName, typeWord) {
+    const name = clean(rawName);
+    const type = clean(typeWord).toLowerCase();
+    if (!name || !type) return "";
+
+    const inBrackets = name.match(/\(([^)]+)\)/)?.[1] ?? "";
+    const candidate = (inBrackets || name)
+        .replace(AGE_WORDS, " ")
+        .replace(/\s*[-–—]\s*.*$/, "")
+        .replace(/\s+#?\d+\s*$/, "")
+        .replace(/\s{2,}/g, " ")
+        .trim()
+        .toLowerCase();
+
+    if (!candidate || !candidate.split(/\s+/).includes(type)) return "";
+    return candidate;
+}
+
 /**
  * The creature's KIND, most specific source first.
  *
@@ -76,11 +119,34 @@ export function resolveSpecies(actor, tokenDoc = null) {
   const custom = clean(type.custom);
   if (custom) return custom.toLowerCase();
 
-  // 3. The specific subtype ("cambion", "goblinoid", "devil").
-  const subtype = clean(type.subtype);
-  if (subtype) return subtype.toLowerCase();
+  // 3. The species written into its own name, when the name says what it is.
+  //    Checked BEFORE the subtype, because "Young Gold Dragon" is a better
+  //    answer than "metallic" and a worse one is never useful.
+  const typeWord = clean(type.value).toLowerCase();
+  for (const source of [tokenDoc?.name, actor.name, actor.prototypeToken?.name]) {
+      const fromName = speciesFromName(source, typeWord);
+      if (fromName) return fromName;
+  }
 
-  // 4. The base actor's name, when this creature has been renamed.
+  // 4. The specific subtype ("cambion", "goblinoid", "devil"), unless it is one
+  //    of the vague ones that describe a family rather than a creature.
+  const subtype = clean(type.subtype);
+  if (subtype && !VAGUE_SUBTYPES.has(subtype.toLowerCase())) return subtype.toLowerCase();
+
+  // 5. A statblock name IS a species. The probe knows every creature in the
+  //    installed compendiums, so "Mind Flayer" and "Carrion Ogre" answer for
+  //    themselves instead of falling through to "aberration" and "giant".
+  //    ⚠️ After the subtype on purpose: a goblin keeps answering "goblinoid",
+  //    which is what every namer and narrator in ACE has been told for months.
+  if (_genericProbe) {
+      for (const source of [actor.name, tokenDoc?.name, actor.prototypeToken?.name]) {
+          const bare = bareName(source);
+          if (!bare) continue;
+          try { if (_genericProbe(bare, typeWord)) return bare; } catch (_) { /* probe not ready */ }
+      }
+  }
+
+  // 6. The base actor's name, when this creature has been renamed.
   //    An unlinked token keeps its source Actor; a "Cambion" renamed on the
   //    token to "Lilith Vex" still has "Cambion" sitting on the base actor.
   try {
@@ -96,8 +162,12 @@ export function resolveSpecies(actor, tokenDoc = null) {
     }
   } catch (_) { /* world not ready — fall through */ }
 
-  // 5. The broad category. Vague, but "fiend" beats saying nothing.
-  return clean(type.value).toLowerCase();
+  // 7. A vague subtype is still better than nothing at all: a "metallic" of
+  //    unknown type says more than silence.
+  if (subtype) return subtype.toLowerCase();
+
+  // 8. The broad category. Vague, but "fiend" beats saying nothing.
+  return typeWord;
 }
 
 /**

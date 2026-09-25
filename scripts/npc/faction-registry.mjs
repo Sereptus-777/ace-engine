@@ -1630,6 +1630,126 @@ function _buildFactionInfoHtml(meta) {
  */
 
 
+
+// ═══ WHO BELONGS TO A FACTION, READ FROM ITS OWN WORDS ═══════════════════
+//
+// ⚠️🔴 HIS POINT, 2026-09-24: "Oh, look, we got young gold dragon. It's gold,
+// and it's a dragon, and it's lawful good. How many factions can we pick off
+// the top of my head that it could belong to?"
+//
+// Exactly. The old scorer asked a category table whether a "dragon" gets on
+// with a "religious" organisation, and never once read the sentence in his own
+// bible that says "a dragon faction aligned with good, dedicated to protecting
+// innocent creatures". The words were there the whole time.
+//
+// This reads them. No AI, no table to maintain: a faction's own description
+// says who it is made of, and a creature knows what it is.
+
+/** Everything a faction says about itself, as one lowercase blob. */
+function _factionWords(f) {
+    return [f?.name, f?.type, f?.description, f?.purpose, f?.goals, f?.lore,
+            f?.alignment, f?.scope, f?.nation, f?.territory, f?.region]
+        .filter(Boolean).join(" ").toLowerCase();
+}
+
+/**
+ * The words that describe THIS creature: its species, its type, its subtype.
+ * The species is handed in because the dialog has already resolved it through
+ * npc-identity, and asking twice is how two answers start to disagree.
+ */
+function creatureWords(actor, creatureBase = "", species = "") {
+    const d = actor?.system?.details ?? {};
+    const out = new Set();
+    const add = (v) => {
+        const t = String(v ?? "").trim().toLowerCase();
+        if (t.length >= 3) out.add(t);
+    };
+    add(d.type?.value);
+    add(d.type?.subtype);
+    add(d.type?.custom);
+    add(creatureBase);
+    add(species);
+    // "gold dragon" is also "gold" and "dragon": a faction of golds and a
+    // faction of dragons are both worth offering.
+    for (const w of String(species).split(/\s+/)) add(w);
+    return out;
+}
+
+// The dragon colours and metals. A gold and a red are both dragons and are
+// never in the same club (2026-09-24, measured: "red dragons" was ranking third
+// for his lawful good gold).
+const DRAGON_HUES = ["gold", "silver", "bronze", "copper", "brass",
+                     "red", "blue", "green", "black", "white", "shadow", "deep"];
+
+/**
+ * A faction's alignment, from its field if it has one and from its own words if
+ * it does not. "Evil Lizardfolk" says what it is in its name, and a bare
+ * alignment field left empty is not a statement that it is neutral.
+ */
+function _factionAlignment(f) {
+    const field = String(f?.alignment ?? "").trim().toLowerCase();
+    if (field) return field;
+    const text = `${f?.name ?? ""} ${f?.description ?? ""} ${f?.purpose ?? ""}`.toLowerCase();
+    const m = text.match(/\b(lawful|chaotic|neutral)\s+(good|evil|neutral)\b/)
+        || text.match(/\b(evil|good)[- ]aligned\b/)
+        || text.match(/^\s*(evil|good)\b/);
+    return m ? m[0].replace(/[- ]aligned/, "").trim() : "";
+}
+
+/**
+ * How much this faction looks like it is FOR this creature, and why.
+ * @returns {{bonus:number, reasons:string[]}}
+ */
+function kinshipScore(f, words, alignment) {
+    const text = _factionWords(f);
+    const reasons = [];
+    let bonus = 0;
+
+    // The whole species named in its own words is the strongest thing there is.
+    const phrases = [...words].filter(w => w.includes(" "));
+    for (const p of phrases) {
+        if (text.includes(p)) { bonus += 120; reasons.push(`${p}s`); break; }
+    }
+    // Otherwise a single word: "dragon", "metallic", "goblinoid".
+    if (!reasons.length) {
+        for (const w of words) {
+            if (w.includes(" ")) continue;
+            if (new RegExp(`\\b${w}s?\\b`).test(text)) { bonus += 70; reasons.push(`${w}s`); break; }
+        }
+    }
+
+    // ⚠️ A DRAGON OF THE WRONG COLOUR IS NOT KIN. Both are dragons, which is
+    // why the kinship pass alone put "red dragons" near the top for his gold.
+    const hue = [...words].join(" ").match(new RegExp(`\\b(${DRAGON_HUES.join("|")})\\b`))?.[1];
+    // ⚠️ Only a body OF dragons, not heraldry. "Order of the Silver Dragon" is a
+    // knightly order named after one, and a fine home for a gold; "red dragons"
+    // is a faction made of reds, and is not. The plural is the tell.
+    if (hue && /\bdragons\b/.test(text)) {
+        const otherHue = DRAGON_HUES.find(h => h !== hue && new RegExp(`\\b${h}\\b`).test(text));
+        if (otherHue && !new RegExp(`\\b${hue}\\b`).test(text)) {
+            bonus -= 90;
+            reasons.push(`${otherHue}, not ${hue}`);
+        }
+    }
+
+    // Alignment, as agreement rather than a bar.
+    const al = String(alignment ?? "").toLowerCase();
+    const fal = _factionAlignment(f);
+    if (al && fal) {
+        if (al === fal) { bonus += 60; reasons.push(fal); }
+        else {
+            const good = /\bgood\b/, evil = /\bevil\b/, law = /\blawful\b/, chaos = /\bchaotic\b/;
+            if (good.test(al) && good.test(fal)) { bonus += 35; reasons.push("also good"); }
+            else if (evil.test(al) && evil.test(fal)) { bonus += 35; reasons.push("also evil"); }
+            else if (good.test(al) && evil.test(fal)) { bonus -= 40; reasons.push("opposed"); }
+            else if (evil.test(al) && good.test(fal)) { bonus -= 40; reasons.push("opposed"); }
+            else if (law.test(al) && law.test(fal)) { bonus += 15; reasons.push("also lawful"); }
+            else if (chaos.test(al) && chaos.test(fal)) { bonus += 15; reasons.push("also chaotic"); }
+        }
+    }
+    return { bonus, reasons };
+}
+
 // ═══ HOW MANY OF THEM ARE THERE ══════════════════════════════════════════
 //
 // His table, 2026-09-23: "It said there's only one member, and that's fair
@@ -1785,14 +1905,17 @@ export async function estimateFactionStrength(f) {
 // from. The recommendation keeps its star instead of its own section.
 
 /** Everything a row needs: its value, what it says, and what it matches on. */
-function _factionRow(f, { value, where, members = null, rec = false, score = 0, excluded = false }) {
+function _factionRow(f, { value, where, members = null, rec = false, score = 0, excluded = false, reasons = [] }) {
     const searchBits = [f.name, f.type, f.alignment, f.scope, f.region, f.territory,
                         f.description, f.purpose, f.goals, f.lore, f.leader, f.nation]
         .filter(Boolean).join(" ").toLowerCase();
     let strength = "";
     try { strength = factionStrength(f)?.text ?? ""; } catch (_) { strength = ""; }
     return {
-        value, where, members, rec, score, strength, excluded,
+        value, where, members, rec, score, strength, excluded, reasons,
+        // What the AI shortlist button sends, so it judges the same rows he is
+        // looking at rather than a different list built somewhere else.
+        blurb: String(f?.description || f?.purpose || f?.lore || "").slice(0, 200),
         name: f.name || "",
         type: f.type || "faction",
         alignment: f.alignment || "",
@@ -1824,28 +1947,44 @@ function _renderFactionOptions(rows, { query = "", selected = "", limit = 20 } =
     // asked anything of is not four hundred rows long; the moment he types, it
     // is not in the way.
     const matched = terms.length ? ordered.filter(r => terms.every(t => r.search.includes(t))) : ordered;
-    const shown = (!terms.length && limit && matched.length > limit) ? matched.slice(0, limit) : matched;
+    // ⚠️ NO CAP ANY MORE. The cap existed to keep the dropdown short; the two
+    // sections do that job better, and a cap is how his world went missing.
+    const shown = matched;
+
+    // ⚠️ TWO SECTIONS (his choice, 2026-09-24). One long list looks the same
+    // whether the ranking is good or broken. This way the top of the window
+    // says what ACE thinks fits and WHY, and everything he owns is underneath
+    // it in plain alphabetical order, so a bad ranking is obvious at a glance
+    // rather than hidden in a list of four hundred.
+    const FITS = 8;
+    const label = (r, withReasons) => {
+        const al = _abbreviateAlignment(r.alignment);
+        const bits = [r.type || "faction"];
+        if (al) bits.push(`[${al}]`);
+        if (withReasons && r.reasons?.length) bits.push(r.reasons.slice(0, 3).join(", "));
+        else bits.push(r.where);
+        if (r.members !== null) bits.push(`${r.members} in ACE`);
+        if (r.strength) bits.push(`~${r.strength} strong`);
+        if (r.excluded) bits.push(`not a usual fit`);
+        const star = r.rec ? "\u2b50 " : "";
+        const sel = r.value === selected ? "selected" : "";
+        return `<option value="${esc(r.value)}" ${sel}>${star}${esc(r.name)} \u2014 ${esc(bits.join(" \u00b7 "))}</option>`;
+    };
 
     let html = "";
     if (shown.length) {
-        html += `<optgroup label="Best match first">`;
-        html += shown.map(r => {
-            const al = _abbreviateAlignment(r.alignment);
-            const bits = [r.type || "faction"];
-            if (al) bits.push(`[${al}]`);
-            bits.push(r.where);
-            // Found by searching, but ACE would not have suggested it. Say so
-            // rather than pretending it was on the list all along.
-            if (r.excluded) bits.push(`not a usual fit`);
-            // ⚠️ THE TWO NUMBERS ARE DIFFERENT QUESTIONS (2026-09-23). How many
-            // ACE has put in it, and how many there are in the world.
-            if (r.members !== null) bits.push(`${r.members} in ACE`);
-            if (r.strength) bits.push(`~${r.strength} strong`);
-            const star = r.rec ? "\u2b50 " : "";
-            const sel = r.value === selected ? "selected" : "";
-            return `<option value="${esc(r.value)}" ${sel}>${star}${esc(r.name)} \u2014 ${esc(bits.join(" \u00b7 "))}</option>`;
-        }).join("");
+        const fits = shown.slice(0, FITS);
+        const rest = shown.slice(FITS).sort((a, b) => a.name.localeCompare(b.name));
+
+        html += `<optgroup label="Fits this creature">`;
+        html += fits.map(r => label(r, true)).join("");
         html += `</optgroup>`;
+
+        if (rest.length) {
+            html += `<optgroup label="Everything else in your world (${rest.length})">`;
+            html += rest.map(r => label(r, false)).join("");
+            html += `</optgroup>`;
+        }
     }
 
     html += `<optgroup label="Other">`;
@@ -1857,6 +1996,65 @@ function _renderFactionOptions(rows, { query = "", selected = "", limit = 20 } =
     html += `</optgroup>`;
 
     return { html, shown: shown.length, total: matched.length };
+}
+
+
+/**
+ * Ask the model to pick three from a list ACE has already narrowed.
+ *
+ * ⚠️ NOT recommendFactions. That one runs on a token drop, may invent a faction
+ * that does not exist, and sees eight entries. This is a button he presses on a
+ * list already in front of him: it picks FROM that list, invents nothing, and
+ * the answer is three names he can check against the rows above.
+ *
+ * @param {Actor} actor
+ * @param {Array<{name:string,type:string,alignment:string,description:string}>} candidates
+ * @returns {Promise<Array<{name:string, reason:string}>>} at most three
+ */
+export async function shortlistFactions(actor, candidates = []) {
+    const list = (candidates || []).filter(c => c?.name).slice(0, 40);
+    if (!list.length) return [];
+
+    const d = actor?.system?.details ?? {};
+    const who = [actor?.name, d.type?.value, d.type?.subtype, d.alignment,
+                 d.cr !== undefined ? `CR ${d.cr}` : ""].filter(Boolean).join(", ");
+
+    const lines = list.map((c, i) =>
+        `${i + 1}. ${c.name} (${c.type || "faction"}${c.alignment ? `, ${c.alignment}` : ""})`
+        + (c.description ? ` — ${String(c.description).slice(0, 160)}` : "")).join("\n");
+
+    const systemPrompt = `You are a Dungeon Master choosing which existing organisation a creature belongs to. `
+        + `You pick ONLY from the numbered list you are given. You never invent one. `
+        + `You answer with at most three lines, each exactly: <number>. <faction name> — <one short reason>`;
+    const userMsg = `The creature: ${who}.\n\nThe factions available in this world:\n${lines}\n\n`
+        + `Which three does this creature most plausibly belong to, best first?`;
+
+    try {
+        const AIHandler = await _getAIHandler();
+        const { provider, apiKey } = getEnvoyAIConfig();
+        const answer = await AIHandler.callAI(systemPrompt, [], userMsg, provider, apiKey, [], { context: "faction-shortlist" });
+        if (isAIFailure(answer) || !answer) return [];
+
+        const picks = [];
+        for (const raw of String(answer).split(/\r?\n/)) {
+            const m = raw.match(/^\s*\d+\.\s*(.+?)\s*[—\-–:]\s*(.+?)\s*$/);
+            if (!m) continue;
+            const name = m[1].replace(/^["']|["']$/g, "").trim();
+            // ⚠️ IT ONLY GETS TO PICK WHAT WAS ON THE LIST. A name it made up is
+            // dropped, out loud, rather than offered as if his world had it.
+            const hit = list.find(c => _normaliseFactionName(c.name) === _normaliseFactionName(name));
+            if (!hit) {
+                console.warn(`${TAG} | the AI suggested "${name}", which is not one of the ${list.length} it was given. Ignored.`);
+                continue;
+            }
+            picks.push({ name: hit.name, reason: m[2].trim() });
+            if (picks.length === 3) break;
+        }
+        return picks;
+    } catch (err) {
+        console.error(`${TAG} | the faction shortlist failed:`, err);
+        return [];
+    }
 }
 
 export async function showNpcIdentityDialog(tokenDoc, existingFactions, creatureBase, sceneIntel = null, worldDigestFactions = [], bibleFactions = [], recommendations = [], { gmPress = false } = {}) {
@@ -2121,17 +2319,27 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
         // filter: his search has to be able to reach the four hundredth one.
         const _recNames = new Set((recommendations ?? [])
             .map(r => String(r?.name ?? "").toLowerCase()).filter(Boolean));
+        // What this creature is, in words, for the kinship pass.
+        const _words = creatureWords(actor, creatureBase, detectedSpecies);
+        console.log(`${TAG} | ${actor.name} reads as: ${[..._words].join(", ")} (${alignment}).`);
+
         const allRows = [];
         // combined is every candidate that scored; topCombined additionally
         // carries any recommendation that scored out and was forced back in.
         const _forced = topCombined.filter(f => !combined.includes(f));
         for (const f of [...combined, ..._forced]) {
+            const kin = kinshipScore(f, _words, alignment);
+            const where = f._source === "canonical" ? `this scene` : `your world`;
             allRows.push(_factionRow(f, {
                 value: f._source === "canonical" ? `__canonical__:${f._idx}` : `__world__:${f._widx}`,
-                where: f._source === "canonical" ? `this scene` : `your world`,
+                where,
                 rec: _recNames.has((f.name || "").toLowerCase()),
-                score: f._score ?? 0,
+                // ⚠️ A faction ACE would not have suggested can still be the
+                // obvious one once its own words are read, so the kinship bonus
+                // counts even when the category table said no.
+                score: Math.max(f._score ?? 0, 0) + kin.bonus,
                 excluded: !!f._excluded,
+                reasons: [...kin.reasons, where],
             }));
         }
         for (const f of existingFactions) {
@@ -2140,13 +2348,15 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
             let sc = 0;
             try { sc = _scoreFactionForDialog(f, creatureType, creatureSubtype, creatureBase, sceneIntel, sceneName, actor); }
             catch (_) { sc = 0; }
+            const kin = kinshipScore(f, _words, alignment);
             allRows.push(_factionRow(f, {
                 value: f.id,
                 where: `already in play`,
                 members: f.members?.length ?? 0,
                 rec: _recNames.has((f.name || "").toLowerCase()),
                 // A faction he is already using is never scored out of the list.
-                score: Math.max(sc, 1),
+                score: Math.max(sc, 1) + kin.bonus,
+                reasons: [...kin.reasons, `already in play`],
             }));
         }
 
@@ -2181,6 +2391,18 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 }
             }
         }
+
+        // ⚠️ SAY WHERE THE LIST CAME FROM (2026-09-24). "Showing 1 of 1" is the
+        // same sentence whether the ranking hid his world or the world never
+        // arrived, and those are opposite problems. The counts tell them apart
+        // at a glance, without a console.
+        const _poolCounts = {
+            scene: combined.filter(f => f._source === "canonical").length,
+            world: combined.filter(f => f._source === "world").length,
+            ace: existingFactions.length,
+        };
+        console.log(`${TAG} | faction pool for ${actor.name}: `
+            + `${_poolCounts.scene} on this scene, ${_poolCounts.world} from your world, ${_poolCounts.ace} in ACE.`);
 
         const _initialList = _renderFactionOptions(allRows, { selected: defaultFactionValue, limit: 20 });
         factionOptionsHtml = _initialList.html;
@@ -2244,11 +2466,20 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                    factions." So it searches what the world already has, across
                    name, type, alignment, region and the faction's own words, and
                    creating one by hand is the last resort at the bottom. -->
-              <input type="text" name="factionSearch" value="" placeholder="Search factions: name, type, alignment, or words in their description…"
-                     autocomplete="off" data-lpignore="true" data-1p-ignore="true"
-                     style="width:100%; padding:8px 10px; margin-bottom:6px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1em; color-scheme:light;">
+              <div style="display:flex; gap:6px; margin-bottom:6px;">
+                <input type="text" name="factionSearch" value="" placeholder="Search factions: name, type, alignment, or words in their description…"
+                       autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+                       style="flex:1; padding:8px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1em; color-scheme:light;">
+                <!-- ⚠️ A BUTTON, NOT AUTOMATIC (his choice, 2026-09-24). It costs
+                     an AI call, so it happens when he asks for it. -->
+                <button type="button" name="askAi"
+                        style="padding:8px 12px; background:#1d1710; color:#f0d98a; border:1px solid #d4af37; border-radius:4px; font-size:0.95em; font-weight:600; cursor:pointer; white-space:nowrap;">
+                  <i class="fas fa-wand-magic-sparkles"></i> Ask the AI
+                </button>
+              </div>
               <div class="ace-faction-count" style="font-size:0.85em; color:#666; margin-bottom:6px;">
-                Showing the ${_initialList.shown} best of ${_initialList.total}. Type above to search all of them.
+                ${_initialList.total} to choose from: ${_poolCounts.world} from your world, ${_poolCounts.scene} on this scene, ${_poolCounts.ace} already in ACE.${
+                  _poolCounts.world === 0 ? " <strong style=\"color:#a3261f;\">Your world digest is not loaded, so only what ACE already knows is listed.</strong>" : ""}
               </div>
               <select name="factionChoice" style="width:100%; padding:12px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1.1em; font-weight:600; margin-bottom:8px; line-height:1.4; color-scheme:light;">
                 ${factionOptionsHtml}
@@ -2525,6 +2756,56 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 });
             }
 
+            // ── Ask the AI which three fit ─────────────────────────────
+            const _askAi = el.querySelector('button[name="askAi"]');
+            if (_askAi) {
+                _askAi.addEventListener("click", async () => {
+                    const sel = el.querySelector('select[name="factionChoice"]');
+                    if (!sel) return;
+                    const held = _askAi.innerHTML;
+                    _askAi.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Asking…`;
+                    _askAi.disabled = true;
+                    try {
+                        // The best forty ACE has, which is what it is looking at.
+                        const candidates = [..._allRows]
+                            .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+                            .slice(0, 40)
+                            .map(r => ({ name: r.name, type: r.type, alignment: r.alignment, description: r.blurb }));
+                        const picks = await shortlistFactions(actor, candidates);
+                        if (!picks.length) {
+                            // ⚠️ SAY IT. An empty answer and a broken one look
+                            // identical from the outside.
+                            ui.notifications?.warn(`ACE asked the AI and got nothing usable back for ${actor.name}. The list is unchanged.`);
+                            return;
+                        }
+                        const byName = new Map(picks.map(p => [_normaliseFactionName(p.name), p.reason]));
+                        for (const r of _allRows) {
+                            const reason = byName.get(_normaliseFactionName(r.name));
+                            if (!reason) continue;
+                            r.rec = true;
+                            r.reasons = [reason];
+                            r.score = (r.score ?? 0) + 1000;   // the AI's three, on top
+                        }
+                        const keep = sel.value;
+                        const rendered = _renderFactionOptions(_allRows, {
+                            query: el.querySelector('input[name="factionSearch"]')?.value ?? "",
+                            selected: keep,
+                        });
+                        sel.innerHTML = rendered.html;
+                        _syncCount(rendered);
+                        if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+                        sel.dispatchEvent(new Event("change"));
+                        ui.notifications?.info(`ACE suggests: ${picks.map(p => p.name).join(", ")}.`);
+                    } catch (err) {
+                        console.error(`${TAG} | Ask the AI failed:`, err);
+                        ui.notifications?.error("ACE: the AI could not answer — see the console. The list is unchanged.");
+                    } finally {
+                        _askAi.innerHTML = held;
+                        _askAi.disabled = false;
+                    }
+                });
+            }
+
             // ── The Biography button opens the one biography window ──────
             const _bioBtn = el.querySelector('button[name="editBio"]');
             if (_bioBtn) {
@@ -2548,9 +2829,8 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
             const _syncCount = (r) => {
                 const cnt = el.querySelector(".ace-faction-count");
                 if (!cnt) return;
-                cnt.textContent = r.total === r.shown
-                    ? `${r.total} faction${r.total === 1 ? "" : "s"} listed.`
-                    : `Showing the ${r.shown} best of ${r.total}. Type above to search all of them.`;
+                cnt.textContent = `${r.total} match${r.total === 1 ? "" : "es"} of ${_poolCounts.world + _poolCounts.scene + _poolCounts.ace} `
+                    + `(${_poolCounts.world} from your world, ${_poolCounts.scene} on this scene, ${_poolCounts.ace} already in ACE).`;
             };
 
             // ── The search box ─────────────────────────────────────────
