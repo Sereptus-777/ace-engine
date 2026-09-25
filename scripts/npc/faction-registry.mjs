@@ -1785,14 +1785,14 @@ export async function estimateFactionStrength(f) {
 // from. The recommendation keeps its star instead of its own section.
 
 /** Everything a row needs: its value, what it says, and what it matches on. */
-function _factionRow(f, { value, where, members = null, rec = false, score = 0 }) {
+function _factionRow(f, { value, where, members = null, rec = false, score = 0, excluded = false }) {
     const searchBits = [f.name, f.type, f.alignment, f.scope, f.region, f.territory,
                         f.description, f.purpose, f.goals, f.lore, f.leader, f.nation]
         .filter(Boolean).join(" ").toLowerCase();
     let strength = "";
     try { strength = factionStrength(f)?.text ?? ""; } catch (_) { strength = ""; }
     return {
-        value, where, members, rec, score, strength,
+        value, where, members, rec, score, strength, excluded,
         name: f.name || "",
         type: f.type || "faction",
         alignment: f.alignment || "",
@@ -1815,7 +1815,11 @@ function _renderFactionOptions(rows, { query = "", selected = "", limit = 20 } =
     const q = String(query ?? "").trim();
     const terms = q ? q.toLowerCase().split(/\s+/).filter(Boolean) : [];
 
-    const ordered = [...rows].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+    // ⚠️ Hidden from the unasked list, never from a search (2026-09-24).
+    const offerable = rows.filter(r => !r.excluded);
+    const ordered = [...(terms.length ? rows : offerable)]
+        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     // ⚠️ A SEARCH READS EVERYTHING. The cap exists so a dropdown he has not
     // asked anything of is not four hundred rows long; the moment he types, it
     // is not in the way.
@@ -1830,6 +1834,9 @@ function _renderFactionOptions(rows, { query = "", selected = "", limit = 20 } =
             const bits = [r.type || "faction"];
             if (al) bits.push(`[${al}]`);
             bits.push(r.where);
+            // Found by searching, but ACE would not have suggested it. Say so
+            // rather than pretending it was on the list all along.
+            if (r.excluded) bits.push(`not a usual fit`);
             // ⚠️ THE TWO NUMBERS ARE DIFFERENT QUESTIONS (2026-09-23). How many
             // ACE has put in it, and how many there are in the world.
             if (r.members !== null) bits.push(`${r.members} in ACE`);
@@ -1951,8 +1958,14 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
     if (sceneIntel?.canonicalFactions?.length) {
       for (let idx = 0; idx < sceneIntel.canonicalFactions.length; idx++) {
         const f = { ...sceneIntel.canonicalFactions[idx], _sceneCanonical: true };
+        // ⚠️🔴 EVERY CANDIDATE IS KEPT (2026-09-24). A score below zero used to
+        // mean "drop it on the floor", and the search could only ever reach what
+        // had survived scoring — so a faction ACE judged a poor fit was
+        // unfindable even by typing its exact name. Scoring decides the ORDER
+        // and what is offered unasked; it does not get to hide his world from
+        // him when he is looking for something.
         const score = _scoreFactionForDialog(f, creatureType, creatureSubtype, creatureBase, sceneIntel, sceneName, actor);
-        if (score >= 0) scoredCanonical.push({ ...f, _idx: idx, _score: score, _source: "canonical" });
+        scoredCanonical.push({ ...f, _idx: idx, _score: score, _source: "canonical", _excluded: score < 0 });
       }
     }
 
@@ -1965,14 +1978,16 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
         const nameLower = (f.name || "").toLowerCase();
         if (!nameLower || canonicalNames.has(nameLower)) continue;
         const score = _scoreFactionForDialog(f, creatureType, creatureSubtype, creatureBase, sceneIntel, sceneName, actor);
-        if (score >= 0) scoredWorld.push({ ...f, _widx: idx, _score: score, _source: "world" });
+        scoredWorld.push({ ...f, _widx: idx, _score: score, _source: "world", _excluded: score < 0 });
       }
     }
 
     // Combine, sort by score, cap at 20 total
     const combined = [...scoredCanonical, ...scoredWorld].sort((a, b) => b._score - a._score);
     const MAX_VISIBLE = 20;
-    const topCombined = combined.slice(0, MAX_VISIBLE);
+    // What is OFFERED without being asked stays the ones that fit; what the
+    // search can REACH is everything.
+    const topCombined = combined.filter(f => !f._excluded).slice(0, MAX_VISIBLE);
 
     // Force-include any factions from the recommendation popup that got scored out or capped
     if (recommendations?.length) {
@@ -2116,6 +2131,7 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 where: f._source === "canonical" ? `this scene` : `your world`,
                 rec: _recNames.has((f.name || "").toLowerCase()),
                 score: f._score ?? 0,
+                excluded: !!f._excluded,
             }));
         }
         for (const f of existingFactions) {
@@ -2993,7 +3009,18 @@ function _scoreFactionForDialog(f, creatureType, creatureSubtype, creatureBase, 
       fiend:       { military: 20, criminal: 30, religious: 20, political: 0, mercantile: 0, arcane: 30, "noble house": 0, cult: 80, tribe: 0, gang: 0, undead: 40, nature: 0, resistance: 0, government: 0 },
       fey:         { military: 0, criminal: 20, religious: 30, political: 20, mercantile: 20, arcane: 50, "noble house": 20, cult: 30, tribe: 40, gang: 0, undead: 0, nature: 80, resistance: 30, government: 20 },
       giant:       { military: 40, criminal: 10, religious: 20, political: 10, mercantile: 10, arcane: 10, "noble house": 10, cult: 10, tribe: 80, gang: 20, undead: 0, nature: 20, resistance: 10, government: 10 },
-      dragon:      { military: 20, criminal: 20, religious: 10, political: 20, mercantile: 20, arcane: 40, "noble house": 20, cult: 50, tribe: 10, gang: 0, undead: 0, nature: 10, resistance: 10, government: 10 },
+      // ⚠️🔴 religious was 10, and the cut below is 15, so EVERY church in his
+      // world was scored out for every dragon (2026-09-24). His gold dragon
+      // could not be offered "metallic dragons" — a faction sitting in his own
+      // bible that reads "a dragon faction aligned with good, dedicated to
+      // protecting innocent creatures and maintaining justice". In the Realms a
+      // metallic venerates Bahamut and a chromatic serves Tiamat; religion is
+      // one of the most dragon things there is.
+      //
+      // ⚠️ THIS TABLE IS WRITTEN OUT TWICE IN THIS FILE, here and in the legacy
+      // assign dialog. Both were corrected: two copies that can disagree is the
+      // bug underneath the bug.
+      dragon:      { military: 20, criminal: 20, religious: 50, political: 20, mercantile: 20, arcane: 40, "noble house": 20, cult: 50, tribe: 10, gang: 0, undead: 0, nature: 10, resistance: 10, government: 10 },
       aberration:  { military: 0, criminal: 0, religious: 10, political: 0, mercantile: 0, arcane: 40, "noble house": 0, cult: 70, tribe: 0, gang: 0, undead: 0, nature: 0, resistance: 0, government: 0 },
       celestial:   { military: 40, criminal: 0, religious: 80, political: 20, mercantile: 0, arcane: 30, "noble house": 0, cult: 0, tribe: 0, gang: 0, undead: 0, nature: 30, resistance: 40, government: 20 },
       elemental:   { military: 10, criminal: 0, religious: 20, political: 0, mercantile: 0, arcane: 50, "noble house": 0, cult: 40, tribe: 0, gang: 0, undead: 0, nature: 40, resistance: 0, government: 0 },
@@ -3144,7 +3171,7 @@ export async function showFactionAssignDialog(tokenDoc, existingFactions, creatu
           fiend:       { military: 20, criminal: 30, religious: 20, political: 0, mercantile: 0, arcane: 30, "noble house": 0, cult: 80, tribe: 0, gang: 0, undead: 40, nature: 0, resistance: 0, government: 0 },
           fey:         { military: 0, criminal: 20, religious: 30, political: 20, mercantile: 20, arcane: 50, "noble house": 20, cult: 30, tribe: 40, gang: 0, undead: 0, nature: 80, resistance: 30, government: 20 },
           giant:       { military: 40, criminal: 10, religious: 20, political: 10, mercantile: 10, arcane: 10, "noble house": 10, cult: 10, tribe: 80, gang: 20, undead: 0, nature: 20, resistance: 10, government: 10 },
-          dragon:      { military: 20, criminal: 20, religious: 10, political: 20, mercantile: 20, arcane: 40, "noble house": 20, cult: 50, tribe: 10, gang: 0, undead: 0, nature: 10, resistance: 10, government: 10 },
+          dragon:      { military: 20, criminal: 20, religious: 50, political: 20, mercantile: 20, arcane: 40, "noble house": 20, cult: 50, tribe: 10, gang: 0, undead: 0, nature: 10, resistance: 10, government: 10 },
           aberration:  { military: 0, criminal: 0, religious: 10, political: 0, mercantile: 0, arcane: 40, "noble house": 0, cult: 70, tribe: 0, gang: 0, undead: 0, nature: 0, resistance: 0, government: 0 },
           celestial:   { military: 40, criminal: 0, religious: 80, political: 20, mercantile: 0, arcane: 30, "noble house": 0, cult: 0, tribe: 0, gang: 0, undead: 0, nature: 30, resistance: 40, government: 20 },
           elemental:   { military: 10, criminal: 0, religious: 20, political: 0, mercantile: 0, arcane: 50, "noble house": 0, cult: 40, tribe: 0, gang: 0, undead: 0, nature: 40, resistance: 0, government: 0 },
