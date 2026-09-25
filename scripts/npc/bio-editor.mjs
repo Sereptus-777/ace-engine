@@ -230,21 +230,29 @@ export class BiographyEditor {
             });
 
             const current = String(actor.system?.details?.biography?.value ?? "");
-            const hits = from ? _countName(current, from) : 0;
+            // Every spelling it might be using, and how many times each appears.
+            const candidates = _nameCandidates(from, actor)
+                .filter(n => n.toLowerCase() !== to.toLowerCase())
+                .map(n => ({ name: n, n: _countName(current, n) }))
+                .filter(c => c.n > 0);
+            const hits = candidates.reduce((sum, c) => sum + c.n, 0);
+            // What to call it in the button: whichever spelling appears most.
+            const worst = candidates.slice().sort((a, b) => b.n - a.n)[0]?.name ?? from;
 
             const said = document.createElement("div");
             Object.assign(said.style, { fontSize: "15px", color: "#e9dcb0", marginRight: "auto", lineHeight: "1.45" });
             said.innerHTML = !current.trim()
                 ? `This one is now called <strong style="color:#ffe75a;">${foundry.utils.escapeHTML(to)}</strong>. There is no biography yet.`
                 : (hits
-                    ? `This one is now called <strong style="color:#ffe75a;">${foundry.utils.escapeHTML(to)}</strong>. The biography still says <strong style="color:#ffb4b4;">${foundry.utils.escapeHTML(from)}</strong>.`
-                    : `This one is now called <strong style="color:#ffe75a;">${foundry.utils.escapeHTML(to)}</strong>. The biography does not use ${from ? `&ldquo;${foundry.utils.escapeHTML(from)}&rdquo;` : "the old name"} anywhere, so there is nothing to swap.`);
+                    ? `This one is now called <strong style="color:#ffe75a;">${foundry.utils.escapeHTML(to)}</strong>. The biography still says <strong style="color:#ffb4b4;">${
+                        foundry.utils.escapeHTML(candidates.map(c => c.name).join("&rdquo;, &ldquo;"))}</strong>.`
+                    : `This one is now called <strong style="color:#ffe75a;">${foundry.utils.escapeHTML(to)}</strong>. The biography does not name it, so there is nothing to swap. Edit it here, or have the AI write a new one.`);
             renameBar.appendChild(said);
 
             if (hits) {
                 const swap = document.createElement("button");
                 swap.type = "button";
-                swap.innerHTML = `<i class="fas fa-right-left"></i> Replace "${foundry.utils.escapeHTML(from)}" with "${foundry.utils.escapeHTML(to)}" (${hits} place${hits === 1 ? "" : "s"})`;
+                swap.innerHTML = `<i class="fas fa-right-left"></i> Replace "${foundry.utils.escapeHTML(worst)}" with "${foundry.utils.escapeHTML(to)}" (${hits} place${hits === 1 ? "" : "s"})`;
                 Object.assign(swap.style, {
                     fontSize: "15px", fontWeight: "700", padding: "9px 16px", borderRadius: "6px", cursor: "pointer",
                     border: "2px solid #7bd88f", background: "linear-gradient(180deg,#1f8a45,#116030)", color: "#f4ffe9",
@@ -252,7 +260,10 @@ export class BiographyEditor {
                 swap.addEventListener("click", () => {
                     // ⚠️ IN THE WINDOW, NOT ON THE SHEET. Nothing is written
                     // until Save, so a swap he did not mean is one Discard away.
-                    body.innerHTML = _swapName(body.innerHTML, from, to);
+                    // Longest spelling first: see _nameCandidates.
+                    let next = body.innerHTML;
+                    for (const c of candidates) next = _swapName(next, c.name, to);
+                    body.innerHTML = next;
                     BiographyEditor._dirty = true;
                     syncState();
                     swap.disabled = true;
@@ -382,6 +393,45 @@ export class BiographyEditor {
 function _nameRe(name) {
     const esc = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(?<![\\w'])${esc}(?![\\w])`, "g");
+}
+
+/**
+ * Every spelling of "the name it had" that a biography might really contain.
+ *
+ * ⚠️🔴 HIS TABLE, 2026-09-24. The bar said the biography did not use "Carrion
+ * Ogre (1)" anywhere, which was true and useless: the token label carries
+ * Foundry's duplicate counter and the prose says "Carrion Ogre". So the one
+ * button he needed never appeared, on the one job he wanted done.
+ *
+ * Longest first, so "Carrion Ogre (1)" is swapped before "Carrion Ogre" and a
+ * half-replaced label cannot be left behind.
+ *
+ * ⚠️ CASE MATTERS, deliberately. "Carrion Ogre" capitalised is the creature
+ * being named; "carrion ogre" in the middle of a sentence is the species being
+ * described, and turning that into "the Gromm the Unyielding stalks the halls"
+ * would wreck the sentence it was trying to fix.
+ */
+function _nameCandidates(previous, actor) {
+    const strip = (n) => String(n ?? "")
+        .replace(/\s*\((?:\d+|copy|\d+\s*of\s*\d+)\)\s*$/i, "")   // "(1)", "(copy)"
+        .replace(/\s*#?\d+\s*$/, "")                                   // "Goblin 2", "Goblin #2"
+        .trim();
+
+    let original = "";
+    try { original = String(actor?.getFlag?.(MODULE_ID, "originalName") ?? "").trim(); } catch (_) { original = ""; }
+
+    const raw = [previous, strip(previous), actor?.name, strip(actor?.name), original, strip(original)];
+    const seen = new Set();
+    const out = [];
+    for (const n of raw) {
+        const name = String(n ?? "").trim();
+        if (name.length < 3) continue;          // "a", "1" — never worth swapping
+        const key = name.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(name);
+    }
+    return out.sort((a, b) => b.length - a.length);
 }
 
 function _countName(html, name) {

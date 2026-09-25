@@ -2288,7 +2288,14 @@ async function _generateBio(tokenDocument) {
     }
 
     // Extract PERSONALITY: line if present — save as the NPC's personality flag
-    const personalityMatch = bioText.match(/\n\s*PERSONALITY:\s*(.+?)(?:\n|$)/i);
+    //
+    // ⚠️🔴 IT DOES NOT ALWAYS ARRIVE ON A LINE OF ITS OWN (2026-09-24). The
+    // prompt asks for two lines at the end, and the model usually obliges; when
+    // it does not, it glues them to the last sentence — "...tribal
+    // hierarchy.TONE: Grim" — and a pattern that insisted on a newline left the
+    // label sitting in the middle of his biography, on screen, at the table.
+    // A full stop, a quote or the start of the text count as well now.
+    const personalityMatch = bioText.match(/(?:^|\n|(?<=[.!?"'\u2019\u201d]))\s*PERSONALITY:\s*(.+?)(?:\n|$)/i);
     if (personalityMatch) {
         generatedPersonality = personalityMatch[1].trim();
         // Remove from bio text so it doesn't appear in the biography HTML
@@ -2297,11 +2304,15 @@ async function _generateBio(tokenDocument) {
 
     // Extract TONE: line if present — save as the NPC's tone flag
     const VALID_TONES = ["formal", "casual", "cryptic", "cheerful", "grim", "sarcastic", "threatening", "nervous", "stoic", "theatrical"];
-    const toneMatch = bioText.match(/\n\s*TONE:\s*(.+?)(?:\n|$)/i);
+    const toneMatch = bioText.match(/(?:^|\n|(?<=[.!?"'\u2019\u201d]))\s*TONE:\s*(.+?)(?:\n|$)/i);
     let generatedTone = "";
     if (toneMatch) {
         const raw = toneMatch[1].trim().toLowerCase();
         generatedTone = VALID_TONES.includes(raw) ? raw : "";
+        if (!generatedTone) {
+            console.warn(`${TAG} | "${actor.name}" was given the tone "${raw}", which is not one of the ten. `
+                + `No tone was saved; the line was still taken out of the biography.`);
+        }
         bioText = bioText.replace(toneMatch[0], "").trim();
     }
 
