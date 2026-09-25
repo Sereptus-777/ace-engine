@@ -2481,6 +2481,12 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                   <i class="fas fa-wand-magic-sparkles"></i> Ask the AI
                 </button>
               </div>
+              <!-- ⚠️ ROWS, NOT A HIDDEN DROPDOWN (2026-09-24). His settings panel
+                   filters to visible rows on every keystroke, and that is the
+                   search everyone in ACE already knows. Typing here does the
+                   same: matches appear under the box and one click takes it. -->
+              <div class="ace-faction-suggest" style="display:none; max-height:280px; overflow-y:auto; margin-bottom:6px;
+                          background:#fff; border:1px solid #bbb; border-radius:4px;"></div>
               <div class="ace-faction-count" style="font-size:0.85em; color:#666; margin-bottom:6px;">
                 ${_initialList.total} to choose from: ${_poolCounts.world} from your world, ${_poolCounts.scene} on this scene, ${_poolCounts.ace} already in ACE.${
                   _poolCounts.world === 0
@@ -2789,20 +2795,119 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                     + `(${_poolCounts.world} from your world, ${_poolCounts.scene} on this scene, ${_poolCounts.ace} already in ACE).`;
             };
 
-            // ── The search box ─────────────────────────────────────────
+            // ── The search box, and the rows it drops down ──────────────
             const _searchBox = el.querySelector('input[name="factionSearch"]');
+            const _suggest = el.querySelector(".ace-faction-suggest");
+            let _cursor = -1;
+
+            /** One click, and the faction is chosen. */
+            const _takeSuggestion = (value) => {
+                const sel = el.querySelector('select[name="factionChoice"]');
+                if (!sel || !value) return;
+                if (_suggest) { _suggest.style.display = "none"; _suggest.innerHTML = ""; }
+                if (_searchBox) _searchBox.value = "";
+
+                // The filter was only ever a view: the list goes back to whole.
+                const rendered = _renderFactionOptions(_allRows, { selected: value });
+                sel.innerHTML = rendered.html;
+                // A create-by-name row is not one of his factions yet, so it is
+                // added to the list rather than silently dropped.
+                if (![...sel.options].some(o => o.value === value)) {
+                    const opt = document.createElement("option");
+                    opt.value = value;
+                    opt.textContent = value.startsWith("__named__:")
+                        ? `\u2795 Create a faction called "${value.slice("__named__:".length)}"`
+                        : value;
+                    sel.appendChild(opt);
+                }
+                sel.value = value;
+                _syncCount(rendered);
+                sel.dispatchEvent(new Event("change"));
+            };
+
+            /** Matches for what he has typed, best first. */
+            const _matchesFor = (q) => {
+                const terms = String(q ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+                if (!terms.length) return [];
+                return [..._allRows]
+                    .filter(r => terms.every(t => r.search.includes(t)))
+                    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+                    .slice(0, 12);
+            };
+
+            const _paintSuggestions = (q) => {
+                if (!_suggest) return;
+                const rows = _matchesFor(q);
+                _cursor = -1;
+                if (!String(q ?? "").trim()) { _suggest.style.display = "none"; _suggest.innerHTML = ""; return; }
+
+                const esc = (t) => foundry.utils.escapeHTML(String(t ?? ""));
+                if (!rows.length) {
+                    // ⚠️ NEVER A DEAD END. Nothing matching is itself an answer,
+                    // and the answer is "shall I make one called that".
+                    _suggest.innerHTML = `<div class="ace-fs-row" data-value="__named__:${esc(q.trim())}"
+                        style="padding:8px 10px; cursor:pointer; color:#111; font-size:1em; border-bottom:1px solid #eee;">
+                        \u2795 <strong>Create a faction called "${esc(q.trim())}"</strong>
+                        <div style="font-size:0.85em; color:#666;">Nothing in your world matches that.</div>
+                    </div>`;
+                } else {
+                    _suggest.innerHTML = rows.map(r => {
+                        const al = _abbreviateAlignment(r.alignment);
+                        const bits = [r.type || "faction"];
+                        if (al) bits.push(`[${al}]`);
+                        if (r.reasons?.length) bits.push(r.reasons.slice(0, 3).join(", "));
+                        if (r.excluded) bits.push("not a usual fit");
+                        return `<div class="ace-fs-row" data-value="${esc(r.value)}"
+                            style="padding:8px 10px; cursor:pointer; color:#111; font-size:1em; border-bottom:1px solid #eee;">
+                            <strong>${esc(r.name)}</strong>
+                            <div style="font-size:0.85em; color:#555;">${esc(bits.join(" \u00b7 "))}</div>
+                        </div>`;
+                    }).join("");
+                }
+                _suggest.style.display = "block";
+
+                for (const row of _suggest.querySelectorAll(".ace-fs-row")) {
+                    row.addEventListener("mouseenter", () => { row.style.background = "#f0e9d2"; });
+                    row.addEventListener("mouseleave", () => { row.style.background = ""; });
+                    row.addEventListener("click", () => _takeSuggestion(row.dataset.value));
+                }
+            };
+
             if (_searchBox) {
                 _searchBox.addEventListener("input", () => {
                     const sel = el.querySelector('select[name="factionChoice"]');
+                    _paintSuggestions(_searchBox.value);
                     if (!sel) return;
                     const keep = sel.value;
-                    const rendered = _renderFactionOptions(_allRows, { query: _searchBox.value, selected: keep, limit: 20 });
+                    const rendered = _renderFactionOptions(_allRows, { query: _searchBox.value, selected: keep });
                     sel.innerHTML = rendered.html;
                     _syncCount(rendered);
                     // ⚠️ A FILTER MUST NEVER UN-CHOOSE WHAT WAS CHOSEN. Same rule
                     // as the origin rebuild, same reason (2026-08-23, live).
                     if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
                     sel.dispatchEvent(new Event("change"));
+                });
+
+                // ── The keyboard, because a search bar that needs the mouse is
+                // half a search bar.
+                _searchBox.addEventListener("keydown", (ev) => {
+                    const rows = [..._suggest?.querySelectorAll(".ace-fs-row") ?? []];
+                    if (!rows.length) return;
+                    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+                        ev.preventDefault();
+                        _cursor += ev.key === "ArrowDown" ? 1 : -1;
+                        if (_cursor < 0) _cursor = rows.length - 1;
+                        if (_cursor >= rows.length) _cursor = 0;
+                        rows.forEach((r, i) => { r.style.background = i === _cursor ? "#f0e9d2" : ""; });
+                        rows[_cursor].scrollIntoView({ block: "nearest" });
+                    } else if (ev.key === "Enter") {
+                        ev.preventDefault();
+                        _takeSuggestion(rows[_cursor >= 0 ? _cursor : 0].dataset.value);
+                    } else if (ev.key === "Escape") {
+                        ev.preventDefault();
+                        _searchBox.value = "";
+                        _paintSuggestions("");
+                    }
                 });
             }
 
