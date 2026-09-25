@@ -53,6 +53,21 @@ import { getSecret, getSecretVault, migrateSecretsToClientScope } from "./settin
 
 const MODULE_ID = "ace-engine";
 
+// ⚠️ SAY IT, ONCE, WHERE HE CAN SEE IT (2026-09-24). A world source that comes
+// back empty used to return an empty array and nothing else, three different
+// ways, so a faction dialog with nothing in it looked identical to a world with
+// nothing in it. Each distinct reason is reported once per session: to the
+// console for the detail, and to the screen because he does not play with a
+// console open.
+const _saidOnce = new Set();
+function _sayOnce(key, reason) {
+    const k = `${key}:${reason}`;
+    if (_saidOnce.has(k)) return;
+    _saidOnce.add(k);
+    console.warn(`${MODULE_ID} | ${reason}.`);
+    try { if (game.user?.isGM) ui.notifications?.warn(`ACE: ${reason}.`); } catch (_) { /* pre-ready */ }
+}
+
 /**
  * Authorise a socket payload that claims to act for a PLAYER.
  *
@@ -3915,8 +3930,20 @@ Hooks.once("ready", async () => {
        *  Consumer-safe wrapper — avoids exposing the DigestEngine instance.
        *  @returns {Array<Object>} Faction objects */
       getWorldGraphFactions: () => {
-        try { return digestEngine?.getWorldGraph?.()?.factions ?? []; }
-        catch (_) { return []; }
+        // ⚠️ AN EMPTY LIST IS AN ANSWER, AND IT HAS A REASON (2026-09-24). This
+        // returned [] for a missing digest engine, a missing graph and a thrown
+        // error alike, so his faction dialog could only ever say "0".
+        try {
+          if (!digestEngine) { _sayOnce("worldGraph", "the digest engine is not running, so the world digest has no factions to give"); return []; }
+          const graph = digestEngine.getWorldGraph?.();
+          if (!graph) { _sayOnce("worldGraph", "the digest engine is running but has no world graph built yet"); return []; }
+          const list = graph.factions ?? [];
+          if (!list.length) _sayOnce("worldGraph", "the world graph has no factions in it");
+          return list;
+        } catch (err) {
+          console.error(`${MODULE_ID} | the world digest factions could not be read:`, err);
+          return [];
+        }
       },
 
       /** Get all factions from the World Bible faction index.
@@ -3924,9 +3951,19 @@ Hooks.once("ready", async () => {
        *  @returns {Array<Object>} Faction objects with name, type, _regionId, etc. */
       getWorldBibleFactions: () => {
         try {
-          if (!worldBible?._factionIndex?.size) return [];
+          if (!worldBible) { _sayOnce("bible", "the world bible engine did not start"); return []; }
+          if (!worldBible.hasData) { _sayOnce("bible", `the world bible has no data loaded for "${game.world?.id}" — check worlds/${game.world?.id}/ace-engine/ace-world-bible.json`); return []; }
+          if (!worldBible._factionIndex?.size) {
+            // Loaded but never indexed: rebuild rather than report nothing.
+            try { worldBible._buildIndexes(); } catch (err) { console.error(`${MODULE_ID} | the world bible could not be indexed:`, err); }
+            if (!worldBible._factionIndex?.size) { _sayOnce("bible", "the world bible is loaded but holds no factions"); return []; }
+            console.log(`${MODULE_ID} | the world bible was loaded but not indexed; rebuilt it — ${worldBible._factionIndex.size} factions.`);
+          }
           return [...worldBible._factionIndex.values()];
-        } catch (_) { return []; }
+        } catch (err) {
+          console.error(`${MODULE_ID} | the world bible factions could not be read:`, err);
+          return [];
+        }
       },
 
       /** Get the shared AI provider configuration (provider, apiKey, model).

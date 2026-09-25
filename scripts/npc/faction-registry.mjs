@@ -2057,6 +2057,10 @@ export async function shortlistFactions(actor, candidates = []) {
     }
 }
 
+// Why the world list is empty, when it is. Set where the sources are read and
+// shown on the dialog, because a count of zero does not say whose fault it is.
+let _poolProblem = "";
+
 export async function showNpcIdentityDialog(tokenDoc, existingFactions, creatureBase, sceneIntel = null, worldDigestFactions = [], bibleFactions = [], recommendations = [], { gmPress = false } = {}) {
     const actor = tokenDoc.actor;
     const sceneName = canvas.scene?.name || "Unknown Scene";
@@ -2473,13 +2477,15 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 <!-- ⚠️ A BUTTON, NOT AUTOMATIC (his choice, 2026-09-24). It costs
                      an AI call, so it happens when he asks for it. -->
                 <button type="button" name="askAi"
-                        style="padding:8px 12px; background:#1d1710; color:#f0d98a; border:1px solid #d4af37; border-radius:4px; font-size:0.95em; font-weight:600; cursor:pointer; white-space:nowrap;">
+                        style="flex:0 0 auto; width:auto; padding:8px 12px; background:#1d1710; color:#f0d98a; border:1px solid #d4af37; border-radius:4px; font-size:0.95em; font-weight:600; cursor:pointer; white-space:nowrap;">
                   <i class="fas fa-wand-magic-sparkles"></i> Ask the AI
                 </button>
               </div>
               <div class="ace-faction-count" style="font-size:0.85em; color:#666; margin-bottom:6px;">
                 ${_initialList.total} to choose from: ${_poolCounts.world} from your world, ${_poolCounts.scene} on this scene, ${_poolCounts.ace} already in ACE.${
-                  _poolCounts.world === 0 ? " <strong style=\"color:#a3261f;\">Your world digest is not loaded, so only what ACE already knows is listed.</strong>" : ""}
+                  _poolCounts.world === 0
+                    ? ` <strong style="color:#a3261f;">Nothing from your world reached this list${_poolProblem ? `: ${_poolProblem}` : ""}.</strong>`
+                    : ""}
               </div>
               <select name="factionChoice" style="width:100%; padding:12px 10px; background:#fff; border:1px solid #bbb; border-radius:4px; color:#111; font-size:1.1em; font-weight:600; margin-bottom:8px; line-height:1.4; color-scheme:light;">
                 ${factionOptionsHtml}
@@ -2756,6 +2762,50 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 });
             }
 
+            // ── The Biography button opens the one biography window ──────
+            const _bioBtn = el.querySelector('button[name="editBio"]');
+            if (_bioBtn) {
+                _bioBtn.addEventListener("click", async () => {
+                    try {
+                        const { BiographyEditor } = await import("./bio-editor.mjs");
+                        BiographyEditor.open(tokenDoc);
+                    } catch (err) {
+                        console.error(`${TAG} | the biography window could not open:`, err);
+                        ui.notifications?.error("ACE: the biography window could not open — see the console.");
+                    }
+                });
+            }
+
+            // Faction metadata for info panel (closure reference — mutable)
+            let _factionMeta = factionMeta;
+            // Every candidate, so the search reaches past what is on screen.
+            let _allRows = allRows;
+            const _recNames2 = _recNames;
+
+            const _syncCount = (r) => {
+                const cnt = el.querySelector(".ace-faction-count");
+                if (!cnt) return;
+                cnt.textContent = `${r.total} match${r.total === 1 ? "" : "es"} of ${_poolCounts.world + _poolCounts.scene + _poolCounts.ace} `
+                    + `(${_poolCounts.world} from your world, ${_poolCounts.scene} on this scene, ${_poolCounts.ace} already in ACE).`;
+            };
+
+            // ── The search box ─────────────────────────────────────────
+            const _searchBox = el.querySelector('input[name="factionSearch"]');
+            if (_searchBox) {
+                _searchBox.addEventListener("input", () => {
+                    const sel = el.querySelector('select[name="factionChoice"]');
+                    if (!sel) return;
+                    const keep = sel.value;
+                    const rendered = _renderFactionOptions(_allRows, { query: _searchBox.value, selected: keep, limit: 20 });
+                    sel.innerHTML = rendered.html;
+                    _syncCount(rendered);
+                    // ⚠️ A FILTER MUST NEVER UN-CHOOSE WHAT WAS CHOSEN. Same rule
+                    // as the origin rebuild, same reason (2026-08-23, live).
+                    if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+                    sel.dispatchEvent(new Event("change"));
+                });
+            }
+
             // ── Ask the AI which three fit ─────────────────────────────
             const _askAi = el.querySelector('button[name="askAi"]');
             if (_askAi) {
@@ -2806,49 +2856,6 @@ export async function showNpcIdentityDialog(tokenDoc, existingFactions, creature
                 });
             }
 
-            // ── The Biography button opens the one biography window ──────
-            const _bioBtn = el.querySelector('button[name="editBio"]');
-            if (_bioBtn) {
-                _bioBtn.addEventListener("click", async () => {
-                    try {
-                        const { BiographyEditor } = await import("./bio-editor.mjs");
-                        BiographyEditor.open(tokenDoc);
-                    } catch (err) {
-                        console.error(`${TAG} | the biography window could not open:`, err);
-                        ui.notifications?.error("ACE: the biography window could not open — see the console.");
-                    }
-                });
-            }
-
-            // Faction metadata for info panel (closure reference — mutable)
-            let _factionMeta = factionMeta;
-            // Every candidate, so the search reaches past what is on screen.
-            let _allRows = allRows;
-            const _recNames2 = _recNames;
-
-            const _syncCount = (r) => {
-                const cnt = el.querySelector(".ace-faction-count");
-                if (!cnt) return;
-                cnt.textContent = `${r.total} match${r.total === 1 ? "" : "es"} of ${_poolCounts.world + _poolCounts.scene + _poolCounts.ace} `
-                    + `(${_poolCounts.world} from your world, ${_poolCounts.scene} on this scene, ${_poolCounts.ace} already in ACE).`;
-            };
-
-            // ── The search box ─────────────────────────────────────────
-            const _searchBox = el.querySelector('input[name="factionSearch"]');
-            if (_searchBox) {
-                _searchBox.addEventListener("input", () => {
-                    const sel = el.querySelector('select[name="factionChoice"]');
-                    if (!sel) return;
-                    const keep = sel.value;
-                    const rendered = _renderFactionOptions(_allRows, { query: _searchBox.value, selected: keep, limit: 20 });
-                    sel.innerHTML = rendered.html;
-                    _syncCount(rendered);
-                    // ⚠️ A FILTER MUST NEVER UN-CHOOSE WHAT WAS CHOSEN. Same rule
-                    // as the origin rebuild, same reason (2026-08-23, live).
-                    if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
-                    sel.dispatchEvent(new Event("change"));
-                });
-            }
 
             // ── Closure data for dynamic origin-based faction rebuild ──
             const _sceneName = sceneName;
@@ -4358,18 +4365,38 @@ export async function processTokenFaction(tokenDoc, { adoptOnly = false } = {}) 
     let sceneIntel = null;
     let worldDigestFactions = [];
     let bibleFactions = [];
+    // ⚠️🔴 THREE FETCHES, THREE FATES (2026-09-24). These were one try block in
+    // this order, so a throw in the FIRST one — a scene with no intelligence —
+    // skipped the other two and emptied his entire world, under a warning that
+    // said "non-fatal". His dialog then offered a lawful good gold dragon one
+    // faction, and nothing on screen could tell him why.
+    //
+    // Each gets its own catch, and each failure says which of the three it was.
+    _poolProblem = "";
     try {
         sceneIntel = await EngineBridge.getSceneIntelligence(sceneName);
-        // Pull ALL factions from the world digest (via bridge — no instance leak)
-        worldDigestFactions = EngineBridge.getWorldGraphFactions();
-        // Pull ALL factions from the World Bible for enrichment
-        try { bibleFactions = EngineBridge.getWorldBibleFactions(); } catch (_) { /* non-fatal */ }
-        if (worldDigestFactions.length || bibleFactions.length) {
-            console.log(`${TAG} | Loaded ${worldDigestFactions.length} digest factions + ${bibleFactions.length} Bible factions`);
-        }
     } catch (err) {
-        console.warn(`${TAG} | Scene intelligence / world digest lookup failed (non-fatal):`, err);
+        console.warn(`${TAG} | this scene has no intelligence record (the world list is unaffected):`, err);
     }
+    try {
+        // Every faction the digest knows about.
+        worldDigestFactions = EngineBridge.getWorldGraphFactions() ?? [];
+    } catch (err) {
+        _poolProblem = "the world digest could not be read";
+        console.error(`${TAG} | the world digest could not be read:`, err);
+    }
+    try {
+        // Every faction the world bible knows about.
+        bibleFactions = EngineBridge.getWorldBibleFactions() ?? [];
+    } catch (err) {
+        _poolProblem = "the world bible could not be read";
+        console.error(`${TAG} | the world bible could not be read:`, err);
+    }
+    if (!worldDigestFactions.length && !bibleFactions.length && !_poolProblem) {
+        _poolProblem = "the world digest and the world bible are both empty in this session";
+    }
+    console.log(`${TAG} | world sources: ${worldDigestFactions.length} from the digest, `
+        + `${bibleFactions.length} from the bible${_poolProblem ? ` — ${_poolProblem}` : ""}.`);
 
     let factionId = null;
     let role = "";
