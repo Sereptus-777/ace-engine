@@ -4418,8 +4418,29 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
           partyNames,
         });
 
+        // ⚠️🔴 NEVER CUT THE RECORD OF HIS SESSION (2026-09-24). This posted
+        // the first 300 characters with an ellipsis on the end, so the most
+        // important thing ACE does looked exactly like it had been truncated
+        // and lost: "Session 15 Summary saved to journal... This confro…".
+        //
+        // The journal and the memory store were always getting the whole thing
+        // (the store ceiling is 100,000 characters, which nothing real reaches).
+        // It was the note that lied. Height is free; the summary is posted
+        // whole, with the journal it went to named underneath it.
+        // ⚠️ AND IT SAYS HOW MUCH OF THE SESSION IT SAW. A summary written from
+        // the tail of a long night is not a broken save, but it is not the
+        // whole night either, and he has to be able to tell the difference.
+        const span = this.lkMemory?.lastDigestSpan ?? null;
+        const spanNote = span
+          ? (span.capped
+              ? ` Written from the most recent ${span.used} of ${span.total} recorded events — the earlier ones did not fit.`
+              : ` Written from all ${span.used} recorded events since the last summary.`)
+          : "";
+
         this._pushSystemNote(
-          `📖 **Session ${sessionNum} Summary saved to journal** — check the "📖 ACE" folder.\n\n${summary.slice(0, 300)}${summary.length > 300 ? "…" : ""}`,
+          `📖 **Session ${sessionNum} Summary**\n\n${summary}\n\n`
+          + `_Saved in full to the journal “Session ${sessionNum} — ${new Date().toISOString().slice(0, 10)}”, `
+          + `in the “📖 ACE” folder. ${summary.length} characters.${spanNote}_`,
         );
         ui.notifications?.info("ACE: Session summary saved to journal.");
 

@@ -1018,7 +1018,15 @@ export class MemoryManager {
 
   /** Get a human-readable digest of recent events. */
   getEventDigest(maxEvents = 100) {
-    const events = this.getEventsSinceLastSummary().slice(-maxEvents);
+    // ⚠️🔴 THE SUMMARY CAN ONLY BE AS COMPLETE AS WHAT IT IS SHOWN (2026-09-24).
+    // This took the LAST 150 events of a session and said nothing about the
+    // rest, so a long night was summarised from its tail and the beginning of
+    // the evening simply was not in the prompt. His words: "It's saving bits in
+    // fucking pieces". The ceiling is much higher now, and when it is reached
+    // the count is recorded so the note can say so out loud.
+    const all = this.getEventsSinceLastSummary();
+    const events = all.slice(-maxEvents);
+    this.lastDigestSpan = { used: events.length, total: all.length, capped: all.length > events.length };
     if (!events.length) return "No events recorded since last session.";
     return events.map(e => this.history.eventToText(e)).filter(Boolean).join("\n");
   }
@@ -1249,7 +1257,9 @@ Write the session summary now. Be vivid but concise — this is a campaign journ
    * Ask the AI to generate a session summary.
    */
   async generateSessionSummary(aiProvider, sceneCtx, onChunk = null) {
-    const digest     = this.getEventDigest(150);
+    // One line per event. Five hundred of them is a long evening and a prompt
+    // of a few tens of kilobytes, which every provider ACE supports handles.
+    const digest     = this.getEventDigest(500);
     const narrations = this.getRecentNarrations(30).join("\n- ");
     const partyNames = this._partyPresent(this.history?.events ?? []).join(", ");
     const sceneName  = canvas?.scene?.name ?? "unknown";
