@@ -9462,19 +9462,23 @@ li.ace-toolbar-btn:hover {
    mean nothing on session one, and this window is the first thing a player
    touches. Every control now carries its word. Shared shape here; each button
    keeps its own colour below. */
+/* ⚠️🔴 EVERY PILL FITS ITS OWN TEXT. FOREVER. (his rule, 2026-09-25, given
+   on Forge's DISARM ALL (2) button and applied everywhere.) A fixed height with
+   nowrap cuts the label off instead of growing. A minimum keeps the row tidy;
+   a long label wraps and the button gets taller. */
 .ace-engine-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  height: 40px;
+  min-height: 34px;
   padding: 0 14px;
   border-radius: 20px;                 /* the pill */
   font-family: inherit;
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.3px;
-  white-space: nowrap;                 /* never break "Pause Conversation" */
+  white-space: normal;                 /* never break "Pause Conversation" */
   cursor: pointer;
   transition: all 0.2s ease;
 }
