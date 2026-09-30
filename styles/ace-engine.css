@@ -11043,3 +11043,13 @@ body.ace-engine-hide-tah #token-hud .bar2 {
    an AC is the one thing the person rolling must not be told. */
 .ace-qol-ac { display: none !important; }
 .ace-qol-ac[data-ace-ac="show"] { display: inline !important; }
+
+/* ── A THINNER FRAME ON AN ACE CARD (his ask, 2026-09-30) ───────────────────
+   Foundry draws every chat message with `border: 2px solid #6f6c66` and
+   `border-radius: 6px` (public/css/foundry2.css). On an ACE card that heavy line
+   fights the card's own frame, so it drops to 1px here.
+
+   Scoped to `[data-ace-card="1"]`, so ordinary chat keeps Foundry's own look.
+   Only the WIDTH changes: the colour and the radius are Foundry's, and a card
+   that ACE never stamped is untouched. */
+.chat-message[data-ace-card="1"] { border-width: 1px; }
