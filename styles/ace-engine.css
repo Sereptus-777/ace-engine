@@ -10985,3 +10985,17 @@ body.ace-engine-hide-tah #token-hud .bar2 {
   font-weight: bold;
   opacity: 0.9;
 }
+
+/* ── A DC BELONGS TO WHOEVER SET IT (his rule, 2026-09-29) ──────────────────
+   "The player knows its own DCs. It has no idea about any other DC. The dungeon
+   master knows all DCs."
+
+   The same contract as ACE QOL's, declared HERE as well on purpose: the hide
+   rule has to travel with the module that draws the card. If this module ships
+   without QOL, its DCs are still hidden; if the reveal pass never runs, they
+   STAY hidden, which is the safe direction. A class that is visible until
+   something hides it leaks on every card the handler misses. */
+.ace-qol-dc { display: none !important; }
+.ace-qol-dc[data-ace-dc="show"] { display: inline !important; }
+.ace-qol-save-dc { display: none !important; }
+.ace-qol-save-dc[data-ace-dc="show"] { display: inline-block !important; }

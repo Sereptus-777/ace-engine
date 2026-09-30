@@ -707,7 +707,7 @@ export class SubtleRollManager {
       `</div>` +
       `<div style="color:#e0ddd8;margin-bottom:4px;font-size:0.88em;">` +
       `<strong>${_escapeHtml(suggestion.actorName)}</strong> → ` +
-      `<strong style="color:#c4a8f0;">${_escapeHtml(skillLabel)}</strong> DC ${suggestion.dc}</div>` +
+      `<strong style="color:#c4a8f0;">${_escapeHtml(skillLabel)}</strong><span class="ace-qol-save-dc"> DC ${suggestion.dc}</span></div>` +
       `<div style="font-size:0.8em;color:#9a9890;font-style:italic;margin-bottom:8px;">` +
       `${_escapeHtml(suggestion.reason)}</div>` +
       `<div style="display:flex;gap:6px;">` +
@@ -1111,7 +1111,7 @@ export class SubtleRollManager {
       `<div style="background:#2a1a3a;padding:8px 14px;display:flex;align-items:center;justify-content:space-between;">` +
       `<span style="color:#c4a8f0;font-weight:bold;font-size:1em;letter-spacing:0.5px;">` +
       `<i class="fas fa-eye-slash" style="margin-right:6px;"></i>${_escapeHtml(skillLabel)}</span>` +
-      `<span style="color:#c4a8f0;font-weight:bold;font-size:1em;">DC ${dc}</span>` +
+      `<span class="ace-qol-save-dc"><span style="color:#c4a8f0;font-weight:bold;font-size:1em;">DC ${dc}</span></span>` +
       `</div>`;
 
     // Flavor text (compact)

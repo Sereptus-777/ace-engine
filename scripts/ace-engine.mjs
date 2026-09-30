@@ -5154,9 +5154,45 @@ Hooks.on("closeSettingsConfig", () => {
 // Shared handler — works with both v12 renderChatMessage and v13 renderChatMessageHTML.
 const ACE_PORTRAIT = `modules/${MODULE_ID}/assets/ace-portrait.png`;
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   A DC BELONGS TO WHOEVER SET IT (his rule, 2026-09-29)
+
+     "The player knows its own DCs. It has no idea about any other DC. The
+      dungeon master knows all DCs."
+
+   A card is built once and rendered on every client, so this is decided per
+   screen, not when the card is written. `data-dc-actor` names the creature that
+   SET the number; no owner named means the GM's alone. Hidden by this module's
+   own stylesheet, so a card whose handler never runs stays hidden rather than
+   leaking, and a world running this module without ACE QOL is still correct.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function _aceRevealOwnDCs(root) {
+  try {
+    const may = (id) => {
+      if (game.user?.isGM) return true;
+      if (!id) return false;
+      return !!game.actors?.get(id)?.isOwner;
+    };
+    for (const el of (root?.querySelectorAll?.(".ace-qol-dc") ?? [])) {
+      if (may(el.dataset?.dcActor ?? null)) el.dataset.aceDc = "show";
+      else delete el.dataset.aceDc;
+    }
+    for (const el of (root?.querySelectorAll?.(".ace-qol-save-dc") ?? [])) {
+      if (game.user?.isGM) el.dataset.aceDc = "show";
+      else delete el.dataset.aceDc;
+    }
+  } catch (err) {
+    console.warn("could not decide which DCs this screen may see, so none are shown here:", err);
+  }
+}
+
 function _aceOnRenderChatMessage(message, html) {
   const root = html instanceof HTMLElement ? html : html[0];
   if (!root) return;
+
+  // Every card, before anything else: a DC this screen may not know is hidden.
+  _aceRevealOwnDCs(root);
 
   // ── Portrait: mark ACE messages so CSS can force the portrait ──
   const isAce = message.speaker?.alias === "ACE"
@@ -5628,7 +5664,7 @@ async function _aceRollSave(btn) {
           : "";
         const body =
           `<div style="font-size:1.8em;color:#eddfc5;text-align:center;font-weight:bold;padding:4px 0;">${roll.total}</div>` +
-          `<div style="text-align:center;font-size:0.9em;">vs DC ${dc} — ${passTag}</div>` +
+          `<div style="text-align:center;font-size:0.9em;"><span class="ace-qol-save-dc">vs DC ${dc} — </span>${passTag}</div>` +
           condBtn;
         // dice-ok: this branch runs only on systems other than dnd5e; no roll message was made and no dice are in the air.
         await ChatMessage.create({
@@ -5926,7 +5962,7 @@ async function _handleTccRequestRollClick(btn) {
       `<div class="ace-gm-roll-card" style="background:#1c150e;border-left:4px solid #c9a84c;` +
       `border-radius:6px;padding:12px 14px;font-family:'Rajdhani','Segoe UI',sans-serif;line-height:1.5;">` +
       `<div style="color:#c9a84c;font-weight:bold;font-size:1.05em;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">` +
-      `<i class="fas fa-dice-d20" style="margin-right:6px;"></i>${_escapeHtml(label)} ${_escapeHtml(typeLabel)} — DC ${dc}</div>` +
+      `<i class="fas fa-dice-d20" style="margin-right:6px;"></i>${_escapeHtml(label)} ${_escapeHtml(typeLabel)}<span class="ace-qol-save-dc"> — DC ${dc}</span></div>` +
       `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;">` +
       `<img src="${actor.prototypeToken?.texture?.src ?? actor.img}" style="width:28px;height:28px;border-radius:50%;border:1px solid #555;" />` +
       `<span style="flex:1;color:#eddfc5;">${_escapeHtml(actor.name)}</span>` +

@@ -2809,6 +2809,8 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 `<i class="fas fa-comments" style="margin-right:4px;"></i> Envoy — Subtle Check Suggestion</div>` +
                 `<div style="color:#eddfc5;margin-bottom:6px;">` +
                 `<strong>${escapeHtml(pcName)}</strong> is speaking with <strong>${escapeHtml(this.npcName)}</strong> — ` +
+                // dc-ok: the conversation window is the GM's own, and this is the
+                // check the NPC is suggesting he call for.
                 `the NPC thinks a <strong style="color:#c4a8f0;">${skillLabel}</strong> check (DC ${check.dc}) is warranted.</div>` +
                 `<div style="font-size:0.85em;color:#b0a080;font-style:italic;margin-bottom:8px;">` +
                 `"${escapeHtml(check.flavor)}"</div>` +
@@ -2839,6 +2841,7 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
             content: `<div style="background:#1c150e;border-left:4px solid #8a5bbf;border-radius:4px;padding:10px 12px;">` +
                 `<strong style="color:#c4a8f0;">Envoy — Check Suggestion</strong><br>` +
                 `<strong>${escapeHtml(pcName)}</strong> is speaking with <strong>${escapeHtml(this.npcName)}</strong>.<br>` +
+                // dc-ok: the GM's own conversation window, as above.
                 `The NPC suggests a <strong>${skillLabel}</strong> check (DC ${check.dc}).<br>` +
                 `<em style="color:#b0a080;">"${escapeHtml(check.flavor)}"</em></div>`,
             speaker: { alias: "ACE: Engine" },

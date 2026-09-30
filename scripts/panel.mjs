@@ -2336,6 +2336,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       });
       target.disabled = false;
       const passCount = results.filter(r => r.passed).length;
+      // dc-ok: a subtle roll IS the GM's secret roll, and this fires on his client.
       ui.notifications?.info(`ACE: Subtle roll complete — ${passCount}/${results.length} passed (DC ${dc}).`);
       return;
     }
@@ -2479,6 +2480,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
         `<div class="ace-gm-roll-card" style="background:#1c150e;border-left:4px solid #c9a84c;` +
         `border-radius:6px;padding:12px 14px;font-family:'Rajdhani','Segoe UI',sans-serif;line-height:1.5;">` +
         `<div style="color:#c9a84c;font-weight:bold;font-size:1.05em;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">` +
+        // dc-ok: the Engine panel is the GM's own window.
         `<i class="fas fa-dice-d20" style="margin-right:6px;"></i>${this._escapeHtml(label)} ${this._escapeHtml(typeLabel)} — DC ${dc}</div>` +
         rows +
         `<div style="text-align:right;color:#888;font-size:0.8em;margin-top:6px;">${passCount}/${gmResults.length} passed</div>` +
@@ -6928,9 +6930,9 @@ Appropriate loot, XP, and story rewards.
     if (/save|saving throw/i.test(mechText)) return null;   // already has one
     if (Math.random() >= 0.3) return null;
     const opts = [
-      "Make a <strong>DC 10 Dexterity save</strong> or stumble into an adjacent ally's space.",
-      "Make a <strong>DC 11 Constitution save</strong> or lose your reaction until the start of your next turn.",
-      "Make a <strong>DC 12 Strength save</strong> or your grip fails and your weapon drops to your feet.",
+      "Make a <strong><span class=\"ace-qol-save-dc\">DC 10 </span>Dexterity save</strong> or stumble into an adjacent ally's space.",
+      "Make a <strong><span class=\"ace-qol-save-dc\">DC 11 </span>Constitution save</strong> or lose your reaction until the start of your next turn.",
+      "Make a <strong><span class=\"ace-qol-save-dc\">DC 12 </span>Strength save</strong> or your grip fails and your weapon drops to your feet.",
     ];
     return opts[Math.floor(Math.random() * opts.length)];
   }
@@ -7595,15 +7597,15 @@ Appropriate loot, XP, and story rewards.
   static CRIT_TABLE = [
     /* 1 */  "Your weapon sings true — deal <strong>maximum damage dice</strong> (no roll needed).",
     /* 2 */  "The blow lands in a gap in their armor. <strong>Ignore all AC bonuses from armor</strong> for this hit.",
-    /* 3 */  "Ringing blow to the head! Target makes a <strong>DC 14 Con save or is stunned</strong> until end of their next turn.",
-    /* 4 */  "Knockback! Target is shoved <strong>10 feet and must succeed a DC 13 Str save or fall prone</strong>.",
+    /* 3 */  "Ringing blow to the head! Target makes a <strong><span class=\"ace-qol-save-dc\">DC 14 </span>Con save or is stunned</strong> until end of their next turn.",
+    /* 4 */  "Knockback! Target is shoved <strong>10 feet and must succeed a <span class=\"ace-qol-save-dc\">DC 13 </span>Str save or fall prone</strong>.",
     /* 5 */  "Precise strike — <strong>double the number of damage dice</strong> rolled.",
     /* 6 */  "Inspiring hit! You <strong>regain 1d6 hit points</strong> from the rush of battle.",
     /* 7 */  "Battle cry! <strong>All allies within 30 feet gain advantage</strong> on their very next attack roll.",
     /* 8 */  "Perfect form! You may <strong>make one extra attack as a bonus action</strong> this turn.",
     /* 9 */  "The enemy's grip fails — they <strong>drop one held item of your choice</strong> (lands at their feet).",
     /* 10 */ "Momentum strike! You may immediately <strong>move up to 10 feet</strong> without provoking opportunity attacks.",
-    /* 11 */ "Visceral hit! Target must make a <strong>DC 12 Wis save or be frightened</strong> of you until end of their next turn.",
+    /* 11 */ "Visceral hit! Target must make a <strong><span class=\"ace-qol-save-dc\">DC 12 </span>Wis save or be frightened</strong> of you until end of their next turn.",
     /* 12 */ "The blow exposes a weakness — <strong>target's AC is reduced by 2</strong> until the start of their next turn.",
     /* 13 */ "Reverb of steel! All enemies within 10 feet take <strong>1d4 thunder damage</strong> from the shockwave.",
     /* 14 */ "Heroic moment! One nearby ally may immediately use their reaction to <strong>take an extra action</strong>.",
@@ -7618,7 +7620,7 @@ Appropriate loot, XP, and story rewards.
   // ── Fumble Table (d20) — funny, harmless, memorable ──────────
 
   static FUMBLE_TABLE = [
-    /* 1 */  "Boot slips on debris. Make a <strong>DC 10 Dex save or fall prone</strong>. Getting up costs half movement next turn.",
+    /* 1 */  "Boot slips on debris. Make a <strong><span class=\"ace-qol-save-dc\">DC 10 </span>Dex save or fall prone</strong>. Getting up costs half movement next turn.",
     /* 2 */  "Wild swing — you miss and stumble 5 feet <strong>toward your target</strong>. At least you look committed.",
     /* 3 */  "Your battle cry comes out as an <strong>undignified squeak</strong>. Enemies have advantage on their next attack against you (from laughing).",
     /* 4 */  "Attack goes wide and <strong>knocks over a torch/lantern/environmental prop</strong> nearby. Nothing catches fire. Probably.",
@@ -7632,7 +7634,7 @@ Appropriate loot, XP, and story rewards.
     /* 12 */ "Your footwork shifts you <strong>5 feet in a random direction</strong> (d8: 1=N, 2=NE… 8=NW). Hopefully nothing dangerous there.",
     /* 13 */ "Dramatic wobble! Must use <strong>bonus action to regain balance</strong> this turn.",
     /* 14 */ "Your weapon arm goes numb from the shock — <strong>weapon drops at your feet</strong>.",
-    /* 15 */ "You accidentally look intimidating to your own side. <strong>One nearby ally must succeed a DC 8 Wis save</strong> or spend their move retreating from you.",
+    /* 15 */ "You accidentally look intimidating to your own side. <strong>One nearby ally must succeed a <span class=\"ace-qol-save-dc\">DC 8 </span>Wis save</strong> or spend their move retreating from you.",
     /* 16 */ "You over-committed so hard the DM gives you the Leeroy Jenkins Award. Miss, lose bonus action, and everyone at the table must acknowledge you tried.",
     /* 17 */ "Your attack causes your weapon's pommel to <strong>smack yourself in the face</strong>. Take 1 bludgeoning damage. No save. Just. Wow.",
     /* 18 */ "Overextended reach — target may immediately take a <strong>free 5-foot step toward you</strong> and make one reaction attack.",
