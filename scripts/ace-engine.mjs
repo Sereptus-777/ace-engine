@@ -5156,26 +5156,28 @@ const ACE_PORTRAIT = `modules/${MODULE_ID}/assets/ace-portrait.png`;
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   A DC BELONGS TO WHOEVER SET IT (his rule, 2026-09-29)
+   A DC IS SHOWN ON THE ROLL THAT NEEDS IT (ACE-ONE-ROAD.md § 13.2)
 
-     "The player knows its own DCs. It has no idea about any other DC. The
-      dungeon master knows all DCs."
+     "A player sees the DC on a roll they are making. The GM always sees every
+      DC." The wrapper names the ROLLER, not whoever set the number: a DC with
+      no roller on it is one nobody is rolling against yet, and stays the GM's.
 
    A card is built once and rendered on every client, so this is decided per
-   screen, not when the card is written. `data-dc-actor` names the creature that
-   SET the number; no owner named means the GM's alone. Hidden by this module's
+   screen, not when the card is written. `data-dc-roller` names the creature(s)
+   ROLLING against it; none named means the GM's alone. Hidden by this module's
    own stylesheet, so a card whose handler never runs stays hidden rather than
    leaking, and a world running this module without ACE QOL is still correct.
    ═══════════════════════════════════════════════════════════════════════════ */
 function _aceRevealOwnDCs(root) {
   try {
-    const may = (id) => {
+    const may = (rollers) => {
       if (game.user?.isGM) return true;
-      if (!id) return false;
-      return !!game.actors?.get(id)?.isOwner;
+      const ids = String(rollers ?? "").split(/\s+/).filter(Boolean);
+      if (!ids.length) return false;            // nobody is rolling it yet
+      return ids.some(id => !!game.actors?.get(id)?.isOwner);
     };
     for (const el of (root?.querySelectorAll?.(".ace-qol-dc") ?? [])) {
-      if (may(el.dataset?.dcActor ?? null)) el.dataset.aceDc = "show";
+      if (may(el.dataset?.dcRoller ?? null)) el.dataset.aceDc = "show";
       else delete el.dataset.aceDc;
     }
     for (const el of (root?.querySelectorAll?.(".ace-qol-save-dc") ?? [])) {
@@ -5187,12 +5189,40 @@ function _aceRevealOwnDCs(root) {
   }
 }
 
+/**
+ * § 13.3: a monster's AC is not on a card. Revealed to the GM, and to a player
+ * who owns that creature, because their own AC is on their own sheet. NOT the DC
+ * rule: the one rolling against an AC is exactly who must not be told it.
+ */
+function _aceRevealOwnACs(root) {
+  try {
+    for (const el of (root?.querySelectorAll?.(".ace-qol-ac") ?? [])) {
+      const id = el.dataset?.acActor ?? null;
+      const mine = game.user?.isGM || (!!id && !!game.actors?.get(id)?.isOwner);
+      if (mine) el.dataset.aceAc = "show";
+      else delete el.dataset.aceAc;
+    }
+  } catch (err) {
+    console.warn("could not decide which ACs this screen may see, so none are shown here:", err);
+  }
+}
+
 function _aceOnRenderChatMessage(message, html) {
   const root = html instanceof HTMLElement ? html : html[0];
   if (!root) return;
 
-  // Every card, before anything else: a DC this screen may not know is hidden.
+  // Every card, before anything else: a DC this screen is not rolling against is
+  // hidden, and an ACE card loses Foundry's speaker strip.
   _aceRevealOwnDCs(root);
+  _aceRevealOwnACs(root);
+    // § 13.1: this is an ACE card, so Foundry's speaker strip comes off it. Only
+    // the sender and the time are hidden by the stylesheet; the ⋮ stays.
+    try {
+      const flags = message?.flags ?? {};
+      const mine = ["ace-qol", "ace-artificer", "ace-engine", "ace-envoy"]
+        .some(ns => flags[ns] && Object.keys(flags[ns]).length);
+      if (mine && root?.setAttribute) root.setAttribute("data-ace-card", "1");
+    } catch (_) { /* the card just keeps its strip */ }
 
   // ── Portrait: mark ACE messages so CSS can force the portrait ──
   const isAce = message.speaker?.alias === "ACE"

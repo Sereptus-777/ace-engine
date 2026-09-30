@@ -10999,3 +10999,47 @@ body.ace-engine-hide-tah #token-hud .bar2 {
 .ace-qol-dc[data-ace-dc="show"] { display: inline !important; }
 .ace-qol-save-dc { display: none !important; }
 .ace-qol-save-dc[data-ace-dc="show"] { display: inline-block !important; }
+
+/* ── NO SPEAKER STRIP ON AN ACE CARD (ACE-ONE-ROAD.md § 13.1) ───────────────
+   Every ACE chat card hides Foundry's manila "Name / DUNGEON MASTER" bar. The
+   ⋮ stays, so the message can still be deleted, and it moves into the card's
+   corner instead of holding a bar open.
+
+   Declared here as well as in ACE QOL on purpose: a card is drawn by whichever
+   module posted it, and this module has to be right in a world without QOL.
+
+   ⚠️ ONLY THE SENDER AND THE TIME. Never the header itself — the ⋮ lives in
+   there and its markup has moved between Foundry generations. */
+.chat-message[data-ace-card="1"] { position: relative; }
+.chat-message[data-ace-card="1"] > .message-header {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+  min-height: 0;
+}
+.chat-message[data-ace-card="1"] > .message-header .message-sender,
+.chat-message[data-ace-card="1"] > .message-header .message-timestamp,
+.chat-message[data-ace-card="1"] > .message-header > h4,
+.chat-message[data-ace-card="1"] > .message-header time,
+.chat-message[data-ace-card="1"] > .message-header .whisper-to,
+.chat-message[data-ace-card="1"] > .message-header .flavor-text {
+  display: none !important;
+}
+.chat-message[data-ace-card="1"] > .message-header .message-metadata {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 4;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+.chat-message[data-ace-card="1"] > .message-header .message-metadata:hover { opacity: 1; }
+
+/* ── A MONSTER'S AC IS NOT ON A CARD (ACE-ONE-ROAD.md § 13.3) ───────────────
+   Hidden by default, revealed to the GM and to the owner of the creature whose
+   AC it is. NOT the DC rule: a DC belongs to the person rolling against it, and
+   an AC is the one thing the person rolling must not be told. */
+.ace-qol-ac { display: none !important; }
+.ace-qol-ac[data-ace-ac="show"] { display: inline !important; }
