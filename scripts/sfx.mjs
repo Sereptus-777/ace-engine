@@ -64,10 +64,13 @@ function _playThunder() {
 
 /* ── Earthquake ──────────────────────────────────────────── */
 
-export function triggerEarthquake() {
-  _playRumbleSynth();         // Procedural deep rumble (replaces bad WAV)
-  _shakeScreenProgressive();  // Slow build → peak → fade
-  setTimeout(() => _spawnDebris(), 600);  // Debris starts after initial tremor
+export function triggerEarthquake({ gain = 1, shake = true, debris = true } = {}) {
+  _playRumbleSynth(gain);     // Procedural deep rumble (replaces bad WAV)
+  // ⚠️ A QUIET ONE IS A SOUND, NOT AN EVENT. Reading the temple description
+  // should not throw the whole screen around, so the shake and the debris are
+  // asked for rather than assumed (his rule, 2026-10-05).
+  if (shake) _shakeScreenProgressive();
+  if (debris) setTimeout(() => _spawnDebris(), 600);
 }
 
 /**
@@ -142,7 +145,7 @@ function _spawnDebrisWave(count, colors, frags, { sizeMin, sizeMax, delayMax, du
  * Deep brown noise filtered to sub-bass frequencies with volume envelope:
  * fade-in (0.8s) → sustained rumble (2s) → fade-out (1s)
  */
-function _playRumbleSynth() {
+function _playRumbleSynth(gain = 1) {
   // Stop any existing SFX audio
   if (_currentSfxAudio) {
     _currentSfxAudio.pause?.();
@@ -183,15 +186,16 @@ function _playRumbleSynth() {
     resonance.gain.value = 8;
     resonance.Q.value = 1.5;
 
-    // Volume envelope: fade-in → sustain → fade-out
-    const gain = ctx.createGain();
+    // Volume envelope: fade-in → sustain → fade-out, scaled by the caller.
+    const peak = Math.max(0.05, Math.min(1, Number(gain) || 1)) * 0.7;
+    const gainNode = ctx.createGain();
     const now = ctx.currentTime;
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.7, now + 0.8);    // Slow build
-    gain.gain.setValueAtTime(0.7, now + 2.8);              // Sustained rumble
-    gain.gain.linearRampToValueAtTime(0, now + duration);  // Fade out
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime(peak, now + 0.8);   // Slow build
+    gainNode.gain.setValueAtTime(peak, now + 2.8);             // Sustained rumble
+    gainNode.gain.linearRampToValueAtTime(0, now + duration); // Fade out
 
-    source.connect(lowPass).connect(resonance).connect(gain).connect(ctx.destination);
+    source.connect(lowPass).connect(resonance).connect(gainNode).connect(ctx.destination);
     source.start();
     source.onended = () => ctx.close().catch(() => {});
 

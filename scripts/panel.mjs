@@ -10,6 +10,7 @@ import { filterProfanity, buildProfanityPrompt } from "./profanity-filter.mjs";
 import { writeBiography, appendToBiography } from "./bio-writer.mjs";
 import { getSecret, getSecretVault } from "./settings.mjs";
 import { damageLine } from "./read-item-damage.mjs";
+import { speechCard, speechColour } from "./npc/speech-card.mjs";
 
 // dnd5e 5.3 moved senses to `senses.ranges.*`; the old path logs a deprecation
 // on every read and is REMOVED in 6.1 (it would silently return 0 — every
@@ -100,41 +101,43 @@ async function _aceConfirmDialog(title, content, {
 // Returns "save" | "exit" | "minimize".  Throws (reject) on X → caller cancels close.
 async function _aceCloseDialog(eventCount, eventLines = []) {
   const _esc = s => (s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-  // Build a compact, text-wrapping, vertically-scrolling event list.
-  const listHtml = eventLines.length
-    ? `<div class="ace-close-events">` +
-      eventLines.map(l => `<div class="ace-close-evt">${_esc(l)}</div>`).join("") +
-      `</div>`
+
+  /* ⚠️🔴 THE NEWEST FORTY, AND THE REST ARE COUNTED (his rule, 2026-10-05).
+     Every event since the last summary went into this list, hundreds of them, so
+     the window grew past the bottom of the screen and took the three buttons
+     with it. Forty is what a person reads before deciding; the rest are a number. */
+  const SHOWN = 40;
+  const newest = eventLines.slice(-SHOWN).reverse();   // latest first
+  const hidden = Math.max(0, eventLines.length - newest.length);
+  const listHtml = newest.length
+    ? `<div class="ace-close-events">`
+      + newest.map(l => `<div class="ace-close-evt">${_esc(l)}</div>`).join("")
+      + `</div>`
+      + (hidden
+        ? `<p class="ace-close-more">and ${hidden} older event${hidden === 1 ? "" : "s"} `
+          + `not shown. All of them are in the memory either way.</p>`
+        : "")
     : "";
 
+  /* ⚠️🔴 THE RULES LIVE IN THE MODULE STYLESHEET, NOT IN HERE (his rule,
+     2026-10-05: "A style tag inside the dialog content is not enough. Foundry is
+     ignoring it."). He is right about why: the application's own CSS is loaded
+     after this markup is injected and wins on the window, the content box and
+     the footer, so a max-height written here never applied to the parts that
+     needed it. `.ace-close-dlg` in ace-engine.css owns the layout now. */
   const content =
-    `<style>
-      .ace-close-dlg .window-content { font-size:13px; }
-      .ace-close-intro { margin:0 0 6px; font-size:14px; color:#e8dcc0; }
-      .ace-close-intro strong { color:#e8b923; }
-      .ace-close-events { max-height:240px; overflow-y:auto; overflow-x:hidden; margin:6px 0;
-        padding:4px 10px; background:rgba(0,0,0,0.30); border:1px solid rgba(212,175,55,0.25); border-radius:5px; }
-      .ace-close-evt { font-size:11px; line-height:1.35; color:#dccfb0; padding:4px 0;
-        border-bottom:1px solid rgba(255,255,255,0.06);
-        white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
-      .ace-close-evt:last-child { border-bottom:none; }
-      .ace-close-hint { margin-top:8px; font-size:12px; color:#b0a484; }
-      .ace-close-dlg footer.form-footer { gap:8px; flex-wrap:wrap; }
-      .ace-close-dlg footer button { font-size:14px; padding:7px 12px; border-radius:6px;
-        background:#2a2418; color:#e8dcc0; border:1px solid #5a4c28; }
-      .ace-close-dlg footer button:hover { background:#3a3120; border-color:#7a6838; }
-      .ace-close-dlg footer button[data-action="save"] { background:#3a2f12; color:#f0d98a; border-color:#8a6e22; }
-    </style>` +
-    `<p class="ace-close-intro"><strong>${eventCount}</strong> events since your last session summary:</p>` +
-    listHtml +
-    `<p class="ace-close-hint">Events stay in memory either way — saving creates an AI journal recap.</p>`;
+    `<p class="ace-close-intro"><strong>${eventCount}</strong> event${eventCount === 1 ? "" : "s"} `
+    + `since your last session summary:</p>`
+    + listHtml
+    + `<p class="ace-close-hint">Events stay in memory either way &mdash; saving writes an AI `
+    + `journal recap.</p>`;
 
   const DV2 = foundry.applications?.api?.DialogV2;
   if (DV2) {
     return new Promise((resolve, reject) => {
       const dlg = new DV2({
         classes: ["ace-close-dlg"],
-        position: { width: 520 },
+        position: { width: 560 },
         window: { title: "Close ACE?" },
         content,
         buttons: [
@@ -144,7 +147,21 @@ async function _aceCloseDialog(eventCount, eventLines = []) {
         ],
         close: () => reject()
       });
-      dlg.render(true);
+      dlg.render(true).then(() => {
+        /* ⚠️ THE WHEEL HAS TO REACH THE LIST. Foundry's application frame
+           catches the wheel for its own purposes, so a scroll over the events
+           did nothing. This hands it to the list and stops it going further. */
+        const list = dlg.element?.querySelector?.(".ace-close-events");
+        if (!list) return;
+        list.addEventListener("wheel", (ev) => {
+          const atTop = list.scrollTop <= 0 && ev.deltaY < 0;
+          const atEnd = list.scrollTop + list.clientHeight >= list.scrollHeight - 1 && ev.deltaY > 0;
+          if (atTop || atEnd) return;      // let the page have it at either end
+          ev.stopPropagation();
+          ev.preventDefault();
+          list.scrollTop += ev.deltaY;
+        }, { passive: false });
+      }).catch(err => console.warn(`${MODULE_ID} | the close dialog would not render:`, err));
     });
   }
   // Legacy Dialog fallback (v10/v11)
@@ -1212,14 +1229,14 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
     const safeName = this._escapeHtml(actor.name);
     const safeText = this._escapeHtml(text);
 
-    // ── Post to Foundry chat as the NPC ──
-    const chatContent =
-      `<div style="border-left:3px solid #8b5cf6; padding:6px 12px; margin:0; ` +
-      `background:rgba(139,92,246,0.07); border-radius:0 4px 4px 0;">` +
-      `<span style="display:block; font-size:10px; color:#8b5cf6; text-transform:uppercase; ` +
-      `letter-spacing:1px; margin-bottom:4px; font-weight:bold;">` +
-      `<i class="fas fa-comments"></i> ${safeName}</span>` +
-      `<span style="font-style:italic; line-height:1.5;">"${safeText}"</span></div>`;
+    /* ── Post to Foundry chat as the NPC ──
+       ⚠️ THE BLACK CARD, AND THE SPEAKER'S OWN COLOUR (his rule, 2026-10-05).
+       This card was a purple rule over a 7% purple wash, which on Foundry's
+       parchment is the white card he is looking at. speech-card.mjs is the one
+       owner of how a spoken line looks, so this and the conversation window can
+       no longer drift apart. */
+    const chatContent = speechCard(safeName, `<span style="font-style:italic;">&ldquo;`
+      + `${safeText}&rdquo;</span>`, speechColour({ actor }));
 
     // Find the token for this NPC to use as speaker
     const token = canvas?.tokens?.placeables?.find(t => t.actor?.id === actor.id);
@@ -4416,10 +4433,26 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
       const partyNames = (game.actors?.filter((a) => a.hasPlayerOwner && a.type === "character") ?? [])
         .map((a) => a.name);
 
+      /* ⚠️🔴 IT SHOWS ITS WORK (his rule, 2026-10-05: "Exit & Save Session has
+         to show its work. A bar walks while the recap is being written."). The
+         recap is an AI call that can take half a minute, and the only sign of it
+         was a spinner on a button he had already clicked away from. */
+      let bar = null;
+      try { bar = ui.notifications?.info("ACE: writing the session recap\u2026",
+        { progress: true }) ?? null; } catch (_) { bar = null; }
+      const tick = (pct, msg) => {
+        try { bar?.update?.({ pct, message: msg }); } catch (_) { /* a bar never stops a save */ }
+      };
+
       let summary = "";
       await this.lkMemory.generateSessionSummary(this.ai, this.scene, (chunk) => {
         summary += chunk;
+        // The length is the only honest progress an AI stream gives: it walks
+        // toward a plausible recap and finishes when the words stop.
+        tick(Math.min(0.9, summary.length / 4000),
+          `ACE: writing the session recap\u2026 ${summary.length} characters`);
       });
+      tick(0.95, "ACE: saving the recap to its journal\u2026");
 
       if (summary) {
         const sessionNum = this.lkMemory.getNextSessionNum();
@@ -4455,7 +4488,20 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
           + `_Saved in full to the journal “Session ${sessionNum} — ${new Date().toISOString().slice(0, 10)}”, `
           + `in the “📖 ACE” folder. ${summary.length} characters.${spanNote}_`,
         );
-        ui.notifications?.info("ACE: Session summary saved to journal.");
+        /* ⚠️🔴 THIS TOAST DOES NOT FADE (his rule): "Foundry's normal toast
+           fades by itself. This one must not." He walks away while it writes, and
+           the one message that says his session was saved was gone by the time he
+           looked. `permanent` keeps it until he clicks it away, and it names the
+           journal it wrote so he can go and look. */
+        const journalName = `Session ${sessionNum} \u2014 ${new Date().toISOString().slice(0, 10)}`;
+        tick(1, "ACE: the session recap is saved.");
+        try {
+          ui.notifications?.info(`ACE: the session recap is saved. It is the journal `
+            + `"${journalName}" in the "\u{1F4D6} ACE" folder, ${summary.length} characters. `
+            + `Click this away.`, { permanent: true });
+        } catch (err) {
+          console.warn(`${MODULE_ID} | the saved-session toast would not show:`, err);
+        }
 
         // Auto-backup all categories on session end
         try {

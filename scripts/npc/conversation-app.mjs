@@ -15,6 +15,9 @@ import { getCreatureSoundCandidates, getVoicePitch } from "./creature-sounds.mjs
 import { npcChatState }                              from "./activate.mjs";
 import { isAIFailure }                               from "./ai-failure.mjs";
 import * as Lang                                     from "./language-barrier.mjs";
+import { speechCard, speechColour }                  from "./speech-card.mjs";
+
+
 
 const MODULE_ID = "ace-engine";
 
@@ -1082,7 +1085,9 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                     token: this.tokenDocument?.id || null,
                     scene: canvas.scene?.id || null
                 },
-                content: `<p>${_postBody}</p>`,
+                // The puppet line: I typed it, so it is red.
+                content: speechCard(this.actor.name, `<p>${_postBody}</p>`,
+                    speechColour({ actor: this.actor, user: game.user })),
                 flags: { [MODULE_ID]: { isAIConversation: true }, ...Lang.polyglotFlags(this._chatLanguageFor(_postBody)) }
             });
         }
@@ -1852,7 +1857,10 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                         token: this.tokenDocument?.id || null,
                         scene: canvas.scene?.id || null
                     },
-                    content: `<p>${_postBody}</p>`,
+                    // I typed this one, so it is red: his rule. The AI's own
+                    // lines stay the construct's colour, because it typed those.
+                    content: speechCard(this.actor.name, `<p>${_postBody}</p>`,
+                        speechColour({ actor: this.actor, user: game.user })),
                     flags: { [MODULE_ID]: { isAIConversation: true, gmInterjection: true }, ...Lang.polyglotFlags(this._chatLanguageFor(_postBody)) }
                 });
             }
@@ -2026,14 +2034,18 @@ export class ConversationApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 //    They said it; hiding it from them would be nonsense.
                 ChatMessage.create({
                     speaker: { alias: playerName },
-                    content: `<p><strong>${playerName}:</strong> ${text}</p>`,
+                    // His own words, in his own player's colour.
+                    content: speechCard(playerName, `<p>${text}</p>`,
+                        speechColour({ actor: this.speakingAs ?? game.user.character ?? null,
+                                        user: game.user })),
                     flags: { [MODULE_ID]: { isAIConversation: true, playerLine: true } }
                 });
 
                 // 2. What the NPC said back — the only part a language can hide.
                 ChatMessage.create({
                     speaker: _npcSpeaker,
-                    content: `<p>${_postBody}</p>`,
+                    content: speechCard(this.actor.name, `<p>${_postBody}</p>`,
+                        speechColour({ actor: this.actor })),
                     flags: { [MODULE_ID]: { isAIConversation: true }, ...Lang.polyglotFlags(this._chatLanguageFor(_postBody)) }
                 });
             }

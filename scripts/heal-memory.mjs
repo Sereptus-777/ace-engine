@@ -32,6 +32,7 @@
 //                        the GOOD way, which until now only ever went down.
 
 const MODULE_ID = "ace-engine";
+const EM_DASH   = "\u2014";   // what a heal label puts before its token name
 const QOL_ID    = "ace-qol";
 const TAG       = "ACE: Engine | Mercy";
 
@@ -46,26 +47,40 @@ function _standing(actor) {
     return "neutral";
 }
 
+/** The words a card actually SHOWS. ACE's own class names are not prose. */
+function _visibleText(html) {
+    try { return String(html ?? "").replace(/<[^>]*>/g, " "); }
+    catch (_) { return ""; }
+}
+
 /**
- * Who just healed, best effort.
- * ⚠️ The heal chokepoint knows the TARGET and not the healer, because a heal
- * arrives from a dozen different places. So we look for a healing roll in the
- * last few seconds and take its speaker. When that finds nothing we say
- * "someone" rather than inventing a name — a wrong name in a permanent record
- * is worse than an honest gap.
+ * Who just healed, when the heal itself did not say.
+ *
+ * ⚠️🔴 THIS GUESS READ THE MARKUP (fixed 2026-10-04). It tested `m.content`
+ * raw, so every class name and data-action with "heal" in it counted as a
+ * healing card — ACE's own regeneration card carries `ace-qol-ot-heal` and
+ * `aceQolOtHeal` — and the name it took was that card's speaker alias. A
+ * creature's own regeneration has no healer at all, so the guess could only ever
+ * name somebody else, and the ladder moved for a monster healing itself.
+ *
+ * Two changes. It reads the VISIBLE text only, and it will only ever name a
+ * CREATURE: a speaker alias with no actor behind it ("Regeneration", "ACE") is
+ * not one. When it finds nothing it says nothing and nothing is credited — a
+ * wrong name in a permanent record is worse than an honest gap.
  */
 function _recentHealer(exceptActorId) {
     const now = Date.now();
     const recent = (game.messages?.contents ?? []).slice(-12).reverse();
     for (const m of recent) {
         if (now - (m.timestamp ?? 0) > 8000) break;
-        const name = m.speaker?.alias || m.alias;
-        if (!name) continue;
+        // A creature, not an alias. This is the whole of his rule: credit only
+        // healing that comes from a DIFFERENT CREATURE.
         const speakerActor = m.speaker?.actor ? game.actors?.get(m.speaker.actor) : null;
-        if (speakerActor?.id && speakerActor.id === exceptActorId) continue;   // healing itself
-        const flavour = `${m.flavor ?? ""} ${m.content ?? ""}`.toLowerCase();
-        if (/heal|cure wounds|healing word|lay on hands|goodberry|prayer of healing|revivify|spare the dying/.test(flavour)) {
-            return { name, actor: speakerActor };
+        if (!speakerActor?.id) continue;
+        if (speakerActor.id === exceptActorId) continue;                       // healing itself
+        const words = `${m.flavor ?? ""} ${_visibleText(m.content)}`.toLowerCase();
+        if (/heal|cure wounds|healing word|lay on hands|goodberry|prayer of healing|revivify|spare the dying/.test(words)) {
+            return { name: m.speaker?.alias || speakerActor.name, actor: speakerActor };
         }
     }
     return { name: "", actor: null };
@@ -76,13 +91,36 @@ export function installHealMemory({ memory } = {}) {
         try {
             // ⚠️ Only one client records, or two GMs write it twice.
             if (game.users?.activeGM !== game.user) return;
-            const { actor, amount, isCorrection, wasDying } = data ?? {};
+            const { actor, amount, isCorrection, wasDying,
+                    label, healerActorId, healerName, selfHeal } = data ?? {};
             if (!actor || !amount || amount <= 0) return;
             if (isCorrection) return;      // an undo is not an act of mercy
+            const scene = canvas?.scene?.name ?? "";
+
+            // ────── ITS OWN DOING IS NOT SOMEBODY ELSE'S MERCY ──────
+            // ⚠️🔴 HIS RULE, 2026-10-04, after Escher's start-of-turn 10 was
+            // recorded as the party healing an enemy: "A creature's own
+            // regeneration, and any healing it applies to itself, must not
+            // credit the party. Credit only healing that comes from a different
+            // creature."
+            //
+            // It is still written down, because a troll that regenerates all
+            // night is worth knowing. It is just not a deed, it moves no
+            // faction, and the creature does not remember being spared.
+            if (selfHeal || (healerActorId && healerActorId === actor.id)) {
+                const what = String(label ?? "").split(EM_DASH)[0].trim() || "its own doing";
+                try { memory?.logNote?.(`${actor.name} healed ${amount} of its own damage (${what}).`, scene); } catch (_) {}
+                console.log(`${TAG} | ${actor.name} healed itself for ${amount} (${what}) — its own `
+                            + `recovery, so no deed, no faction change, and nobody credited.`);
+                return;
+            }
 
             const standing = _standing(actor);
-            const scene    = canvas?.scene?.name ?? "";
-            const healer   = _recentHealer(actor.id);
+            // ⚠️🔴 THE HEAL'S OWN ANSWER BEATS THE GUESS, ALWAYS. The guess is
+            // only for a heal that arrived from outside ACE and said nothing.
+            const carried  = healerActorId ? game.actors?.get(healerActorId) ?? null : null;
+            const healer   = carried ? { name: carried.name || healerName || "", actor: carried }
+                                     : _recentHealer(actor.id);
             const who      = healer.name || "Someone";
 
             // ── Always noted, whoever it was ────────────────────────────────
@@ -94,6 +132,18 @@ export function installHealMemory({ memory } = {}) {
 
             // ── An ally patched up is a relationship, not a reputation ──────
             if (standing === "party") return;
+
+            // ⚠️🔴 AND A DEED NEEDS A CREATURE. With no healer named there is
+            // nobody who can be said to have shown mercy, so the heal is noted
+            // above and the ladder stays where it is. Guessing at this point is
+            // exactly what put a monster's own regeneration on the party's
+            // account, and the gap says so out loud instead of going quiet.
+            if (!healer.actor) {
+                console.log(`${TAG} | ${actor.name}, ${standing === "hostile" ? "an enemy" : "an outsider"}, `
+                            + `was healed ${amount} (${label || "no label"}) and no creature can be named as `
+                            + `the healer, so it is noted and nothing is credited.`);
+                return;
+            }
 
             // ── An outsider spared is an ACT ────────────────────────────────
             const magnitude = wasDying ? "regional" : "local";

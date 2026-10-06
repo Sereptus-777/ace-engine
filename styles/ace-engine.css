@@ -11053,3 +11053,120 @@ body.ace-engine-hide-tah #token-hud .bar2 {
    Only the WIDTH changes: the colour and the radius are Foundry's, and a card
    that ACE never stamped is untouched. */
 .chat-message[data-ace-card="1"] { border-width: 1px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CLOSE ACE — THE DIALOG THAT COULD NOT BE USED (2026-10-05)
+
+   His words: "The event list grows past the screen, the three buttons end up
+   below it, and the list does not scroll. A style tag inside the dialog content
+   is not enough. Foundry is ignoring it."
+
+   It was ignoring it for a reason worth writing down: the window, its content
+   box and its footer belong to the application, and the application's own CSS
+   loads after injected markup, so a max-height set inside `content` never
+   reached the parts that needed one. These rules are in the module stylesheet
+   and scoped to the dialog's class, which is what the class was always for.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* The window never grows past the screen. */
+.ace-close-dlg {
+  max-height: 85vh !important;
+}
+/* Header, then the list, then the footer: a column, so the footer cannot be
+   pushed off the bottom by a long list. */
+.ace-close-dlg .window-content {
+  display: flex !important;
+  flex-direction: column;
+  min-height: 0;                /* or a flex child refuses to shrink */
+  max-height: calc(85vh - 40px);
+  overflow: hidden !important;  /* the list scrolls, not the window */
+  font-size: 14px;
+  gap: 0;
+}
+.ace-close-dlg .dialog-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ace-close-intro {
+  flex: 0 0 auto;
+  margin: 0 0 8px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: #e8dcc0;
+}
+.ace-close-intro strong { color: #e8b923; }
+
+/* ⚠️ THE ONE THING THAT SCROLLS. A fixed ceiling and its own scrollbar; the
+   wheel handler in panel.mjs makes sure the frame does not eat the wheel. */
+.ace-close-events {
+  flex: 1 1 auto;
+  min-height: 80px;
+  max-height: 46vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  margin: 0 0 8px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.30);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  border-radius: 5px;
+}
+.ace-close-evt {
+  font-size: 13px;
+  line-height: 1.4;
+  color: #dccfb0;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.ace-close-evt:last-child { border-bottom: none; }
+
+.ace-close-more,
+.ace-close-hint {
+  flex: 0 0 auto;
+  margin: 0 0 6px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #b0a484;
+}
+
+/* ⚠️ THE THREE BUTTONS ARE ALWAYS VISIBLE. Last in the column, never shrinking,
+   never scrolled away. */
+.ace-close-dlg footer.form-footer,
+.ace-close-dlg .dialog-buttons {
+  flex: 0 0 auto !important;
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid rgba(212, 175, 55, 0.25);
+  background: transparent;
+}
+.ace-close-dlg footer button,
+.ace-close-dlg .dialog-buttons button {
+  flex: 1 1 150px;
+  min-height: 40px;
+  font-size: 15px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #2a2418;
+  color: #e8dcc0;
+  border: 1px solid #5a4c28;
+  cursor: pointer;
+}
+.ace-close-dlg footer button:hover,
+.ace-close-dlg .dialog-buttons button:hover {
+  background: #3a3120;
+  border-color: #7a6838;
+}
+.ace-close-dlg button[data-action="save"] {
+  background: #3a2f12;
+  color: #f0d98a;
+  border-color: #8a6e22;
+}

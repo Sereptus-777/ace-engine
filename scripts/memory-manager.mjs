@@ -745,13 +745,51 @@ export class MemoryManager {
     this._scheduleSaves(["history", "tiles"]);
   }
 
-  /** Log Foundry tile placed/removed. Fan-out: history, tiles */
-  logTileChange({ action, sceneName, tileData } = {}) {
-    this.history.push({
-      k: action === "removed" ? "tile_removed" : "tile_placed",
-      s: sceneName ?? this._currentScene(),
-    });
-    this._scheduleSaves(["history", "tiles"]);
+  /**
+   * Tile placed or removed: DELIBERATELY RECORDS NOTHING.
+   *
+   * ⚠️🔴 HIS RULE, 2026-10-05: "Tile placed and tile removed must not be
+   * written into the session memory at all. Those are absolute crap. I don't
+   * need them, and I never will." It is left as a function rather than deleted so
+   * an older caller cannot throw, and it says so once per session rather than on
+   * every tile, because dressing a map is hundreds of them.
+   */
+  logTileChange() {
+    // ⚠️ THE CLASS IS `MemoryManager`. I wrote `AceMemory` here first, which is
+    // what this thing is called everywhere it is USED, and it would have thrown
+    // a ReferenceError on the first tile he placed. `node --check` cannot see an
+    // undefined name; only reading it can.
+    if (!MemoryManager._saidTilesAreOff) {
+      MemoryManager._saidTilesAreOff = true;
+      console.log("ace-engine | tile placed and tile removed are not recorded in the memory, "
+        + "by his rule. Nothing is lost that was ever wanted.");
+    }
+  }
+
+  /**
+   * Take kinds of event out of the history for good.
+   *
+   * ⚠️ IT GOES THROUGH THE STORE, NOT THE FILE. The JSON on disk is loaded in
+   * memory and would be written back over any edit made behind Foundry's back, so
+   * the purge happens here and is saved the way every other write is.
+   *
+   * @param {string[]} kinds  event kinds, e.g. ["tile_placed", "tile_removed"]
+   * @returns {{removed: number, left: number}}
+   */
+  purgeHistoryKinds(kinds = []) {
+    const drop = new Set(kinds.map(String));
+    const events = this.history.events;
+    const before = events.length;
+    const keep = events.filter(e => !drop.has(String(e?.k)));
+    const removed = before - keep.length;
+    if (!removed) return { removed: 0, left: before };
+    // The store owns its own array; this is the one place that replaces it.
+    this.history._data.events = keep;
+    this.history.markDirty();
+    this._scheduleSaves(["history"]);
+    console.log(`ace-engine | purged ${removed} event(s) of kind ${[...drop].join(", ")} from the `
+      + `history. ${keep.length} left.`);
+    return { removed, left: keep.length };
   }
 
   // ── Deed Logging (Fame System) ────────────────────────────

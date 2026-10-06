@@ -2882,7 +2882,21 @@ Hooks.once("ready", async () => {
       ...api,
       getMemory: (category) => aceMemory?.getStore(category)?.getAll() ?? [],
       askAI:     (prompt) => aiProvider?.chat(prompt, "", "", []),
-      narrate:   (text) => panel?.narrateText?.(text),
+      /* ⚠️🔴 THIS CALLED A METHOD THAT DOES NOT EXIST (his find, 2026-10-05).
+         The panel's method is `_narrateText`; `narrateText` is nowhere in this
+         module. With the optional call on it, `api.narrate("...")` did nothing
+         at all, returned undefined, and threw nothing: a sister module or a
+         macro asking the narrator to speak got silence. Both names are tried
+         now, the real one first, and a panel that is not open says so. */
+      narrate:   (text) => {
+        const say = panel?._narrateText ?? panel?.narrateText;
+        if (typeof say !== "function") {
+          console.warn(`${MODULE_ID} | api.narrate was asked to speak and the narration panel is `
+            + `not open, so nothing was said. Open ACE Engine first.`);
+          return undefined;
+        }
+        return say.call(panel, text);
+      },
       stopAllAudio: _stopAllAudio,
 
       // ── Cross-module bio-generation status (used by ace-token-art) ──
@@ -4059,6 +4073,10 @@ function _handleRemoteSfx({ effect }) {
   switch (effect) {
     case "lightning":       triggerLightning();       break;
     case "earthquake":      triggerEarthquake();      break;
+    // ⚠️ THE SAME EARTHQUAKE, TURNED DOWN. His rule, 2026-10-05: the temple read
+    // gets it "once, quieter, as the text starts". The effect travels to every
+    // client as a NAME, so a quiet one has to be a name of its own.
+    case "earthquakeQuiet": triggerEarthquake({ gain: 0.4, shake: false }); break;
     case "stealthFail":     triggerStealthFail();     break;
     case "perceptionPass":  triggerPerceptionPass();  break;
     // Laugh variants dormant — uncomment when adding a dedicated SFX panel:
@@ -4840,30 +4858,21 @@ Hooks.on("deleteToken", () => {
   if (panel?.rendered) panel.refreshSelectPanel();
 });
 
-Hooks.on("createTile", (tile) => {
+/* ⚠️🔴 A TILE IS NOT A MEMORY (his rule, 2026-10-05: "Tile placed and tile
+   removed must not be written into the session memory at all."). Dressing a map
+   put 561 of the 1,775 events in his history: a third of the record of his
+   campaign was him moving scenery, and it buried the kills, the deeds and the
+   notes under it, in the close dialog and in every recap written from that log.
+   The panel still refreshes, because that is about what is selected. Nothing is
+   written down. */
+Hooks.on("createTile", () => {
   if (!game.user.isGM) return;
   if (panel?.rendered) panel.refreshSelectPanel();
-  // Log tile placement to memory
-  if (aceMemory) {
-    aceMemory.logTileChange({
-      action: "placed",
-      sceneName: canvas?.scene?.name ?? "",
-      tileData: { id: tile.id, texture: tile.texture?.src ?? "" },
-    });
-  }
 });
 
-Hooks.on("deleteTile", (tile) => {
+Hooks.on("deleteTile", () => {
   if (!game.user.isGM) return;
   if (panel?.rendered) panel.refreshSelectPanel();
-  // Log tile removal to memory
-  if (aceMemory) {
-    aceMemory.logTileChange({
-      action: "removed",
-      sceneName: canvas?.scene?.name ?? "",
-      tileData: { id: tile.id },
-    });
-  }
 });
 
 Hooks.on("createCombatant", () => {
