@@ -726,8 +726,10 @@ class TTSEngine {
                 console.warn(`TTS | _speakViaGm: GM did not respond within 30s (req ${requestId.slice(0, 6)}).`);
                 finish("error");
             }, 30000);
-            const handler = async (msg) => {
+            const handler = async (msg, senderId) => {
                 if (!msg || msg.action !== "ttsResponse" || msg.requestId !== requestId) return;
+                // A voice line is the GM's to send (socket-sender.mjs: the server's word).
+                if (!game.users?.get?.(senderId)?.isGM) return;
                 if (msg.error) {
                     console.warn(`TTS | _speakViaGm: GM returned error: ${msg.error}`);
                     finish("error");

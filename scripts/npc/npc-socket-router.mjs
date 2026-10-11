@@ -27,6 +27,7 @@ const TAG = "ACE: Engine | Socket";
 
 // ⚠️ Shared with every other relay, including the one in ace-engine.mjs. See
 // ai-spend-limit.mjs for why this is not defined here any more.
+import { stampSender } from "../socket-sender.mjs";
 import { maySpendOnAI as _maySpendOnAI, doneSpending as _doneSpending } from "./ai-spend-limit.mjs";
 
 let _wired = false;
@@ -63,10 +64,12 @@ function _isAnsweringGM() {
 /**
  * Authorise a payload that claims to be acting for a player.
  *
- * ⚠️ Foundry attaches NO trusted sender to a module socket, so `userId` is
- * written by whoever sent the message. This establishes only that the claim
- * names a real, connected, NON-GM user — a GM never asks over the socket
- * because a GM does the work locally, so a GM claim is always forged.
+ * ⚠️ CORRECTED 2026-10-11: Foundry DOES attach a trusted sender. The server
+ * appends the authenticated user's id as the listener's second argument, and
+ * the listener below overwrites `userId` with it (socket-sender.mjs) before
+ * anything reads it. So this is now the server's word, not the payload's: a
+ * real, connected, NON-GM user. A GM does the work locally, so a GM here is
+ * still refused.
  */
 /** Authorise a payload that claims to act for a player. See _claimingPlayer. */
 export function claimingPlayer(data, label) { return _claimingPlayer(data, label); }
@@ -91,7 +94,8 @@ export function wireNpcSocketRouter() {
     if (_wired || !game?.socket) return;
     _wired = true;
 
-    game.socket.on(`module.${MODULE_ID}`, async (data) => {
+    game.socket.on(`module.${MODULE_ID}`, async (raw, senderId) => {
+        const data = stampSender(raw, senderId);
         const action = data?.action;
         if (!action) return;
 
@@ -212,95 +216,39 @@ export function wireNpcSocketRouter() {
                     return;
                 }
 
-                // ── Run an AI call on a player's behalf. ──────────────
-                // The player's client has no API key (keys are GM-only), and
-                // must never have one. It sends the CONTENT of the request;
-                // this side supplies the credential, the endpoint and the model
-                // from the GM's own settings.
-                case "aiRequest": {
+                // ── A named AI job, run on the GM, for a player. ─────────────
+                // ⚠️🔴 THE PROMPT IS BUILT HERE, NEVER SENT (his rule, 2026-10-11:
+                // "Build the prompt on the GM. The player sends only the sentence
+                // they typed. The reply goes back to that one player.").
+                //
+                // This replaced `aiRequest`, which took a system prompt the player's
+                // own browser had written, with the NPC's secret lore, the GM's
+                // notes and its exact hit points inside it, broadcast to every
+                // client, and sent it to the model as-is on the GM's key. And
+                // `ollamaRequest`, which passed whatever messages it was given.
+                // A job names WHAT is asked; every word of the prompt is the GM's.
+                case "aiJob": {
                     if (!_isAnsweringGM()) return;
                     if (!data.requestId) return;
-                    const user = _claimingPlayer(data, "AI relay");
+                    const user = _claimingPlayer(data, `AI job "${data.job}"`);
                     if (!user) return;
+                    const reply = (body) => game.socket.emit(`module.${MODULE_ID}`,
+                        { action: "aiResponse", requestId: data.requestId, ...body },
+                        { recipients: [user.id] });
                     if (!_maySpendOnAI(user, Date.now())) {
-                        game.socket.emit(`module.${MODULE_ID}`, {
-                            action: "aiResponse", requestId: data.requestId,
-                            error: "Too many requests in a row — give it a moment.",
-                        });
+                        reply({ error: "Too many requests in a row — give it a moment." });
                         return;
                     }
-                    let payload;
                     try {
-                        const { AIHandler, resolveChatProvider } = await import("./conversation-engine.mjs");
-                        // ⚠️ PROVIDER, KEY, URL AND MODEL COME FROM HERE, NEVER
-                        // FROM THE PAYLOAD. A player-chosen url would aim the
-                        // GM's credential at a server of the player's choosing.
-                        // This is the same resolution getResponse does locally,
-                        // called rather than re-implemented, so the two cannot
-                        // drift apart.
-                        const cfg = resolveChatProvider();
-                        const text = await AIHandler.callAI(
-                            String(data.systemPrompt ?? ""),
-                            Array.isArray(data.history) ? data.history : [],
-                            String(data.input ?? ""),
-                            cfg.provider,
-                            cfg.apiKey,
-                            Array.isArray(data.images) ? data.images : [],
-                            {
-                                modelOverride: cfg.modelName,
-                                urlOverride:   cfg.apiUrl,
-                                context:   typeof data.context === "string" ? data.context : "npc-chat",
-                                // Re-capped here: the payload asked, it did not decide.
-                                maxTokens: Math.min(Number(data.maxTokens) || 0, 4000) || undefined,
-                            }
-                        );
-                        payload = { action: "aiResponse", requestId: data.requestId, text };
+                        const { runAIJob } = await import("./conversation-engine.mjs");
+                        reply({ text: await runAIJob(data.job, data.args ?? {}, user) });
                     } catch (err) {
                         // The player is WAITING. Silence reads as a hung module.
-                        console.warn(`${TAG} | AI relay failed for ${user.name}:`, err?.message ?? err);
-                        payload = { action: "aiResponse", requestId: data.requestId,
-                                    error: String(err?.message ?? err) };
+                        console.warn(`${TAG} | AI job "${data.job}" failed for ${user.name}:`, err?.message ?? err);
+                        reply({ error: String(err?.message ?? err) });
                     } finally {
                         _doneSpending(user);
                     }
-                    game.socket.emit(`module.${MODULE_ID}`, payload);
-                    return;
-                }
-
-                case "ollamaRequest": {
-                    if (!_isAnsweringGM()) return;
-                    if (!data.requestId || !Array.isArray(data.messages)) return;
-                    // ⚠️ Same spend limiter as the cloud relay. Local inference
-                    // costs no money but it does occupy the GM's GPU, and an
-                    // unbounded queue of these makes the GM's own client
-                    // unusable mid-session.
-                    {
-                        const _u = _claimingPlayer(data, "ollamaRequest");
-                        if (!_u) return;
-                        if (!_maySpendOnAI(_u, Date.now())) {
-                            game.socket.emit(`module.${MODULE_ID}`, {
-                                action: "ollamaResponse", requestId: data.requestId,
-                                error: "Too many requests in a row — give it a moment.",
-                            });
-                            return;
-                        }
-                        data._spender = _u;
-                    }
-                    const { AIHandler } = await import("./conversation-engine.mjs");
-                    let payload;
-                    try {
-                        const text = await AIHandler._fetchOllama(data.messages, data.images ?? []);
-                        payload = { action: "ollamaResponse", requestId: data.requestId, text };
-                    } catch (err) {
-                        // The player is WAITING on this. An error reply is far
-                        // better than silence — silence is what it did before,
-                        // and the conversation hung until it timed out.
-                        console.warn(`${TAG} | Local-AI proxy failed for a player:`, err?.message ?? err);
-                        payload = { action: "ollamaResponse", requestId: data.requestId,
-                                    error: String(err?.message ?? err) };
-                    }
-                    if (data._spender) _doneSpending(data._spender);
-                    game.socket.emit(`module.${MODULE_ID}`, payload);
                     return;
                 }
 
@@ -340,5 +288,5 @@ export function wireNpcSocketRouter() {
         }
     });
 
-    console.log(`${TAG} | NPC socket router online — pauseAudio, stopAudio, browserTTS, ollamaRequest, summarizeSession.`);
+    console.log(`${TAG} | NPC socket router online — pauseAudio, stopAudio, browserTTS, aiJob, summarizeSession.`);
 }

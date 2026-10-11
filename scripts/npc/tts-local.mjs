@@ -367,9 +367,10 @@ export async function checkEveryClient(waitMs = 4000) {
     // running the server would pass while the GM's own audio was broken.
     reports.set(game.user.id, await selfTest());
 
-    const listener = (data) => {
+    const listener = (data, senderId) => {
         if (data?.action !== "ttsReadinessReport" || data.requestId !== requestId) return;
-        if (data.report?.userId) reports.set(data.report.userId, data.report);
+        // Filed under the sender the server stamped, not the one the report names.
+        if (senderId && data.report) reports.set(senderId, { ...data.report, userId: senderId });
     };
     game.socket.on(`module.${MODULE_ID}`, listener);
     game.socket.emit(`module.${MODULE_ID}`, { action: "ttsReadinessRequest", requestId });
@@ -406,8 +407,10 @@ export async function checkEveryClient(waitMs = 4000) {
  * Answer a readiness request from the GM. Every client runs this.
  */
 export function installReadinessResponder() {
-    game.socket.on(`module.${MODULE_ID}`, async (data) => {
+    game.socket.on(`module.${MODULE_ID}`, async (data, senderId) => {
         if (data?.action !== "ttsReadinessRequest" || !data.requestId) return;
+        // Only a GM runs the readiness check (socket-sender.mjs: the server's word).
+        if (!game.users?.get?.(senderId)?.isGM) return;
         // ⚠️ The GM's own row is filled in directly by checkEveryClient, so
         // answering here as well would just duplicate it.
         if (game.user?.isGM) return;
@@ -415,7 +418,7 @@ export function installReadinessResponder() {
             const report = await selfTest();
             game.socket.emit(`module.${MODULE_ID}`, {
                 action: "ttsReadinessReport", requestId: data.requestId, report,
-            });
+            }, { recipients: [senderId] });
         } catch (err) {
             console.warn(`${TAG} | Could not answer the readiness check:`, err);
         }

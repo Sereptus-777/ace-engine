@@ -214,9 +214,22 @@ export class AIHandler {
 
     // ─── MAIN ENTRY POINT ────────────────────────────────────────────────────
     static async getResponse(actor, input, history, { speakerActor: externalSpeaker } = {}) {
+        // ⚠️🔴 NOTHING BELOW RUNS ON A PLAYER'S MACHINE (his rule, 2026-10-11: "Build
+        // the prompt on the GM. The player sends only the sentence they typed.").
+        // This prompt carries the NPC's secret lore, the GM's notes and its exact
+        // hit points. It used to be built here in the player's browser, kept on
+        // ACE_LAST_PROMPT there, and broadcast to every client to be relayed.
+        if (!game.user.isGM) {
+            return AIHandler._askGM("npcReply", {
+                actorUuid:   actor?.uuid ?? null,
+                speakerUuid: externalSpeaker?.uuid ?? null,
+                input:       String(input ?? ""),
+            });
+        }
         const chatCfg = _resolveChatProvider();
         const { provider, apiKey } = chatCfg;
-        const scene     = canvas.scene;
+        // The scene the NPC stands in, not whichever one the GM is looking at.
+        const scene     = actor?.token?.parent ?? actor?.getActiveTokens?.()?.[0]?.document?.parent ?? canvas.scene;
         const sceneName = scene?.name || "an unknown location";
         const token     = actor.getActiveTokens()[0];
 
@@ -668,6 +681,12 @@ ${identity.isNamed
     static async renderSpoken(text, langKey, tongueLabel = "another tongue") {
         const line = String(text ?? "").trim();
         if (!line) return "";
+        // Asked of the GM by name; the prompt is written there (see getResponse).
+        if (!game.user.isGM) {
+            const out = await AIHandler._askGM("renderSpoken",
+                { text: line, langKey: langKey ?? null, tongueLabel: String(tongueLabel ?? "") });
+            return isAIFailure(out) ? "" : String(out ?? "");
+        }
         try {
             const chatCfg = _resolveChatProvider();
             const { provider, apiKey } = chatCfg;
@@ -1120,12 +1139,17 @@ ${identity.isNamed
             // HERE and funnelled through the same surface every other AI failure
             // uses. Letting it escape would turn a provider hiccup into a dead
             // conversation window with nothing on screen to explain it.
-            try {
-                return await AIHandler._callAIViaGM(systemPrompt, history, input, images, opts);
-            } catch (err) {
+            // ⚠️🔴 THE GENERIC RELAY IS GONE (2026-10-11). It sent a system prompt
+            // written in this browser to the model on the GM's key, as-is. A
+            // player's request is a NAMED job now (AIHandler._askGM), and the
+            // GM writes every word of the prompt. Anything that still lands
+            // here on a player is a caller that was never moved: say so.
+            console.warn(`${MODULE_ID} | callAI was reached on a player's client for "${opts.context || "npc-chat"}". `
+                + `A player asks the GM for a named job; it never sends a prompt. Nothing was sent.`);
+            {
                 return surfaceAIFailure({
                     provider: "gm-relay",
-                    error: err,
+                    error: new Error(`"${opts.context || "npc-chat"}" is not a job a player can ask the GM for.`),
                     context: opts.context || "npc-chat",
                 });
             }
@@ -1336,7 +1360,10 @@ ${identity.isNamed
         if (game.user.isGM) {
             return AIHandler._fetchOllama(messages, images, opts);
         }
-        return AIHandler._callOllamaViaSocket(messages, images);
+        // A player never sends messages of its own to the GM's model (2026-10-11):
+        // it asks for a named job instead (_askGM). callAI already refuses on a
+        // player, so nothing reaches here; if something does, it is refused too.
+        return Promise.reject(new Error("A player asks the GM for a named job; it never sends a prompt."));
     }
 
     static async _fetchOllama(messages, images = [], opts = {}) {
@@ -1391,11 +1418,21 @@ ${identity.isNamed
      * GM side re-derives provider, url and model from its OWN settings and
      * ignores anything this payload claims about them.
      */
-    static _callAIViaGM(systemPrompt, history, input, images = [], opts = {}) {
+    /**
+     * Ask the answering GM to run a named AI job for this player, and wait for
+     * the reply. The player sends WHAT it wants (the job and its few inputs),
+     * never a prompt; the GM builds the prompt and spends its own key.
+     *
+     * ⚠️ Sent to the GM alone, and only a GM's answer is taken. Foundry stamps
+     * the sender of every socket message (socket-sender.mjs), so a reply that
+     * did not come from a GM is not the answer, whatever requestId it names.
+     */
+    static _askGM(job, args = {}) {
         if (!AIHandler._aiSocketListenerRegistered) {
             AIHandler._aiSocketListenerRegistered = true;
-            game.socket.on(`module.${MODULE_ID}`, (data) => {
+            game.socket.on(`module.${MODULE_ID}`, (data, senderId) => {
                 if (data?.action !== "aiResponse") return;
+                if (!game.users?.get?.(senderId)?.isGM) return;
                 const pending = AIHandler._socketPending.get(data.requestId);
                 if (!pending) return;
                 AIHandler._socketPending.delete(data.requestId);
@@ -1403,6 +1440,12 @@ ${identity.isNamed
                 if (data.error) pending.reject(new Error(data.error));
                 else pending.resolve(data.text);
             });
+        }
+        const gm = game.users?.activeGM ?? null;
+        if (!gm) {
+            return Promise.resolve(surfaceAIFailure({
+                provider: "gm-relay", error: new Error("No GM is connected to answer."), context: job,
+            }));
         }
         return new Promise((resolve, reject) => {
             const requestId = foundry.utils.randomID();
@@ -1412,63 +1455,9 @@ ${identity.isNamed
                 reject(new Error(`The GM's client did not answer within ${TIMEOUT_MS / 1000}s — is a GM logged in?`));
             }, TIMEOUT_MS);
             AIHandler._socketPending.set(requestId, { resolve, reject, timeout });
-            game.socket.emit(`module.${MODULE_ID}`, {
-                action: "aiRequest",
-                requestId,
-                userId: game.user.id,
-                systemPrompt,
-                history,
-                input,
-                images,
-                // Only the two knobs that describe WHAT was asked, never WHERE
-                // it goes. maxTokens is re-capped on the GM side regardless.
-                context:   opts.context,
-                maxTokens: opts.maxTokens,
-            });
-        });
-    }
-
-    static _callOllamaViaSocket(messages, images = []) {
-        // One-time listener registration — prevents unbounded accumulation of per-call
-        // handlers that could cross-fire between concurrent requests.
-        if (!AIHandler._socketListenerRegistered) {
-            AIHandler._socketListenerRegistered = true;
-            game.socket.on(`module.${MODULE_ID}`, (data) => {
-                if (data.action !== "ollamaResponse") return;
-                const pending = AIHandler._socketPending.get(data.requestId);
-                if (!pending) return;
-                AIHandler._socketPending.delete(data.requestId);
-                clearTimeout(pending.timeout);
-                if (data.error) pending.reject(new Error(data.error));
-                else pending.resolve(data.text);
-            });
-        }
-        return new Promise((resolve, reject) => {
-            const requestId = foundry.utils.randomID();
-            // v1.6.13: bumped from 30s → 180s to match AI_FETCH_TIMEOUT.
-            // The GM-side fetch to Ollama can take 60–120s on the FIRST
-            // message of a session (cold model load + 8K-char system
-            // prompt prefill). The previous 30s ceiling left players
-            // staring at "My mind is foggy..." (the hardcoded fallback
-            // that fires on any failed call) every time, even when the
-            // GM was actually getting a real response from Ollama —
-            // they just never lived long enough to see it. After the
-            // first message the prompt prefix is cached and subsequent
-            // calls return in 5–10s.
-            const SOCKET_PROXY_TIMEOUT_MS = 180_000;
-            const timeout = setTimeout(() => {
-                AIHandler._socketPending.delete(requestId);
-                reject(new Error(`Ollama GM proxy timed out after ${SOCKET_PROXY_TIMEOUT_MS / 1000}s — is a GM logged in?`));
-            }, SOCKET_PROXY_TIMEOUT_MS);
-            AIHandler._socketPending.set(requestId, { resolve, reject, timeout });
-            game.socket.emit(`module.${MODULE_ID}`, {
-                action: "ollamaRequest",
-                requestId,
-                userId: game.user.id,   // ⚠️ required: the GM refuses a request that names nobody
-                messages,
-                images,  // forwarded so the GM-side handler can include them in the actual fetch
-            });
-        });
+            game.socket.emit(`module.${MODULE_ID}`, { action: "aiJob", requestId, job, args },
+                { recipients: [gm.id] });
+        }).catch(err => surfaceAIFailure({ provider: "gm-relay", error: err, context: job }));
     }
 
     // ─── SCENE CONTEXT ──────────────────────────────────────────────────────
@@ -1794,5 +1783,41 @@ ${identity.isNamed
             `The dead do not speak without magic to compel them.`
         ];
         return responses[Math.floor(Math.random() * responses.length)];
+    }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE JOBS A PLAYER MAY ASK THE GM FOR (2026-10-11)
+
+   Run on the answering GM by npc-socket-router.mjs ("aiJob"), for `user`, the
+   sender Foundry's server stamped. Each job takes a few plain inputs and builds
+   its whole prompt here, from the GM's own documents. Nothing a player sends
+   becomes part of a prompt except the words they typed.
+   ══════════════════════════════════════════════════════════════════════════ */
+export async function runAIJob(job, args, user) {
+    const text = (v, max = 2000) => String(v ?? "").slice(0, max);
+    switch (job) {
+        case "npcReply": {
+            const actor = args?.actorUuid ? fromUuidSync(args.actorUuid) : null;
+            if (!(actor instanceof Actor)) throw new Error("That creature is not in this world.");
+            // Who is speaking: a creature this player owns, or their own character.
+            let speaker = args?.speakerUuid ? fromUuidSync(args.speakerUuid) : null;
+            if (!(speaker instanceof Actor) || !speaker.testUserPermission(user, "OWNER")) {
+                speaker = user.character && user.character.testUserPermission(user, "OWNER") ? user.character : null;
+            }
+            if (!speaker) throw new Error(`${user.name} has no creature of their own to speak as.`);
+            // A dead creature does not answer, whatever the window thought.
+            if ((actor.system?.attributes?.hp?.value ?? 1) <= 0) throw new Error(`${actor.name} is dead.`);
+            // The conversation so far, from the GM's own copy of it.
+            const history = actor.getFlag?.(MODULE_ID, "memoryLog") || actor.flags?.npclink?.memoryLog || [];
+            return AIHandler.getResponse(actor, text(args?.input), Array.isArray(history) ? history : [],
+                { speakerActor: speaker });
+        }
+        case "renderSpoken":
+            return AIHandler.renderSpoken(text(args?.text), args?.langKey ? text(args.langKey, 40) : null,
+                text(args?.tongueLabel, 60) || "another tongue");
+        default:
+            throw new Error(`"${job}" is not a job a player can ask the GM for.`);
     }
 }

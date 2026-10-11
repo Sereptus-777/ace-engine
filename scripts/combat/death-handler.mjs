@@ -100,6 +100,11 @@ async function _handleUnlinkedDeath(tokenDoc) {
 
 async function _removeFromCombat(tokenDoc) {
     if (!game.combat) return;
+    // ⚠️ ONE ANNOUNCEMENT, AND IT IS QOL'S (his rule, 2026-10-11). With ACE QOL
+    // running, QOL owns a death: it posts the one "has fallen" card and keeps
+    // the creature in the tracker as its corpse. Engine posting a second line
+    // and deleting the combatant underneath it was two modules owning one card.
+    if (game.modules.get("ace-qol")?.active) return;
 
     const combatant = game.combat.combatants.find(c =>
         c.tokenId === tokenDoc.id || c.token?.id === tokenDoc.id
@@ -110,8 +115,9 @@ async function _removeFromCombat(tokenDoc) {
         await game.combat.deleteEmbeddedDocuments("Combatant", [combatant.id]);
         console.log(`${TAG} | Removed ${name} from combat tracker.`);
 
-        // Notify all players
-        const msg = `<i class="fas fa-skull"></i> <strong>${name}</strong> has fallen!`;
+        // Notify all players. A hidden token is not named (his rule, 2026-10-11).
+        const said = tokenDoc.hidden ? "Something" : foundry.utils.escapeHTML(name);
+        const msg = `<i class="fas fa-skull"></i> <strong>${said}</strong> has fallen!`;
         ChatMessage.create(_chatOpts(msg)).catch(() => {});
     }
 }
@@ -131,7 +137,8 @@ async function _distributeXP(tokenDoc) {
     //
     // Behavior contract: when ace-qol is active AND its enableXpDistribution
     // is on, Engine defers — QOL becomes the source of truth. Engine still
-    // handles combat removal and voice cleanup (those don't conflict).
+    // handles voice cleanup. Combat removal and the death line are QOL's
+    // whenever it is active (2026-10-11, see _removeFromCombat).
     // When QOL is off or its XP feature is off, Engine awards XP as before.
     try {
         if (game.modules.get("ace-qol")?.active
@@ -192,7 +199,9 @@ async function _distributeXP(tokenDoc) {
 
     // Chat notification
     const pcNames = pcActors.map(a => a.name).join(", ");
-    const msg = `<i class="fas fa-star"></i> <strong>${xpEach} XP</strong> awarded to each PC (${pcNames}) for defeating <strong>${npcName}</strong> (${xpValue} XP total).`;
+    // A hidden token is not named (his rule, 2026-10-11).
+    const foe = tokenDoc.hidden ? "a creature" : foundry.utils.escapeHTML(npcName);
+    const msg = `<i class="fas fa-star"></i> <strong>${xpEach} XP</strong> awarded to each PC (${foundry.utils.escapeHTML(pcNames)}) for defeating <strong>${foe}</strong> (${xpValue} XP total).`;
     ChatMessage.create(_chatOpts(msg)).catch(() => {});
 
     console.log(`${TAG} | ${xpValue} XP from ${npcName} → ${xpEach} each to ${pcActors.length} PC(s).`);

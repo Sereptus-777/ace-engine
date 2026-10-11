@@ -4,6 +4,7 @@
 // ============================================================
 
 import { AcePanel }          from "./panel.mjs";
+import { stampSender, sentByGM } from "./socket-sender.mjs";
 import { EarsPanel }         from "./ears-panel.mjs";
 import { installSliderGuard } from "./slider-guard.mjs";
 import { maySpendOnAI, doneSpending, lastRefusal } from "./npc/ai-spend-limit.mjs";
@@ -1075,7 +1076,11 @@ Hooks.once("ready", async () => {
   const AUDIO_MIN_GAP_MS = 1500;
   const AUDIO_MAX_BYTES  = 6_000_000;   // ~6 MB of base64; a long line is far less
 
-  game.socket.on(`module.${MODULE_ID}`, async (data) => {
+  // ⚠️🔴 THE SENDER IS THE SERVER'S, NOT THE PAYLOAD'S (2026-10-11). See
+  // socket-sender.mjs: Foundry stamps who sent this as the second argument,
+  // and every check below reads `data.userId` meaning exactly that.
+  game.socket.on(`module.${MODULE_ID}`, async (raw, senderId) => {
+    const data = stampSender(raw, senderId);
     if (data?.type === "sfx") {
       // ⚠️🔴 AN OMITTED FIELD USED TO PASS THIS CHECK.
       //
@@ -1098,6 +1103,9 @@ Hooks.once("ready", async () => {
       _handleRemoteSfx(data);
     }
     if (data?.type === "subtle-narration-tts" && data.text) {
+      // The GM picks a subtle narration (STEP 3 in subtle-rolls.mjs); nobody else
+      // may make the table's browsers speak.
+      if (!sentByGM(data)) return;
       // Player receives narration TTS broadcast — speak it aloud
       if (data.targetUserId && data.targetUserId !== game.user.id) return;
       // GM has full TTS via panel; players use standalone browser speech
@@ -1110,14 +1118,14 @@ Hooks.once("ready", async () => {
 
     // ── Stop audio broadcast — GM told everyone to stop ─────────
     if (data?.type === "stop-audio") {
-      if (data.userId && !game.users.get(data.userId)?.isGM) return; // GM-only
+      if (!sentByGM(data)) return; // GM-only, and a missing sender is not a GM
       _stopAllAudio();
     }
 
     // ── Narration audio broadcast (ElevenLabs quality) ────────────
     if (data?.type === "narration-audio" && data.audio) {
       if (data.userId === game.user.id) return;  // sender already plays locally
-      if (data.userId && !game.users.get(data.userId)?.isGM) return; // GM-only
+      if (!sentByGM(data)) return; // GM-only, and a missing sender is not a GM
       // If targeted to a specific player, only that player hears it
       if (data.targetUserId && data.targetUserId !== game.user.id) return;
       let vol = 0.8;
@@ -1129,7 +1137,7 @@ Hooks.once("ready", async () => {
     // ── Narration text broadcast (browser TTS fallback) ───────────
     if (data?.type === "narration-tts" && data.text) {
       if (data.userId === game.user.id) return;  // sender already plays locally
-      if (data.userId && !game.users.get(data.userId)?.isGM) return; // GM-only
+      if (!sentByGM(data)) return; // GM-only, and a missing sender is not a GM
       let vol = 0.8;
       try { vol = game.settings.get(MODULE_ID, "narrationVolume") ?? 0.8; } catch (_) {}
       if (vol <= 0) return;  // muted
@@ -1880,7 +1888,8 @@ Hooks.once("ready", async () => {
         const cur = npcChatState?.npcLocks?.get?.(data.actorId);
         // Only delete if it belongs to the user who sent the clear (defends
         // against a stale clear arriving after someone else re-acquired)
-        if (cur && (!data.userId || cur.userId === data.userId)) {
+        // The sender is the server's now, so "no sender" no longer clears any lock.
+        if (cur && (cur.userId === data.userId || sentByGM(data))) {
           npcChatState.npcLocks.delete(data.actorId);
         }
         if (canvas?.hud?.token?.rendered) canvas.hud.token.render(true);
@@ -1896,11 +1905,13 @@ Hooks.once("ready", async () => {
         }
         game.socket.emit(`module.${MODULE_ID}`, {
           action: "lockSync", targetUserId: data.userId, locks: snapshot,
-        });
+        }, { recipients: [data.userId] });
       } catch (err) { console.warn(`${MODULE_ID} | lockRequest handler threw:`, err); }
     }
 
     if (data?.action === "lockSync") {
+      // Only the GM's client holds the lock map that is replayed here.
+      if (!sentByGM(data)) return;
       if (data.targetUserId && data.targetUserId !== game.user.id) return;
       try {
         const map = npcChatState?.npcLocks;
@@ -5177,16 +5188,31 @@ const ACE_PORTRAIT = `modules/${MODULE_ID}/assets/ace-portrait.png`;
    own stylesheet, so a card whose handler never runs stays hidden rather than
    leaking, and a world running this module without ACE QOL is still correct.
    ═══════════════════════════════════════════════════════════════════════════ */
+/**
+ * One of the party: a creature a player owns. Its numbers are the whole table's
+ * (his rule, 2026-10-11: "A player character's formula and DC are not a secret").
+ * The same test ACE QOL and Forge cut and draw by.
+ */
+function _aceIsParty(actorId) {
+  try {
+    const actor = actorId ? game.actors?.get(actorId) : null;
+    return !!actor && (game.users ?? []).some(u => !u.isGM && actor.testUserPermission(u, "OWNER"));
+  } catch (_) {
+    return false;
+  }
+}
+
 function _aceRevealOwnDCs(root) {
   try {
-    const may = (rollers) => {
+    const may = (rollers, whose) => {
       if (game.user?.isGM) return true;
+      if (whose && _aceIsParty(whose)) return true;
       const ids = String(rollers ?? "").split(/\s+/).filter(Boolean);
       if (!ids.length) return false;            // nobody is rolling it yet
       return ids.some(id => !!game.actors?.get(id)?.isOwner);
     };
     for (const el of (root?.querySelectorAll?.(".ace-qol-dc") ?? [])) {
-      if (may(el.dataset?.dcRoller ?? null)) el.dataset.aceDc = "show";
+      if (may(el.dataset?.dcRoller ?? null, el.dataset?.dcOwner ?? null)) el.dataset.aceDc = "show";
       else delete el.dataset.aceDc;
     }
     for (const el of (root?.querySelectorAll?.(".ace-qol-save-dc") ?? [])) {
@@ -5206,8 +5232,8 @@ function _aceRevealOwnDCs(root) {
 function _aceRevealOwnACs(root) {
   try {
     for (const el of (root?.querySelectorAll?.(".ace-qol-ac") ?? [])) {
-      const id = el.dataset?.acActor ?? null;
-      const mine = game.user?.isGM || (!!id && !!game.actors?.get(id)?.isOwner);
+      // An AC is the GM's, a party member's included (his rule, 2026-10-11).
+      const mine = !!game.user?.isGM;
       if (mine) el.dataset.aceAc = "show";
       else delete el.dataset.aceAc;
     }

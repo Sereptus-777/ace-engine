@@ -1,3 +1,4 @@
+import { stampSender, sentByGM } from "../socket-sender.mjs";
 // ─── ACE: Engine — Creature Sound Effects ──────────────────────────────────
 // Replaces literal sound words (Grrr, *growls*, Hisss) with actual audio clips
 // so TTS doesn't read them aloud.
@@ -626,10 +627,15 @@ export function wireCreatureSoundSocket() {
     if (_csSocketWired || !game?.socket) return;
     _csSocketWired = true;
 
-    game.socket.on(`module.${MODULE_ID}`, async (data) => {
+    game.socket.on(`module.${MODULE_ID}`, async (raw, senderId) => {
+        // The sender is the one Foundry's server stamped (socket-sender.mjs).
+        const data = stampSender(raw, senderId);
         try {
-            // Someone chose a clip — play it here too.
+            // Someone chose a clip — play it here too. Only the GM picks clips (a
+            // player cannot list files and asks the GM below), and every client
+            // fetches whatever this names, so nobody else may name one.
             if (data?.action === "playCreatureSound" && data.src) {
+                if (!sentByGM(data)) return;
                 if (data.exclude && data.exclude === game.user.id) return;
                 const { ttsEngine } = await import("./tts.mjs");
                 const buf = await (await fetch(data.src)).arrayBuffer();
@@ -647,7 +653,7 @@ export function wireCreatureSoundSocket() {
                 // roar twice, slightly out of sync. game.users.activeGM is the
                 // same single-owner gate the rest of the engine uses for writes.
                 if (game.users?.activeGM !== game.user) return;
-                if (!game.users.get(data.userId)) return;   // ignore a stale sender
+                if (!game.users.get(data.userId)?.active) return;   // the server's sender, connected
                 await playCreatureSound(data.folder, data.pitch ?? 1.0, data.affinities ?? []);
             }
         } catch (err) {

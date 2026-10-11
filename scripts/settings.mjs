@@ -229,7 +229,8 @@ export class AceSettings {
         // sold separately and must not require its sibling.
         const qol = game.modules.get("ace-qol");
         if (!qol?.active) return;
-        import("/modules/ace-qol/scripts/rules-edition.mjs")
+        // A route-prefixed host serves modules under its prefix; a bare "/modules/" 404s there.
+        import(foundry.utils.getRoute("modules/ace-qol/scripts/rules-edition.mjs"))
           .then(m => m.syncEditionTo("ace-qol", value))
           .catch(err => console.warn(`${MODULE_ID} | rules-edition sync failed:`, err));
       },
