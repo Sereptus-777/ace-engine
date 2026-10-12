@@ -1144,8 +1144,8 @@ export class SubtleRollManager {
         `<div style="padding:6px 14px;display:flex;align-items:center;gap:10px;` +
         `border-bottom:1px solid #2a2a2e;">` +
         // Portrait (small)
-        `<img src="${r.actorImg}" style="width:32px;height:32px;border-radius:50%;` +
-        `border:2px solid ${color};object-fit:cover;flex-shrink:0;" />` +
+        `<img class="ace-face" src="${r.actorImg}" style="width:32px;height:32px;border-radius:50%;` +
+        `border:2px solid ${color};flex-shrink:0;" />` +
         // Name
         `<span style="flex:1;color:#e0ddd8;font-weight:600;font-size:0.95em;` +
         `white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">` +

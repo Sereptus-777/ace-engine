@@ -11170,3 +11170,12 @@ body.ace-engine-hide-tah #token-hud .bar2 {
   color: #f0d98a;
   border-color: #8a6e22;
 }
+
+/* ⚠️🔴 EVERY PORTRAIT IS FRAMED FROM THE TOP (his rule, 2026-10-11: "Every
+   portrait on every card is framed from the top of the picture down. The head
+   stays in the frame. The box fills with whatever fits under that. Never
+   centered on the middle."). One class, `ace-face`, on every creature picture an
+   ACE card or popup draws, whatever box it sits in; a picture with no anchor is
+   centered by the browser, which is how Firaxis's Lucky card showed his chest.
+   ace-qol/tools/portrait-framing-selftest.mjs fails on one that lacks it. */
+img.ace-face { object-fit: cover !important; object-position: 50% 0 !important; }
