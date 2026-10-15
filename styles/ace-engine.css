@@ -6689,7 +6689,7 @@ li.ace-toolbar-btn:hover {
 .ace-speech-portrait {
   width: 40px;
   height: 40px;
-  border-radius: 50%;
+  border-radius: 4px;
   border: 2px solid rgba(139, 92, 246, 0.4);
   object-fit: cover;
   flex-shrink: 0;
@@ -11179,3 +11179,30 @@ body.ace-engine-hide-tah #token-hud .bar2 {
    centered by the browser, which is how Firaxis's Lucky card showed his chest.
    ace-qol/tools/portrait-framing-selftest.mjs fails on one that lacks it. */
 img.ace-face { object-fit: cover !important; object-position: 50% 0 !important; }
+
+/* ── A saved key is a line, not the key (his rule, 2026-10-13: "After it is
+   saved the field does not show the key again, only that one is saved, with a
+   way to replace it or clear it.") ── */
+.ace-cfg-secret-wrap {
+  flex-direction: column;
+  gap: 6px;
+}
+.ace-cfg-secret-entry {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+.ace-cfg-secret-saved {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  font-size: 14px;
+  color: #b9d9a8;
+}
+.ace-cfg-secret-saved i { color: #c9a84c; }
+.ace-cfg-secret-saved-text { flex: 1 1 14ch; min-width: 0; }
+.ace-cfg-secret-saved[hidden],
+.ace-cfg-secret-entry[hidden] { display: none !important; }

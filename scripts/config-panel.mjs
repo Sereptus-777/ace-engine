@@ -503,8 +503,10 @@ export class AceConfigPanel extends ApplicationV2 {
             })();
             // An edit the user has made but not yet saved wins, so typing in the
             // search box mid-edit does not silently throw the edit away.
-            const value = this._pendingChanges[key] ?? stored;
             const isPassword = isMaskedKey(key);
+            // ⚠️ A SAVED KEY IS NEVER PUT BACK ON THE PAGE (his rule, 2026-10-13).
+            // A key field carries only what the GM has typed and not yet saved.
+            const value = isPassword ? (this._pendingChanges[key] ?? "") : (this._pendingChanges[key] ?? stored);
             const inputHtml = this._buildInput(key, meta, value, isPassword);
             // Per-setting "extras" slot — currently used only for the digest
             // model "🐢 slow" warning. Populated/hidden in _wireEvents.
@@ -548,18 +550,29 @@ export class AceConfigPanel extends ApplicationV2 {
         const v  = this._esc(String(value ?? ""));
 
         if (isPassword) {
-            // type="text" + -webkit-text-security:disc — visually masks like a
-            // password field (dots) but Chrome literally cannot detect it as a
-            // password input, so the "Save password?" prompt never fires. The
-            // honeypot + autocomplete="new-password" approach kept failing on
-            // Foundry's Electron build; this is the bulletproof option.
-            //
-            // The wrapper + eye-toggle button (Phase: settings cleanup,
-            // 2026-05-01) lets the GM peek at the saved key to verify it's
-            // the right one, without exposing it in the DOM permanently.
-            // Click toggles the -webkit-text-security style on/off.
+            /* ⚠️🔴 THE SAVED KEY IS NOT ON THE PAGE (his rule, 2026-10-13: "One
+               password field each... After it is saved the field does not show
+               the key again, only that one is saved, with a way to replace it or
+               clear it."). This used to put the saved key into the field's value,
+               masked with dots and an eye to reveal it, so anything that could
+               read the page could read the key. Now a saved key is a line that
+               says so, with Replace and Clear; the field holds only what is being
+               typed.
+
+               The field is a text box masked to dots (-webkit-text-security), not
+               type="password": Foundry's Electron build offered to "save the
+               password" on every real password box, and that prompt is what put
+               keys into browser password managers. */
+            const saved = !String(value ?? "").trim() && this._secretIsSaved(key);
             return `
-                <div class="ace-cfg-secret-wrap">
+                <div class="ace-cfg-secret-wrap" data-secret-for="${this._esc(key)}">
+                  <div class="ace-cfg-secret-saved"${saved ? "" : " hidden"}>
+                    <i class="fa-solid fa-lock"></i>
+                    <span class="ace-cfg-secret-saved-text">A key is saved on this computer.</span>
+                    <button type="button" class="ace-cfg-plainbtn" data-action="replaceSecret" data-target="${id}">Replace</button>
+                    <button type="button" class="ace-cfg-plainbtn" data-action="clearSecret" data-key="${this._esc(key)}">Clear</button>
+                  </div>
+                  <div class="ace-cfg-secret-entry"${saved ? " hidden" : ""}>
                     <input type="text" id="${id}" data-setting-key="${key}" value="${v}"
                            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
                            data-lpignore="true" data-1p-ignore="true" data-form-type="other"
@@ -567,9 +580,10 @@ export class AceConfigPanel extends ApplicationV2 {
                            style="-webkit-text-security: disc; text-security: disc; font-family: text-security-disc, sans-serif; letter-spacing: 0.1em;">
                     <button type="button" class="ace-cfg-secret-toggle"
                             data-action="toggleSecret" data-target="${id}"
-                            title="Show / hide the API key">
+                            title="Show / hide what you are typing">
                         <i class="fa-solid fa-eye" data-eye="closed"></i>
                     </button>
+                  </div>
                 </div>
             `;
         }
@@ -618,6 +632,78 @@ export class AceConfigPanel extends ApplicationV2 {
         }
         // Default: text
         return `<input type="text" id="${id}" data-setting-key="${key}" value="${v}" autocomplete="off" data-lpignore="true" data-1p-ignore="true">`;
+    }
+
+    /** The provider picked in this panel, or the saved one. */
+    _panelProvider() {
+        return this.element?.querySelector?.('[data-setting-key="aiProvider"]')?.value
+            || (() => { try { return game.settings.get(MODULE_ID, "aiProvider") || ""; } catch (_) { return ""; } })();
+    }
+
+    /** The key saved on this computer for a provider ("" when none). */
+    _storedProviderKey(provider) {
+        try { return String((getSecretVault() ?? {})[provider] ?? "").trim(); }
+        catch (_) { return ""; }
+    }
+
+    /** Is a key saved on this computer for this field? Never reads it onto the page. */
+    _secretIsSaved(key) {
+        try {
+            if (key === "apiKey") return !!this._storedProviderKey(this._panelProvider());
+            if (isSecretKey(key)) return !!String(getSecret(key) ?? "").trim();
+            return !!String(game.settings.get(MODULE_ID, key) ?? "").trim();
+        } catch (_) { return false; }
+    }
+
+    /** Show a key field as saved (the line) or open (the field). */
+    _showSecretState(content, key, saved) {
+        const wrap = content?.querySelector?.(`[data-secret-for="${CSS.escape(key)}"]`);
+        if (!wrap) return;
+        const line = wrap.querySelector(".ace-cfg-secret-saved");
+        const entry = wrap.querySelector(".ace-cfg-secret-entry");
+        if (line) line.hidden = !saved;
+        if (entry) entry.hidden = !!saved;
+    }
+
+    /**
+     * Remove a saved key from this computer, on purpose: the one way a key is
+     * deleted. A blank box never deletes one (2026-08-22).
+     */
+    async _clearSecret(content, key) {
+        if (!key) return;
+        const provider = this._panelProvider();
+        const label = key === "elevenLabsApiKey" ? "ElevenLabs key"
+            : key === "apiKey" ? `${provider || "AI"} key`
+            : key === "chatApiKey" ? "chat key" : key === "digestApiKey" ? "digest key" : "key";
+        const ok = await foundry.applications.api.DialogV2.confirm({
+            window: { title: "Clear a saved key" },
+            content: `<p style="font-size:15px;">Clear the saved ${this._esc(label)} on this computer? `
+                + `You will need to paste it again to use it here.</p>`,
+            rejectClose: false,
+        }).catch(() => false);
+        if (!ok) return;
+        try {
+            if (key === "elevenLabsApiKey") {
+                const { clearProtectedKey } = await import("./key-guard.mjs");
+                await clearProtectedKey(MODULE_ID, key);
+            } else if (key === "apiKey") {
+                const vault = { ...(getSecretVault() ?? {}) };
+                delete vault[provider];
+                delete this._apiKeyVault[provider];
+                await setSecretVault(vault);
+            } else if (isSecretKey(key)) {
+                await setSecret(key, "");
+            }
+            delete this._pendingChanges[key];
+            const input = content.querySelector(`[data-setting-key="${CSS.escape(key)}"]`);
+            if (input) input.value = "";   // ALLOW-SILENT: the key was just cleared on purpose
+            this._showSecretState(content, key, false);
+            console.log(`ACE: Engine | the saved ${label} was cleared on this computer.`);
+            ui.notifications?.info(`ACE Engine — the saved ${label} was cleared on this computer.`);
+        } catch (err) {
+            console.warn(`ACE: Engine | could not clear the saved ${label}:`, err);
+            ui.notifications?.error(`ACE Engine — the saved ${label} could not be cleared. See the console.`);
+        }
     }
 
     _esc(s) {
@@ -973,21 +1059,26 @@ export class AceConfigPanel extends ApplicationV2 {
                 if (apiKeyField) {
                     const previousProvider = this._lastProviderForVault;
                     if (previousProvider && previousProvider !== newProvider) {
-                        // Only stash if the user actually had a value typed
-                        const currentVisible = apiKeyField.value ?? "";
-                        if (currentVisible) {
-                            this._apiKeyVault[previousProvider] = currentVisible;
-                        }
+                        // A key typed for the provider being left waits for Save
+                        // under THAT provider, and stops being the typed key of the
+                        // one just picked (it used to be saved under the new one).
+                        const typed = (apiKeyField.value ?? "").trim();
+                        if (typed) this._apiKeyVault[previousProvider] = typed;
+                        delete this._pendingChanges.apiKey;
                     }
-                    const savedForNew = this._apiKeyVault[newProvider] ?? "";
-                    // ALLOW-SILENT: restoring the key already saved for the
-                    // provider just picked. Keys are written from _apiKeyVault
-                    // in _saveAll, never from the diff, so recording this would
-                    // put a value in the diff that the masked-field guard then
-                    // has to defend against. Displaying it is the whole job.
-                    apiKeyField.value = savedForNew;
-                    if (!savedForNew && (newProvider === "openai" || newProvider === "anthropic" || newProvider === "openrouter")) {
-                        ui.notifications?.info(`ACE Engine — no saved ${newProvider} API key. Paste yours and click Save Changes.`);
+                    // ⚠️ The field shows nothing saved (his rule, 2026-10-13): a
+                    // provider with a saved key shows the saved line, and only a
+                    // key typed in this panel and not yet saved comes back into it.
+                    const stored = (getSecretVault() ?? {})[newProvider] ?? "";
+                    const waiting = this._apiKeyVault[newProvider] && this._apiKeyVault[newProvider] !== stored
+                        ? this._apiKeyVault[newProvider] : "";
+                    // ALLOW-SILENT: the field is set to what this panel already
+                    // holds for the provider just picked; keys are written from
+                    // _apiKeyVault in _saveAll, never from the diff.
+                    apiKeyField.value = waiting;
+                    this._showSecretState(content, "apiKey", !!stored && !waiting);
+                    if (!stored && !waiting && (newProvider === "openai" || newProvider === "anthropic" || newProvider === "openrouter")) {
+                        ui.notifications?.info(`ACE Engine — no ${newProvider} key is saved on this computer. Paste yours and click Save Changes.`);
                     }
                     this._lastProviderForVault = newProvider;
                 }
@@ -1117,6 +1208,23 @@ export class AceConfigPanel extends ApplicationV2 {
             });
         });
 
+        // A saved key: Replace opens the field; Clear removes it, on purpose.
+        content.querySelectorAll('[data-action="replaceSecret"]').forEach(btn => {
+            btn.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                const key = btn.closest("[data-secret-for]")?.dataset.secretFor;
+                if (!key) return;
+                this._showSecretState(content, key, false);
+                content.querySelector(`#${CSS.escape(btn.dataset.target)}`)?.focus();
+            });
+        });
+        content.querySelectorAll('[data-action="clearSecret"]').forEach(btn => {
+            btn.addEventListener("click", async (ev) => {
+                ev.preventDefault();
+                await this._clearSecret(content, btn.dataset.key);
+            });
+        });
+
         // Test Connection (AI tab only)
         content.querySelector('[data-action="testConnection"]')?.addEventListener("click", () => this._testConnection(content));
         // Refresh Models (AI tab only) — wired in step #7 with live model fetch
@@ -1174,7 +1282,10 @@ export class AceConfigPanel extends ApplicationV2 {
         // Read currently-displayed values from the panel (NOT saved settings —
         // user may be testing a config they haven't saved yet)
         const provider = content.querySelector('[data-setting-key="aiProvider"]')?.value || "ollama";
-        const apiKey   = content.querySelector('[data-setting-key="apiKey"]')?.value || "";
+        // What is typed, or else the key saved on this computer, which the page
+        // no longer holds (his rule, 2026-10-13).
+        const apiKey   = (content.querySelector('[data-setting-key="apiKey"]')?.value || "").trim()
+            || this._storedProviderKey(provider);
         const apiUrl   = content.querySelector('[data-setting-key="apiUrl"]')?.value || "";
         const model    = content.querySelector('[data-setting-key="modelName"]')?.value || "";
 
@@ -1377,7 +1488,8 @@ export class AceConfigPanel extends ApplicationV2 {
 
         try {
             const { fetchModelsForProvider } = await import("./model-catalog.mjs");
-            const apiKey = content.querySelector('[data-setting-key="apiKey"]')?.value || "";
+            const apiKey = (content.querySelector('[data-setting-key="apiKey"]')?.value || "").trim()
+                || this._storedProviderKey(provider);
             const apiUrl = content.querySelector('[data-setting-key="apiUrl"]')?.value || "";
             const models = await fetchModelsForProvider(provider, {
                 apiKey, apiUrl,
@@ -1537,6 +1649,10 @@ export class AceConfigPanel extends ApplicationV2 {
         for (const key of tab.keys) {
             const meta = game.settings.settings.get(`${MODULE_ID}.${key}`);
             if (!meta) continue;
+            // ⚠️ A RESET NEVER TOUCHES A KEY. It wrote each key's default (an
+            // empty string) into its old WORLD name, which put a key record back
+            // in the world. A key is cleared with its own Clear, on purpose.
+            if (isMaskedKey(key)) continue;
             try { await game.settings.set(MODULE_ID, key, meta.default); }
             catch (e) { console.warn(`ACE: Engine | Reset failed for ${key}:`, e); }
         }

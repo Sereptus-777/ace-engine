@@ -6,6 +6,7 @@
 import { MODULE_ID, localCredentials } from "./ace-engine.mjs";
 import { getSharedElevenLabsKeyInfo } from "./npc/shared-credentials.mjs";
 import { CanvasHighlight } from "./canvas-highlight.mjs";
+import { engineShowDice, engineAwaitDice } from "./dice-wait.mjs";
 import { filterProfanity, buildProfanityPrompt } from "./profanity-filter.mjs";
 import { writeBiography, appendToBiography } from "./bio-writer.mjs";
 import { getSecret, getSecretVault } from "./settings.mjs";
@@ -2446,14 +2447,11 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
         // Roll silently — no chat message
         const roll = await new Roll(`1d20 + ${mod}`).evaluate();
 
-        // Dice So Nice — GM sees real dice, players see blind "?" dice
+        // Dice So Nice — GM sees real dice, players see blind "?" dice, through Engine's dice wait: both throws go up together, and a broken renderer cannot hang the roll (it awaited the bare promise).
         if (game.dice3d) {
-          try {
-            await game.dice3d.showForRoll(roll, game.user, false, null, false, null, null);
-            await game.dice3d.showForRoll(roll, game.user, true, null, true, null, null, { ghost: true });
-          } catch (e) {
-            console.warn(`${MODULE_ID} | Dice So Nice roll failed:`, e);
-          }
+          engineShowDice(roll, game.user, false, null, false, null, null);
+          engineShowDice(roll, game.user, true, null, true, null, null, { ghost: true });
+          await engineAwaitDice();
         }
 
         const total   = roll.total;
@@ -2485,7 +2483,7 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
                         : r.natural === 1  ? ' <span style="color:#f44336;font-weight:bold;">NAT 1</span>' : "";
         return (
           `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #2a2a2a;">` +
-          `<img src="${r.displayImg}" style="width:28px;height:28px;border-radius:50%;border:1px solid #555;" />` +
+          `<img src="${r.displayImg}" style="width:28px;height:28px;border-radius:4px;border:1px solid #555;" />` +
           `<span style="flex:1;color:#eddfc5;">${this._escapeHtml(r.displayName)}</span>` +
           `<span style="color:#aaa;font-size:0.85em;">${r.natural} + ${r.mod} = <strong style="color:#fff;">${r.total}</strong>${natTag}</span>` +
           `<span style="font-weight:bold;font-size:0.9em;min-width:36px;text-align:center;${passClass}">${passLabel}</span>` +
@@ -3307,9 +3305,23 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     }
   }
 
-  /** Click on the TTS status badge → open Module Settings so user can paste their ElevenLabs key. */
-  static _onOpenTtsSettings(event, target) {
-    // Open Foundry's module settings config and scroll to ACE section
+  /**
+   * Click on the TTS status badge → the ElevenLabs key field, where it lives.
+   *
+   * ⚠️ IT OPENED FOUNDRY'S OWN SETTINGS WINDOW, which has never shown that key
+   * (it is not on Foundry's sheet), so "set your key" led to a page without the
+   * box. The key lives on ACE Engine's Voice & TTS tab.
+   */
+  static async _onOpenTtsSettings(event, target) {
+    try {
+      const { AceConfigPanel } = await import("./config-panel.mjs");
+      const app = new AceConfigPanel();
+      app._activeTab = "voice";
+      app.render(true);
+      return;
+    } catch (err) {
+      console.warn(`${MODULE_ID} | could not open ACE Engine's Voice & TTS tab:`, err);
+    }
     try {
       const SC = foundry?.applications?.settings?.SettingsConfig ?? globalThis.SettingsConfig;
       const settingsApp = new SC();

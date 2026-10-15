@@ -42,6 +42,8 @@
 //
 // All behaviour is gated behind the `monsterAutomation` master setting.
 
+import { onRenderChatMessage } from "../foundry-compat.mjs";
+
 const MODULE_ID = "ace-engine";
 const TAG = "ACE: Engine | Monsters";
 const FLAG = "monster-automation";
@@ -778,17 +780,15 @@ export function initMonsterAutomation() {
   // rebind guard, so every apply button got TWO click listeners — one click,
   // damage applied TWICE. Invisible in testing because the second apply reads
   // the same dataset and just doubles the number quietly.
-  Hooks.on("renderChatMessageHTML", (message, html) => {
-    try { bindApplyButtons(message, html); } catch (_) {}
+  //
+  // ⚠️ AND AN UNREADABLE VERSION STILL REGISTERED BOTH (2026-10-14): the V12
+  // branch here ran on `isNaN(major)` as well, so a failed version read put the
+  // double apply straight back. One hook now, picked by the one chat helper
+  // (foundry-compat.mjs, Foundry 13 and 14).
+  onRenderChatMessage((message, html) => {
+    try { bindApplyButtons(message, html); }
+    catch (err) { console.warn(`${TAG} | could not wire the apply buttons on a chat card:`, err); }
   });
-  try {
-    const major = parseInt(game?.version);
-    if (isNaN(major) || major < 13) {
-      Hooks.on("renderChatMessage", (message, html) => {
-        try { bindApplyButtons(message, html); } catch (_) {}
-      });
-    }
-  } catch (_) { /* no legacy registration — V13+ is covered above */ }
 
   // ── ⚠️🔴 SWEEP THE CARDS THAT ARE ALREADY ON SCREEN ─────────────────
   //

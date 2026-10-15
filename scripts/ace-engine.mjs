@@ -1,9 +1,12 @@
+// FOUNDRY 14 IS IN PROGRESS (2026-10-14): the manifest's maximum stays 13 until measured templates have a region fallback that has been booted on 14.
 // ============================================================
 // ACE — AI Campaign Engine
 // Main entry point: hooks, settings, and initialization
 // ============================================================
 
+import { onRenderChatMessage } from "./foundry-compat.mjs";
 import { AcePanel }          from "./panel.mjs";
+import { engineShowDice, engineAwaitDice } from "./dice-wait.mjs";
 import { stampSender, sentByGM } from "./socket-sender.mjs";
 import { EarsPanel }         from "./ears-panel.mjs";
 import { installSliderGuard } from "./slider-guard.mjs";
@@ -5359,27 +5362,17 @@ Hooks.once("ready", () => {
   sweep("ready");
 });
 
-// v13+ uses renderChatMessageHTML; v12 uses renderChatMessage.
+// One hook per Foundry, picked by the one chat helper (foundry-compat.mjs,
+// Foundry 13 and 14). Registered at init, once Foundry has said which version
+// it is.
 //
 // ⚠️ THE CATCH USED TO REGISTER THE DEPRECATED HOOK "as a safety fallback".
 // It was not safety, it was a guess made in the dark: core V13 fires the old
 // hook whenever anything listens to it, so a failed version read would have
 // double-fired every card handler AND put a deprecation warning on the
-// console, for a failure it could not even name. `game.release.generation` is
-// the number Foundry itself keeps; if that is somehow missing we assume the
-// version we actually ship on and SAY SO, rather than silently reaching for
-// the deprecated path.
-Hooks.on("renderChatMessageHTML", _aceOnRenderChatMessage);
-Hooks.once("init", () => {
-  const generation = game.release?.generation ?? parseInt(game.version);
-  if (!Number.isFinite(generation)) {
-    console.warn(`${MODULE_ID} | could not read the Foundry generation `
-      + `(game.release.generation and game.version were both unreadable). `
-      + `Assuming V13+ and using renderChatMessageHTML.`);
-    return;
-  }
-  if (generation < 13) Hooks.on("renderChatMessage", _aceOnRenderChatMessage);
-});
+// console. The helper registers exactly one hook and says so when it cannot
+// read the version.
+Hooks.once("init", () => onRenderChatMessage(_aceOnRenderChatMessage));
 
 // ── Button dispatcher ──────────────────────────────────────────
 async function _aceHandleButton(btn) {
@@ -5974,19 +5967,14 @@ async function _handleTccRequestRollClick(btn) {
     // Roll silently — no chat message
     const roll = await new Roll(`1d20 + ${mod}`).evaluate();
 
-    // Dice So Nice — player sees blind "?" dice, GM sees real dice
+    // Dice So Nice — player sees blind "?" dice, GM sees real dice, through Engine's dice wait: both throws go up together, and a broken renderer cannot hang the roll (it awaited the bare promise).
     if (game.dice3d) {
-      try {
-        // Player sees "?" dice locally (not synchronized, ghost shows "?" faces)
-        await game.dice3d.showForRoll(roll, game.user, false, null, false, null, null, { ghost: true });
-        // GM sees real dice (synchronized only to GM users, blind=true skips local player)
-        const gmUsers = game.users.filter(u => u.isGM).map(u => u.id);
-        if (gmUsers.length) {
-          await game.dice3d.showForRoll(roll, game.user, true, gmUsers, true, null, null);
-        }
-      } catch (e) {
-        console.warn(`${MODULE_ID} | Dice So Nice roll failed:`, e);
-      }
+      // Player sees "?" dice locally (not synchronized, ghost shows "?" faces)
+      engineShowDice(roll, game.user, false, null, false, null, null, { ghost: true });
+      // GM sees real dice (synchronized only to GM users, blind=true skips local player)
+      const gmUsers = game.users.filter(u => u.isGM).map(u => u.id);
+      if (gmUsers.length) engineShowDice(roll, game.user, true, gmUsers, true, null, null);
+      await engineAwaitDice();
     }
 
     const total   = roll.total;
@@ -6029,7 +6017,7 @@ async function _handleTccRequestRollClick(btn) {
       `<div style="color:#c9a84c;font-weight:bold;font-size:1.05em;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;">` +
       `<i class="fas fa-dice-d20" style="margin-right:6px;"></i>${_escapeHtml(label)} ${_escapeHtml(typeLabel)}<span class="ace-qol-save-dc"> — DC ${dc}</span></div>` +
       `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;">` +
-      `<img class="ace-face" src="${actor.prototypeToken?.texture?.src ?? actor.img}" style="width:28px;height:28px;border-radius:50%;border:1px solid #555;" />` +
+      `<img class="ace-face" src="${actor.prototypeToken?.texture?.src ?? actor.img}" style="width:28px;height:28px;border-radius:4px;border:1px solid #555;" />` +
       `<span style="flex:1;color:#eddfc5;">${_escapeHtml(actor.name)}</span>` +
       `<span style="color:#aaa;font-size:0.85em;">${natural} + ${mod} = <strong style="color:#fff;">${total}</strong>${natTag}</span>` +
       `<span style="font-weight:bold;font-size:0.9em;min-width:36px;text-align:center;color:${passColor};">${passText}</span>` +

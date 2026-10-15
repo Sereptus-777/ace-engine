@@ -24,6 +24,7 @@
 //                            generated, with [Open Sheet] and [Revert]
 //                            buttons. Bad AI calls are 1-click recoverable.
 
+import { onRenderChatMessage } from "../foundry-compat.mjs";
 import { MODULE_ID } from "../ace-engine.mjs";
 import { appendToBiography } from "../bio-writer.mjs";
 
@@ -412,12 +413,10 @@ export function activateAutoPipeline() {
     if (!game.user.isGM) return;
     _activated = true;
     // ⚠️ ONE HOOK PER CORE VERSION (2026-08-16 audit) — V13 fires BOTH hooks,
-    // so registering both ran this handler twice per message.
-    Hooks.on("renderChatMessageHTML", _onRenderChatMessage);   // V13
-    try {
-      const major = parseInt(game?.version);
-      if (isNaN(major) || major < 13) Hooks.on("renderChatMessage", _onRenderChatMessage); // V12
-    } catch (_) { /* V13+ covered above */ }
+    // so registering both ran this handler twice per message. The one chat
+    // helper picks it (foundry-compat.mjs, Foundry 13 and 14); the old branch
+    // here also registered both whenever the version could not be read.
+    onRenderChatMessage(_onRenderChatMessage);
     console.log(`${TAG} | Auto-pipeline active (gated by autoGenerateOnDrop setting).`);
 }
 

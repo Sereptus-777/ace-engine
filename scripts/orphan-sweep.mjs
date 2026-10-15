@@ -42,21 +42,31 @@ export async function sweepOrphanedEnvoyKeys() {
   if (!store) return;
 
   const removed = [];
+  const moved = [];
   for (const name of ORPHANED_SECRETS) {
     try {
       const doc = [...store].find(s => s?.key === name);
       if (!doc) continue;
-      const val = typeof doc.value === "string" ? doc.value.trim() : doc.value;
+      let val = doc.value;
+      try { val = JSON.parse(val); } catch (_) { /* stored as plain text */ }
+      val = typeof val === "string" ? val.trim() : "";
       if (!val) {                       // already blank: drop the empty record quietly
         await doc.delete();
         continue;
       }
+      // ⚠️ MOVED BEFORE IT IS DELETED (his rule, 2026-10-13: "move it into the
+      // client setting on the computer that has it and delete the world copy").
+      // Into this computer's own Engine key, and never over one already saved
+      // here. Nothing in ACE uses a Google key, so that one has nowhere to go.
+      const where = await _moveIntoThisComputer(name, val);
+      if (where) moved.push(`${name} → ${where}`);
       await doc.delete();
       removed.push(name.split(".").pop());
     } catch (err) {
       console.warn(`${LOG} | could not remove "${name}":`, err);
     }
   }
+  if (moved.length) console.log(`${LOG} | moved into this computer's own settings: ${moved.join("; ")}.`);
 
   if (!removed.length) {
     console.log(`${LOG} | nothing left over from ACE Envoy.`);
@@ -72,4 +82,31 @@ export async function sweepOrphanedEnvoyKeys() {
     `Those keys were stored where any player could read them, so treat them as exposed and replace them ` +
     `at the provider.`, { permanent: true });
   console.warn(`${LOG} | removed leftover Envoy secrets: ${removed.join(", ")}. Rotate them.`);
+}
+
+/**
+ * Put an old Envoy key where ACE Engine keeps that key on this computer, unless
+ * one is already saved there. Says where it went by name; never the key.
+ * @returns {Promise<string|null>} the place it went, or null when it was not moved
+ */
+async function _moveIntoThisComputer(name, value) {
+  try {
+    if (name === "ace-envoy.elevenLabsKey") {
+      const has = String(game.settings.get(MODULE_ID, "elevenLabsApiKey") ?? "").trim();
+      if (has) return null;
+      await game.settings.set(MODULE_ID, "elevenLabsApiKey", value);
+      return "ace-engine.elevenLabsApiKey (this computer)";
+    }
+    if (name === "ace-envoy.openAiKey") {
+      const { getSecretVault, setSecretVault } = await import("./settings.mjs");
+      const vault = { ...(getSecretVault() ?? {}) };
+      if (String(vault.openai ?? "").trim()) return null;
+      vault.openai = value;
+      await setSecretVault(vault);
+      return "ace-engine's OpenAI key (this computer)";
+    }
+  } catch (err) {
+    console.warn(`${LOG} | could not move "${name}" into this computer's settings; it is removed from the world anyway:`, err);
+  }
+  return null;
 }

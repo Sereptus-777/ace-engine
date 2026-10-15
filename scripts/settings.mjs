@@ -323,7 +323,7 @@ export class AceSettings {
 
     s("apiKey", {
       name: "API Key",
-      hint: "Your provider's API key. Required for cloud providers (OpenAI, Anthropic, OpenRouter). Leave blank for local models (Ollama, LM Studio). Stored as a password and only visible to the GM.",
+      hint: "Your provider's API key. Required for cloud providers (OpenAI, Anthropic, OpenRouter). Leave blank for local models (Ollama, LM Studio). Saved in this browser on this computer only, and never sent to anyone else. Another computer or browser starts empty and asks for it again.",
       type: String,
       default: "",
     });
@@ -432,7 +432,7 @@ export class AceSettings {
     // while still using qwen2.5:32b for the meaty session summary.
     s("chatApiKey", {
       name: "Chat API Key (if different provider)",
-      hint: "If your Chat Model uses a different provider than your main Quality model (e.g., Quality = Claude Sonnet, Chat = local Ollama), enter that provider's API key here (or leave blank for Ollama since local doesn't need a key). Leave blank to use your main API key. Stored as a password.",
+      hint: "If your Chat Model uses a different provider than your main Quality model (e.g., Quality = Claude Sonnet, Chat = local Ollama), enter that provider's API key here (or leave blank for Ollama since local doesn't need a key). Leave blank to use your main API key. Saved in this browser on this computer only, and never sent to anyone else. Another computer or browser starts empty and asks for it again.",
       type: String,
       default: "",
     });
@@ -471,7 +471,7 @@ export class AceSettings {
     // ── Secondary API Key (for digest extraction on a different provider) ──
     s("digestApiKey", {
       name: "Digest API Key (if different provider)",
-      hint: "If your digest model uses a different provider than your main AI (e.g., main=Anthropic, digest=OpenAI), enter that provider's API key here. Leave blank to use your main API key.",
+      hint: "If your digest model uses a different provider than your main AI (e.g., main=Anthropic, digest=OpenAI), enter that provider's API key here. Leave blank to use your main API key. Saved in this browser on this computer only, and never sent to anyone else. Another computer or browser starts empty and asks for it again.",
       type: String,
       default: "",
     });
@@ -770,7 +770,7 @@ export class AceSettings {
       // file over plain HTTP to every connected client, so a key placed in it
       // is readable by any player with a console. This box is client storage:
       // it stays in the GM's browser and is never sent to anyone else.
-      hint: "API key from elevenlabs.io. Paste it and NPC voices switch on immediately — the narrator voice and model are already set for you. Stored in THIS browser only, for THIS world; it is never sent to your players.",
+      hint: "API key from elevenlabs.io. Paste it and NPC voices switch on immediately — the narrator voice and model are already set for you. Saved in this browser on this computer only, and never sent to anyone else. Another computer or browser starts empty and asks for it again.",
       type: String,
       default: "",
       // ⚠️ SAY WHETHER IT WORKED. Johnny, 2026-08-20: "if they got an
@@ -2844,6 +2844,8 @@ export async function migrateSecretsToClientScope() {
 
   const store = _readStore();
   let folded = 0;
+  // Every key moved, by name (his rule, 2026-10-13: "Name every key you move").
+  const movedNames = [];
 
   // 1. Fold every old copy into the one store. First non-empty value wins, and
   //    anything already in the store wins over everything, so re-running this
@@ -2860,7 +2862,7 @@ export async function migrateSecretsToClientScope() {
     if (store[slot]) continue;
     for (const n of names) {
       const v = readOld(n);
-      if (v) { store[slot] = v; folded++; break; }
+      if (v) { store[slot] = v; folded++; movedNames.push(`${MODULE_ID}.${n} → the ${slot} key`); break; }
     }
   }
 
@@ -2870,7 +2872,10 @@ export async function migrateSecretsToClientScope() {
     for (const vaultName of ["apiKeysByProviderSecure", "apiKeysByProvider"]) {
       const old = game.settings.get(MODULE_ID, vaultName) || {};
       for (const [provider, key] of Object.entries(old)) {
-        if (key && !store.byProvider[provider]) { store.byProvider[provider] = key; folded++; }
+        if (key && !store.byProvider[provider]) {
+          store.byProvider[provider] = key; folded++;
+          movedNames.push(`${MODULE_ID}.${vaultName} (${provider}) → the ${provider} key`);
+        }
       }
     }
   } catch (_) { /* not registered on this build */ }
@@ -2879,7 +2884,7 @@ export async function migrateSecretsToClientScope() {
   if (!store.byProvider[provider]) {
     for (const n of ["apiKeySecure", "apiKey"]) {
       const v = readOld(n);
-      if (v) { store.byProvider[provider] = v; folded++; break; }
+      if (v) { store.byProvider[provider] = v; folded++; movedNames.push(`${MODULE_ID}.${n} → the ${provider} key`); break; }
     }
   }
 
@@ -2901,12 +2906,13 @@ export async function migrateSecretsToClientScope() {
   //    so a blanked world key is still a record sitting in the database with
   //    the module's name on it. Remove the documents outright.
   let purged = 0;
+  const purgedNames = [];
   try {
     const worldStore = game.settings?.storage?.get?.("world");
     if (worldStore) {
       for (const n of ["apiKey", "chatApiKey", "digestApiKey", "apiKeysByProvider"]) {
         const doc = [...worldStore].find(d => d?.key === `${MODULE_ID}.${n}`);
-        if (doc) { await doc.delete(); purged++; }
+        if (doc) { await doc.delete(); purged++; purgedNames.push(`${MODULE_ID}.${n}`); }
       }
     }
   } catch (err) {
@@ -2914,7 +2920,8 @@ export async function migrateSecretsToClientScope() {
   }
 
   if (folded || purged) {
-    console.log(`${MODULE_ID} | Secrets consolidated: folded ${folded} old cop${folded === 1 ? "y" : "ies"} into one store, removed ${purged} world record(s).`);
+    console.log(`${MODULE_ID} | Secrets consolidated on this computer. Moved: ${movedNames.join("; ") || "none"}. `
+      + `Removed from the world: ${purgedNames.join(", ") || "none"}.`);
     if (folded) {
       ui.notifications?.info(
         `ACE Engine: your API keys now live in one place, on this computer only. ` +

@@ -135,6 +135,9 @@ export function protectedKeyStatus(moduleId, key) {
   return {
     stored: !!live,
     shadowed: !!saved,
-    preview: live ? `${live.slice(0, 6)}…${live.slice(-4)} (${live.length} chars)` : "empty",
+    // ⚠️ No part of a key is ever printed (his rule, 2026-10-13: "Do not print a
+    // key in the console, a card, or a log"). This showed its first six and last
+    // four characters.
+    state: live ? "a key is saved on this computer" : "empty",
   };
 }

@@ -8,6 +8,7 @@
 // ============================================================
 
 import { MODULE_ID } from "./ace-engine.mjs";
+import { engineShowDice, engineAwaitDice } from "./dice-wait.mjs";
 
 // ── dnd5e skill labels ──────────────────────────────────────
 const SKILL_LABELS = {
@@ -259,16 +260,13 @@ export class SubtleRollManager {
         //   showForRoll(roll, user, synchronize, users, blind, messageId, speaker, options)
         //   - blind:  skips LOCAL animation (sender doesn't see dice)
         //   - secret: via options {secret:true} — shows "?" faces on receiving clients
-        // Dice So Nice — GM sees real dice, players see blind "?" dice
+        // Dice So Nice — GM sees real dice, players see blind "?" dice, through Engine's dice wait: both throws go up together, and a broken renderer cannot hang the roll (it awaited the bare promise).
         if (game.dice3d) {
-          try {
-            // 1. GM sees real dice locally (not synchronized)
-            await game.dice3d.showForRoll(roll, game.user, false, null, false, null, null);
-            // 2. Players see ghost "?" dice (synchronized, blind=true skips GM local, ghost shows "?")
-            await game.dice3d.showForRoll(roll, game.user, true, null, true, null, null, { ghost: true });
-          } catch (e) {
-            console.warn(`${MODULE_ID} | Dice So Nice roll failed:`, e);
-          }
+          // 1. GM sees real dice locally (not synchronized)
+          engineShowDice(roll, game.user, false, null, false, null, null);
+          // 2. Players see ghost "?" dice (synchronized, blind=true skips GM local, ghost shows "?")
+          engineShowDice(roll, game.user, true, null, true, null, null, { ghost: true });
+          await engineAwaitDice();
         }
 
         const total   = roll.total;
@@ -1144,7 +1142,7 @@ export class SubtleRollManager {
         `<div style="padding:6px 14px;display:flex;align-items:center;gap:10px;` +
         `border-bottom:1px solid #2a2a2e;">` +
         // Portrait (small)
-        `<img class="ace-face" src="${r.actorImg}" style="width:32px;height:32px;border-radius:50%;` +
+        `<img class="ace-face" src="${r.actorImg}" style="width:32px;height:32px;border-radius:4px;` +
         `border:2px solid ${color};flex-shrink:0;" />` +
         // Name
         `<span style="flex:1;color:#e0ddd8;font-weight:600;font-size:0.95em;` +
