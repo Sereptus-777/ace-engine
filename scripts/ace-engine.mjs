@@ -20,6 +20,8 @@ import { noteVoiceStatus, canVoiceHere, voiceAnswerer, sayVoiceStatus, askVoiceS
 // Saved narrations on each scene, and the region that plays one (both leaves).
 import { narrationsOf, findNarration, saveNarration, markPlayed, sceneFrom } from "./narration-library.mjs";
 import { NarrateBehaviorType } from "./narrate-behavior.mjs";
+// The one limit on audio sent over the socket (a leaf).
+import { AUDIO_SOCKET_MAX_B64 } from "./text-limits.mjs";
 import { AceSettings }       from "./settings.mjs";
 import { initRemoteCatalog } from "./remote-catalog.mjs";
 import { SceneContext }       from "./scene-context.mjs";
@@ -1088,7 +1090,7 @@ Hooks.once("ready", async () => {
   // turn. GMs are not throttled - they drive every NPC voice at the table.
   const _audioFloodGate = new Map();
   const AUDIO_MIN_GAP_MS = 1500;
-  const AUDIO_MAX_BYTES  = 6_000_000;   // ~6 MB of base64; a long line is far less
+  const AUDIO_MAX_BYTES  = AUDIO_SOCKET_MAX_B64;   // the one limit every sender uses (text-limits.mjs)
 
   // ⚠️🔴 THE SENDER IS THE SERVER'S, NOT THE PAYLOAD'S (2026-10-11). See
   // socket-sender.mjs: Foundry stamps who sent this as the second argument,

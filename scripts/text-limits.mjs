@@ -53,6 +53,23 @@
 // they are all the same and none of them shortens anything real.
 const RUNAWAY_GUARD = 100_000;
 
+/**
+ * ⚠️🔴 THE MOST AUDIO ONE SOCKET MESSAGE CARRIES, as base64 characters.
+ *
+ * Johnny, 2026-10-16: walking Firaxis over "X5 approach" played the narrator's
+ * ElevenLabs voice on his screen; "X5 entry", a longer read, played the robot.
+ * The narrator's broadcast had its own cap of 700,000 characters ("Socket.io
+ * handles ~1MB fine", a guess), and over it the players were sent the WORDS, so
+ * each browser read them in its own robotic voice. Foundry's server accepts a
+ * message of up to 100 MB (dist/server/express.mjs, maxHttpBufferSize 1e8), and
+ * the NPC voice relay had always allowed 6 MB.
+ *
+ * One limit now, for every sender and the receiver. 6 MB of base64 is about four
+ * and a half minutes of ElevenLabs audio; speech is cut at 2,400 characters
+ * before it is ever made (panel.mjs _cleanForSpeech), roughly two and a half.
+ */
+export const AUDIO_SOCKET_MAX_B64 = 6_000_000;
+
 export const STORE_LIMIT = {
   narration:      RUNAWAY_GUARD,   // was 300  — 37% of his narration was clipped
   note:           RUNAWAY_GUARD,   // was 500

@@ -13,6 +13,7 @@ import { getSecret, getSecretVault } from "./settings.mjs";
 import { damageLine } from "./read-item-damage.mjs";
 import { speechCard, speechColour } from "./npc/speech-card.mjs";
 import { narrationsOf, findNarration, saveNarration, deleteNarration } from "./narration-library.mjs";
+import { AUDIO_SOCKET_MAX_B64 } from "./text-limits.mjs";
 
 // dnd5e 5.3 moved senses to `senses.ranges.*`; the old path logs a deprecation
 // on every read and is REMOVED in 6.1 (it would silently return 0 — every
@@ -1364,7 +1365,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       // Broadcast to all players
       try {
         const base64 = await AcePanel._blobToBase64(blob);
-        if (base64.length < 700_000) {
+        if (base64.length <= AUDIO_SOCKET_MAX_B64) {
           game.socket.emit(`module.${MODULE_ID}`, {
             type: "narration-audio",
             audio: base64,
@@ -1372,7 +1373,8 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
           });
           console.log(`${MODULE_ID} | NPC Speech: broadcast audio (${(base64.length / 1024).toFixed(0)} KB)`);
         } else {
-          console.warn(`${MODULE_ID} | NPC Speech: audio too large for socket (${(base64.length / 1024).toFixed(0)} KB)`);
+          console.warn(`${MODULE_ID} | NPC Speech: audio too large to send (${(base64.length / 1024).toFixed(0)} KB) — players were not sent it`);
+          ui.notifications?.warn("ACE: that line was too long to send to the players as audio. Only you heard it.");
         }
       } catch (bcastErr) {
         console.warn(`${MODULE_ID} | NPC Speech: broadcast failed:`, bcastErr);
@@ -5553,23 +5555,29 @@ Appropriate loot, XP, and story rewards.
       if (broadcast) {
         try {
           const base64 = await AcePanel._blobToBase64(blob);
-          // Socket.io handles ~1MB fine; base64 adds ~33% overhead
-          if (base64.length < 700_000) {
+          // ⚠️ One limit for all audio over the socket (text-limits.mjs). The
+          // old 700 KB guess sent a longer narration to the players as words,
+          // and their browsers read it in the robot voice.
+          if (base64.length <= AUDIO_SOCKET_MAX_B64) {
             game.socket.emit(`module.${MODULE_ID}`, {
               type: "narration-audio",
               audio: base64,
               userId: game.user.id,
             });
             console.log(`${MODULE_ID} | TTS: Broadcast ElevenLabs audio to players (${(base64.length / 1024).toFixed(0)} KB)`);
-          } else {
-            // Audio too large for socket — send text for browser TTS fallback
+          } else if (this._browserVoiceChosen()) {
+            // The GM chose the browser voice, so the words are what was asked for.
             game.socket.emit(`module.${MODULE_ID}`, {
               type: "narration-tts",
               text,
               gender,
               userId: game.user.id,
             });
-            console.warn(`${MODULE_ID} | TTS: Audio too large for socket (${(base64.length / 1024).toFixed(0)} KB) — broadcasting text instead`);
+            console.warn(`${MODULE_ID} | TTS: Audio too large to send (${(base64.length / 1024).toFixed(0)} KB) — players read it in the browser voice you chose`);
+          } else {
+            // Never swap the narrator for a robot without being asked.
+            console.warn(`${MODULE_ID} | TTS: Audio too large to send (${(base64.length / 1024).toFixed(0)} KB) — players were not sent the voice`);
+            ui.notifications?.warn("ACE: that narration was too long to send to the players as the narrator's voice. They have it in chat; only you heard it.");
           }
         } catch (bcastErr) {
           console.warn(`${MODULE_ID} | TTS: Audio broadcast failed — players will see text only:`, bcastErr);
