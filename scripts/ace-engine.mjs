@@ -18,7 +18,8 @@ import { getSharedElevenLabsKey, getSharedElevenLabsKeyInfo } from "./npc/shared
 // One GM screen answers a player's voice request, and it is one that can voice.
 import { noteVoiceStatus, canVoiceHere, voiceAnswerer, sayVoiceStatus, askVoiceStatus } from "./npc/voice-answerer.mjs";
 // Saved narrations on each scene, and the region that plays one (both leaves).
-import { narrationsOf, findNarration, saveNarration, markPlayed, sceneFrom } from "./narration-library.mjs";
+import { narrationsOf, findNarration, saveNarration, markPlayed, sceneFrom, setNarrationAudio } from "./narration-library.mjs";
+import { silentUpload } from "./silent-upload.mjs";
 import { NarrateBehaviorType } from "./narrate-behavior.mjs";
 // The one limit on audio sent over the socket (a leaf).
 import { AUDIO_SOCKET_MAX_B64 } from "./text-limits.mjs";
@@ -855,6 +856,26 @@ function _playNarrationAudio(base64, volume = 0.8) {
   }
 }
 
+/**
+ * Play a saved narration's recording, made ahead of time and kept in this
+ * world's folder. The GM sends only its path, so it starts at once on every
+ * screen and nothing large crosses the socket.
+ */
+function _playNarrationFileHere(src, volume = 0.8) {
+  if (_narrationAudio) {
+    try { _narrationAudio.pause(); _narrationAudio.src = ""; } catch (_) {}
+    _narrationAudio = null;
+  }
+  const audio = new Audio(src);
+  _narrationAudio = audio;
+  audio.volume       = Math.max(0, Math.min(1, volume));
+  audio.playbackRate = 1.1;  // the GM's own pace
+  const done = () => { if (_narrationAudio === audio) _narrationAudio = null; };
+  audio.onended = done;
+  audio.onerror = () => { console.warn(`${MODULE_ID} | the narration recording ${src} would not load on this screen.`); done(); };
+  audio.play().catch(err => { console.warn(`${MODULE_ID} | the narration recording would not start on this screen:`, err); done(); });
+}
+
 // ── Standalone ElevenLabs TTS (no panel dependency) ─────────────
 // Used by _handleSubtleBroadcast to generate audio when panel is closed.
 
@@ -1148,6 +1169,21 @@ Hooks.once("ready", async () => {
       try { vol = game.settings.get(MODULE_ID, "narrationVolume") ?? 0.8; } catch (_) {}
       if (vol <= 0) return;  // muted
       _playNarrationAudio(data.audio, vol);
+    }
+
+    // ── A saved narration's recording, made ahead of time: only its path ──
+    if (data?.type === "narration-file" && typeof data.src === "string") {
+      if (data.userId === game.user.id) return;  // the GM's screen already plays it
+      if (!sentByGM(data)) return; // GM-only, and a missing sender is not a GM
+      // Only this world's own narration recordings, never a path from anywhere else.
+      if (!data.src.startsWith(`worlds/${game.world.id}/ace-engine/narration-audio/`)) {
+        console.warn(`${MODULE_ID} | a narration recording outside this world's narration folder was refused: ${data.src}`);
+        return;
+      }
+      let vol = 0.8;
+      try { vol = game.settings.get(MODULE_ID, "narrationVolume") ?? 0.8; } catch (_) {}
+      if (vol <= 0) return;  // muted
+      _playNarrationFileHere(data.src, vol);
     }
 
     // ── Narration text broadcast (browser TTS fallback) ───────────
@@ -2975,6 +3011,7 @@ Hooks.once("ready", async () => {
         return !!openNpcConversation(npcTokenDoc, speakerToken);
       },
       saveNarration: (scene, entry) => saveNarration(sceneFrom(scene), entry),
+      prepareNarrations: (scene, which = null) => _prepareNarrations(scene, which),
       narrations:    (scene) => narrationsOf(sceneFrom(scene)),
       stopAllAudio: _stopAllAudio,
 
@@ -6208,15 +6245,104 @@ function _newPanel() {
  * path checks the window before every touch of it, so it runs on a panel that
  * has not been drawn yet.
  */
-function _narrate(text) {
+function _narrate(text, opts = {}) {
+  const p = _narrationPanel();
+  return p ? p._narrateText(text, opts) : undefined;
+}
+
+/** The panel that narrates, built without drawing it if it was never opened. */
+function _narrationPanel() {
   if (!panel) {
     if (!_aceReady) {
       ui.notifications?.warn("ACE: still loading, so that narration was not played. Try again in a moment.");
-      return undefined;
+      return null;
     }
     panel = _newPanel();
   }
-  return panel._narrateText(text);
+  return panel;
+}
+
+/** Recordings being made right now, so one is never asked for twice. */
+const _makingNarration = new Map();
+
+/** Where made narration recordings are kept: this world's own ACE Engine folder. */
+function _narrationAudioDir() {
+  return `worlds/${game.world.id}/ace-engine/narration-audio`;
+}
+
+/**
+ * A saved narration's recording, made now if it has none or its words, voice
+ * or model changed since (his ask, 2026-10-16: the delay). Kept as a file so
+ * every later play starts at once and costs nothing.
+ * @returns {Promise<string|null>} the file's path, or null when it could not be made
+ */
+async function _ensureNarrationAudio(scene, entry) {
+  const p = _narrationPanel();
+  if (!p || !scene || !entry) return null;
+  const key = p.narrationAudioKey(entry.text);
+  if (entry.audio && entry.audioKey === key) {
+    // Made already; play it unless the file has gone from the world's folder.
+    try {
+      const head = await fetch(entry.audio, { method: "HEAD" });
+      if (head.ok) return entry.audio;
+      console.warn(`${MODULE_ID} | "${entry.title}": its recording ${entry.audio} is gone (${head.status}), so it is made again.`);
+    } catch (err) {
+      console.warn(`${MODULE_ID} | "${entry.title}": its recording ${entry.audio} could not be reached, so it is made again:`, err);
+    }
+  }
+  // Save to Scene and Make Voices can ask for the same one at once: one request, shared.
+  const flight = `${scene.id}.${entry.id}.${key}`;
+  if (_makingNarration.has(flight)) return _makingNarration.get(flight);
+  const job = (async () => {
+    try {
+      const { blob } = await p.makeNarrationAudio(entry.text);
+      const dir = _narrationAudioDir();
+      const FP = foundry.applications?.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
+      for (const part of ["ace-engine", "ace-engine/narration-audio"]) {
+        // It may already exist; any other failure shows at the upload below.
+        try { await FP.createDirectory("data", `worlds/${game.world.id}/${part}`); } catch (_) { /* see above */ }
+      }
+      const name = `${scene.id}-${entry.id}-${key}.mp3`;
+      const res = await silentUpload("data", dir, new File([blob], name, { type: "audio/mpeg" }));
+      // Foundry answers a failed upload with false or nothing, never a throw.
+      if (!res?.path) throw new Error("Foundry did not save the file (no path came back from the upload)");
+      await setNarrationAudio(scene, entry.id, { audio: res.path, audioKey: key });
+      console.log(`${MODULE_ID} | "${entry.title}" on ${scene.name}: its narration was made once and kept (${res.path}).`);
+      return res.path;
+    } catch (err) {
+      console.warn(`${MODULE_ID} | "${entry.title}" could not be made ahead of time (${err?.message ?? err}), so it is spoken live:`, err);
+      return null;
+    } finally {
+      _makingNarration.delete(flight);
+    }
+  })();
+  _makingNarration.set(flight, job);
+  return job;
+}
+
+/**
+ * Make every saved narration on a scene that has no recording yet, one after
+ * another (the Narration tab's Make Voices button), or only the one named
+ * (Save to Scene makes the one just saved). Says what it made.
+ */
+async function _prepareNarrations(scene, which = null) {
+  if (!game.user?.isGM) { ui.notifications?.warn("Only the GM can make the narration voices."); return { made: [], failed: [] }; }
+  const where = sceneFrom(scene);
+  const made = [], failed = [], already = [];
+  const entries = which ? [findNarration(where, which)].filter(Boolean) : narrationsOf(where);
+  for (const entry of entries) {
+    const p = _narrationPanel();
+    if (!p) break;
+    if (entry.audio && entry.audioKey === p.narrationAudioKey(entry.text)) { already.push(entry.title); continue; }
+    const path = await _ensureNarrationAudio(where, entry);
+    (path ? made : failed).push(entry.title);
+  }
+  const parts = [];
+  if (made.length) parts.push(`made ${made.join(", ")}`);
+  if (already.length) parts.push(`already had ${already.join(", ")}`);
+  if (failed.length) parts.push(`could not make ${failed.join(", ")}`);
+  ui.notifications?.[failed.length ? "warn" : "info"](`ACE: narration voices on ${where?.name ?? "this scene"}: ${parts.join("; ") || "nothing saved here"}.`);
+  return { made, failed, already };
 }
 
 /**
@@ -6237,7 +6363,10 @@ async function _playNarration(which, { scene } = {}) {
     ui.notifications?.warn(`ACE: no narration called "${which}" is saved on ${where?.name ?? "this scene"}. Saved there: ${have}.`);
     return false;
   }
-  await _narrate(entry.text);
+  // Its recording, made once and kept; the first play makes it if Make Voices
+  // has not, and every play after starts at once.
+  const audioSrc = await _ensureNarrationAudio(where, entry);
+  await _narrate(entry.text, audioSrc ? { audioSrc } : {});
   try { await markPlayed(where, entry.id); }
   catch (err) { console.warn(`${MODULE_ID} | "${entry.title}" played, but could not be marked as played:`, err); }
   return true;

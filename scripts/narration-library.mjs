@@ -59,7 +59,11 @@ export async function saveNarration(scene, { title, text }) {
   if (!words) throw new Error(`"${t}" has no words to save`);
   const list = narrationsOf(scene).map(n => ({ ...n }));
   const old = list.find(n => sameTitle(n.title, t));
-  if (old) { old.title = t; old.text = words; old.played = false; }
+  if (old) {
+    // New words need a new recording: the old one says the old words.
+    if (old.text !== words) { old.audio = null; old.audioKey = null; }
+    old.title = t; old.text = words; old.played = false;
+  }
   else list.push({ id: foundry.utils.randomID(), title: t, text: words, played: false });
   await scene.setFlag(MODULE_ID, KEY, list);
   return { entry: old ?? list.at(-1), replaced: !!old };
@@ -73,6 +77,14 @@ export async function deleteNarration(scene, id) {
   if (left.length === list.length) return false;
   await scene.setFlag(MODULE_ID, KEY, left);
   return true;
+}
+
+/** Remember the recording made for one, and what it was made from. */
+export async function setNarrationAudio(scene, id, { audio, audioKey }) {
+  if (!game.user?.isGM || !scene) return;
+  const list = narrationsOf(scene);
+  if (!list.some(n => n.id === id)) return;
+  await scene.setFlag(MODULE_ID, KEY, list.map(n => (n.id === id ? { ...n, audio, audioKey } : n)));
 }
 
 /** Mark one as played, so the list shows what the table has already heard. */

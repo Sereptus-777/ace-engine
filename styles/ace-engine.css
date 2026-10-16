@@ -2219,6 +2219,7 @@ li.ace-toolbar-btn:hover {
 }
 .ace-saved-narrations-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font-size: 15px;

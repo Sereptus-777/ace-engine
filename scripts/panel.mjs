@@ -315,6 +315,7 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       playSavedNarration:  AcePanel._onPlaySavedNarration,
       loadSavedNarration:  AcePanel._onLoadSavedNarration,
       deleteSavedNarration: AcePanel._onDeleteSavedNarration,
+      makeNarrationVoices: AcePanel._onMakeNarrationVoices,
       sfxLightning:        AcePanel._onSfxLightning,
       sfxEarthquake:       AcePanel._onSfxEarthquake,
       sfxStealthFail:      AcePanel._onSfxStealthFail,
@@ -3857,10 +3858,23 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     try {
       const { entry, replaced } = await saveNarration(scene, { title, text });
       this._loadedNarrationTitle = entry.title;
-      ui.notifications?.info(`ACE: "${entry.title}" ${replaced ? "replaced" : "saved"} on ${scene.name}.`);
+      ui.notifications?.info(`ACE: "${entry.title}" ${replaced ? "replaced" : "saved"} on ${scene.name}. Making its voice now.`);
+      // Its voice is made now, while nobody is waiting, so Play starts at once.
+      game.modules.get(MODULE_ID)?.api?.prepareNarrations?.(scene, entry.id)
+        ?.catch?.(err => console.warn(`${MODULE_ID} | "${entry.title}" could not be made ahead of time:`, err));
     } catch (err) {
       ui.notifications?.error(`ACE: the narration was not saved: ${err.message ?? err}`);
     }
+  }
+
+  /** Make every saved narration's voice on this scene that is not made yet. */
+  static async _onMakeNarrationVoices(event, target) {
+    const api = game.modules.get(MODULE_ID)?.api;
+    if (typeof api?.prepareNarrations !== "function") return;
+    target.disabled = true;
+    ui.notifications?.info(`ACE: making the narration voices on ${canvas?.scene?.name ?? "this scene"}, one at a time.`);
+    try { await api.prepareNarrations(canvas?.scene); }
+    finally { target.disabled = false; }
   }
 
   /** Play a saved narration: the one path every narration takes. */
@@ -5489,7 +5503,8 @@ Appropriate loot, XP, and story rewards.
       .slice(0, 2400);
   }
 
-  async _speakElevenLabs(text, apiKey, gender = "male", broadcast = false) {
+  /** The narrator's ElevenLabs voice and model, as the settings stand: one answer for live and made-ahead audio. */
+  _narratorVoice(gender = "male") {
     // config.local.json takes priority; fall back to Settings, then hardcoded defaults
     // ── Narrator voice override: if enabled + populated, use it for everything ──
     let narratorOverride = "";
@@ -5509,13 +5524,83 @@ Appropriate loot, XP, and story rewards.
     if (!femaleVoiceId) femaleVoiceId = localCredentials?.elevenLabsFemaleVoiceId || "";
 
     const voiceId = narratorOverride || ((gender === "female" && femaleVoiceId) ? femaleVoiceId : maleVoiceId);
-
     const modelId =
       localCredentials?.elevenLabsModel ||
       game.settings.get(MODULE_ID, "elevenLabsModel") ||
       "eleven_multilingual_v2";
-    const endpoint = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
-    if (gender === "female" && femaleVoiceId) {
+    return { voiceId, modelId, female: gender === "female" && !!femaleVoiceId };
+  }
+
+  /** The one ElevenLabs request the narrator makes, live or ahead of time. */
+  _narratorRequest(text, apiKey, { voiceId, modelId }, signal = undefined) {
+    return fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method:  "POST",
+      headers: { "xi-api-key": apiKey, "Content-Type": "application/json", "Accept": "audio/mpeg" },
+      body:    JSON.stringify({
+        text,
+        model_id: modelId,
+        voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.35, use_speaker_boost: true },
+      }),
+      signal,
+    });
+  }
+
+  /**
+   * ⚠️🔴 A SAVED NARRATION'S VOICE IS MADE ONCE, AHEAD OF TIME (his ask,
+   * 2026-10-16: "a huge delay in narration in general"). Every narration was
+   * made by ElevenLabs at the moment it played, and nobody heard a word until
+   * the whole recording was back. This makes the recording without playing it,
+   * so it can be kept as a file and played at once, every time after.
+   * The voice is the narrator's; a [voice:female] tag picks the female one.
+   * @returns {Promise<{blob: Blob, key: string}>}
+   */
+  async makeNarrationAudio(text) {
+    const { key: apiKey } = this._getElevenLabsKey();
+    if (!apiKey) throw new Error("this screen has no ElevenLabs key");
+    const gender = /^\[voice:female\]/i.test(String(text ?? "")) ? "female" : "male";
+    const clean = this._cleanForSpeech(String(text ?? "").replace(/^\[voice:(male|female)\]\s*/i, ""));
+    if (!clean) throw new Error("there are no words to speak");
+    const resp = await this._narratorRequest(clean, apiKey, this._narratorVoice(gender));
+    if (!resp.ok) throw new Error(`ElevenLabs answered ${resp.status}`);
+    return { blob: await resp.blob(), key: this.narrationAudioKey(text) };
+  }
+
+  /** What a made recording was made from: the words, the voice and the model. Change one and it is remade. */
+  narrationAudioKey(text) {
+    const gender = /^\[voice:female\]/i.test(String(text ?? "")) ? "female" : "male";
+    const { voiceId, modelId } = this._narratorVoice(gender);
+    const s = `${this._cleanForSpeech(String(text ?? "").replace(/^\[voice:(male|female)\]\s*/i, ""))}|${voiceId}|${modelId}`;
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return h.toString(36);
+  }
+
+  /** Play a made recording: on this screen through the narrator's own player, and on every other screen. */
+  async _playNarrationFile(src) {
+    this._cancelTTS();
+    try {
+      game.socket.emit(`module.${MODULE_ID}`, { type: "narration-file", src, userId: game.user.id });
+    } catch (err) {
+      console.warn(`${MODULE_ID} | the players could not be sent the narration recording:`, err);
+    }
+    this._ttsAudio = new Audio(src);
+    this._ttsAudio.playbackRate = 1.1;  // the narrator's pace, as when it is made live
+    const done = () => { this._ttsAudio = null; this._ttsPlaying = false; this._ttsPaused = false; this._updateTtsUI(); };
+    this._ttsAudio.onended = done;
+    this._ttsAudio.onerror = () => {
+      console.warn(`${MODULE_ID} | the narration recording ${src} would not play on this screen.`);
+      done();
+    };
+    this._ttsPlaying = true;
+    this._ttsPaused = false;
+    this._updateTtsUI();
+    try { await this._ttsAudio.play(); }
+    catch (err) { console.warn(`${MODULE_ID} | the narration recording would not start:`, err); done(); }
+  }
+
+  async _speakElevenLabs(text, apiKey, gender = "male", broadcast = false) {
+    const { voiceId, modelId, female } = this._narratorVoice(gender);
+    if (female) {
       console.log(`${MODULE_ID} | TTS: Using FEMALE ElevenLabs voice (${voiceId})`);
     }
 
@@ -5524,16 +5609,7 @@ Appropriate loot, XP, and story rewards.
       this._ttsAbort = new AbortController();
       this._updateTtsUI();   // pulse the stop button immediately while fetching
       const timeout = setTimeout(() => this._ttsAbort?.abort(), 30_000);
-      const resp = await fetch(endpoint, {
-        method:  "POST",
-        headers: { "xi-api-key": apiKey, "Content-Type": "application/json", "Accept": "audio/mpeg" },
-        body:    JSON.stringify({
-          text,
-          model_id: modelId,
-          voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.35, use_speaker_boost: true },
-        }),
-        signal: this._ttsAbort.signal,
-      });
+      const resp = await this._narratorRequest(text, apiKey, { voiceId, modelId }, this._ttsAbort.signal);
       clearTimeout(timeout);
 
       if (!resp.ok) {
@@ -6555,6 +6631,10 @@ Appropriate loot, XP, and story rewards.
     const head = `<div class="ace-saved-narrations-head">
         <i class="fas fa-bookmark"></i> Saved on ${esc(scene?.name ?? "no scene")}
         <span class="ace-saved-count">${list.length}</span>
+        ${list.length ? `<button class="ace-divider-action" data-action="makeNarrationVoices"
+                title="Make every narration on this scene now, once, so Play and the map's regions start at once">
+          <i class="fas fa-microphone-lines"></i> Make Voices
+        </button>` : ""}
       </div>`;
     if (!list.length) {
       return head + `<p class="ace-welcome-hint">Nothing saved on this scene yet. Type a narration in the box below, then <strong>Save to Scene</strong>.</p>`;
@@ -6567,6 +6647,7 @@ Appropriate loot, XP, and story rewards.
         <div class="ace-narration-timestamp">
           <span class="ace-saved-title">${esc(n.title)}</span>
           ${n.played ? `<i class="fas fa-check" title="Already played to the table"></i>` : ""}
+          ${this._narrationVoiceReady(n) ? `<i class="fas fa-volume-high" title="Its voice is made: it starts at once"></i>` : ""}
           <span class="ace-saved-actions">
             <button class="ace-divider-action" data-action="playSavedNarration" data-narration-id="${esc(n.id)}"
                     title="Send it to every player and speak it in the narrator voice">
@@ -6585,6 +6666,12 @@ Appropriate loot, XP, and story rewards.
         <div class="ace-narration-text ace-saved-preview">${esc(preview)}</div>
       </div>`;
     }).join("");
+  }
+
+  /** Whether a saved narration's recording is made and still says these words in this voice. */
+  _narrationVoiceReady(entry) {
+    try { return !!entry?.audio && entry.audioKey === this.narrationAudioKey(entry.text); }
+    catch (_) { return false; }
   }
 
   _refreshSavedNarrationsUI() {
@@ -7696,7 +7783,7 @@ Appropriate loot, XP, and story rewards.
    * Extracted from _narrateSendMessage() for reuse by encounter narrate button.
    * @param {string} text — the narration text
    */
-  async _narrateText(text) {
+  async _narrateText(text, { audioSrc = null } = {}) {
     if (!text) return;
 
     const voiceGender = this._resolveVoiceGender(text);
@@ -7741,7 +7828,9 @@ Appropriate loot, XP, and story rewards.
       }
     } catch (_) { /* non-critical */ }
 
-    this._speakText(text, voiceGender, { broadcast: true });
+    // A made recording plays at once; anything else is made now, as before.
+    if (audioSrc) this._playNarrationFile(audioSrc);
+    else this._speakText(text, voiceGender, { broadcast: true });
   }
 
   /* ──────────────────────────────────────────────────────────────────────────── */
