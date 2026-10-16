@@ -8,6 +8,8 @@ import { AceLanguageTable } from "./npc/language-table.mjs";
 // Safe to import: shared-credentials declares its own module id and imports
 // nothing, so there is no cycle back into this file.
 import { getSharedElevenLabsKey } from "./npc/shared-credentials.mjs";
+// A GM screen re-says whether it can make players' voices when what decides it changes.
+import { sayVoiceStatus } from "./npc/voice-answerer.mjs";
 import { protectKey, clearProtectedKey, protectedKeyStatus } from "./key-guard.mjs";
 
 // ── First-page settings visibility ──────────────────────────
@@ -787,6 +789,7 @@ export class AceSettings {
       onChange: (value) => {
         try { _guardElevenLabsKey?.(value); } catch (_) { /* never block the verifier */ }
         verifyElevenLabsKey(value);
+        sayVoiceStatus().catch(err => console.warn(`${MODULE_ID} | could not tell the other GM screens about this key change:`, err));
       },
     });
 
@@ -884,6 +887,8 @@ export class AceSettings {
         browser:     "Browser voice (free, no account needed)",
       },
       default: "elevenlabs",
+      onChange: () => sayVoiceStatus().catch(err =>
+        console.warn(`${MODULE_ID} | could not tell the other GM screens about this voice provider change:`, err)),
     });
 
     // ⚠️🔴 WORLD-SCOPED ON PURPOSE, AND THE REASON MATTERS.
@@ -929,7 +934,9 @@ export class AceSettings {
       onChange: () => {
         import("./npc/tts-local.mjs")
           .then(({ forgetProbe }) => forgetProbe())
-          .catch(() => { /* module not loaded yet; next probe is fresh anyway */ });
+          .catch(() => { /* module not loaded yet; next probe is fresh anyway */ })
+          .then(() => sayVoiceStatus())
+          .catch(err => console.warn(`${MODULE_ID} | could not tell the other GM screens about the speech server change:`, err));
       },
     });
 

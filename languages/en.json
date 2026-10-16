@@ -158,6 +158,21 @@
       "PartyStatus": "Party Status",
       "Difficulty": "Difficulty",
       "Adjustments": "Suggested Adjustments"
+    },
+    "REGIONBEHAVIORS": {
+      "NARRATE": {
+        "label": "ACE: Engine — Narrate",
+        "FIELDS": {
+          "narration": {
+            "label": "Narration",
+            "hint": "The title of a narration saved on this scene in ACE Engine's Narration tab, for example: X5 entry. It plays once, the first time a token walks in, then this behaviour switches itself off."
+          },
+          "playersOnly": {
+            "label": "Players only",
+            "hint": "Only a token a player owns sets it off. A monster you move through the doorway does nothing."
+          }
+        }
+      }
     }
   }
 }

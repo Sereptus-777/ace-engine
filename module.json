@@ -46,6 +46,11 @@
       "path": "languages/en.json"
     }
   ],
+  "documentTypes": {
+    "RegionBehavior": {
+      "narrate": {}
+    }
+  },
   "socket": true,
   "url": "https://github.com/Sereptus-777/ace-engine"
 }

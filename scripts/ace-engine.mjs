@@ -15,6 +15,11 @@ import { isBioInFlight, openAutoLinkCleanup } from "./npc/bio-generator.mjs";
 // setSharedElevenLabsKey is deliberately NOT imported: the ElevenLabs key
 // comes from the module setting and nowhere else. See shared-credentials.mjs.
 import { getSharedElevenLabsKey, getSharedElevenLabsKeyInfo } from "./npc/shared-credentials.mjs";
+// One GM screen answers a player's voice request, and it is one that can voice.
+import { noteVoiceStatus, canVoiceHere, voiceAnswerer, sayVoiceStatus, askVoiceStatus } from "./npc/voice-answerer.mjs";
+// Saved narrations on each scene, and the region that plays one (both leaves).
+import { narrationsOf, findNarration, saveNarration, markPlayed, sceneFrom } from "./narration-library.mjs";
+import { NarrateBehaviorType } from "./narrate-behavior.mjs";
 import { AceSettings }       from "./settings.mjs";
 import { initRemoteCatalog } from "./remote-catalog.mjs";
 import { SceneContext }       from "./scene-context.mjs";
@@ -611,6 +616,12 @@ async function migrateFromEnvoy() {
 Hooks.once("init", () => {
   console.log(`${MODULE_ID} | Initializing ACE`);
   AceSettings.register();
+
+  // A region that plays a saved narration when the party walks in. Registered
+  // before the enabled gate: a region already drawn must stay a valid document.
+  Object.assign(CONFIG.RegionBehavior.dataModels, { [`${MODULE_ID}.narrate`]: NarrateBehaviorType });
+  Object.assign(CONFIG.RegionBehavior.typeIcons,  { [`${MODULE_ID}.narrate`]: "fa-solid fa-scroll" });
+  Object.assign(CONFIG.RegionBehavior.typeLabels, { [`${MODULE_ID}.narrate`]: "ACE.REGIONBEHAVIORS.NARRATE.label" });
 
   // Settings stay registered even when disabled so user can re-enable.
   // All runtime systems below the gate are skipped.
@@ -1643,6 +1654,18 @@ Hooks.once("ready", async () => {
       }
     }
 
+    // ── Which GM screen makes a player's voice (npc/voice-answerer.mjs) ──
+    // A GM screen says yes or no, never the key. Only a GM's word is kept.
+    if (data?.action === "voiceStatus") {
+      if (sentByGM(data)) noteVoiceStatus(data.senderId, data.can === true);
+      return;
+    }
+    if (data?.action === "voiceStatusAsk") {
+      if (game.user.isGM) sayVoiceStatus().catch(err =>
+        console.warn(`${MODULE_ID} | could not answer whether this GM screen can make NPC voices:`, err));
+      return;
+    }
+
     // ── playAudio — base64 audio broadcast from another client (TTS) ──
     // The TTS engine emits this from tts.mjs after each successful
     // ElevenLabs fetch so every client hears the same audio. Without a
@@ -1700,6 +1723,27 @@ Hooks.once("ready", async () => {
       // length a spoken NPC line could plausibly reach.
       const _ttsUser = _authoriseEnginePlayerSocket(data, "ttsRequest");
       if (!_ttsUser) return;
+      // ⚠️🔴 ONE GM SCREEN ANSWERS, AND IT CAN MAKE THE VOICE (2026-10-15).
+      // Every GM screen used to answer, and the player takes the first answer:
+      // a second GM login with no key answered "no key" at once while the main
+      // screen was still fetching the real voice. Decided before the spending
+      // limit, so a screen that does not answer never holds a player's slot.
+      // See npc/voice-answerer.mjs.
+      const _pick = voiceAnswerer({ selfCan: await canVoiceHere() });
+      if (_pick.id !== game.user.id) {
+        console.debug(`${MODULE_ID} | ${_ttsUser.name}'s NPC voice is `
+          + (_pick.id ? `${game.users.get(_pick.id)?.name ?? "another GM screen"}'s to make` : "waiting on a GM screen that has not said whether it can voice")
+          + `, not this screen's.`);
+        return;
+      }
+      if (_pick.answer === "error") {
+        console.warn(`${MODULE_ID} | ${_ttsUser.name} asked for an NPC voice, and no connected GM screen can make one.`);
+        game.socket.emit(`module.${MODULE_ID}`, {
+          action: "ttsResponse", requestId: data.requestId,
+          error: "No GM screen connected can make NPC voices: none has an ElevenLabs key (or a reachable speech server) in its browser.",
+        });
+        return;
+      }
       // ⚠️🔴 AUTHORISED BUT NOT RATE-LIMITED WAS STILL A BILL (Brock,
       // 2026-08-19). The character cap below bounds ONE request; it does
       // nothing about a thousand of them. A console loop of legitimate-looking
@@ -2291,6 +2335,14 @@ Hooks.once("ready", async () => {
       }
     }
   } catch (err) { console.warn(`${MODULE_ID} | Voice credential check failed (non-fatal):`, err); }
+
+  // ── WHICH GM SCREEN MAKES PLAYERS' VOICES (npc/voice-answerer.mjs) ──────
+  // This GM screen says whether it can, and asks the others already here.
+  if (game.user?.isGM) {
+    sayVoiceStatus().catch(err =>
+      console.warn(`${MODULE_ID} | could not tell the other GM screens whether this one can make NPC voices:`, err));
+    askVoiceStatus();
+  }
 
   // ── Provider/URL/Model consistency repair ──────────────────
   // Detects the bug where Provider was changed on the main settings page
@@ -2902,15 +2954,13 @@ Hooks.once("ready", async () => {
          at all, returned undefined, and threw nothing: a sister module or a
          macro asking the narrator to speak got silence. Both names are tried
          now, the real one first, and a panel that is not open says so. */
-      narrate:   (text) => {
-        const say = panel?._narrateText ?? panel?.narrateText;
-        if (typeof say !== "function") {
-          console.warn(`${MODULE_ID} | api.narrate was asked to speak and the narration panel is `
-            + `not open, so nothing was said. Open ACE Engine first.`);
-          return undefined;
-        }
-        return say.call(panel, text);
-      },
+      narrate:   (text) => _narrate(text),
+      /* Saved narrations on a scene (narration-library.mjs): play one by its
+         title, save one, or list a scene's. A scene is a Scene, an id or a
+         name; leave it out for the scene being viewed. */
+      playNarration: (which, opts) => _playNarration(which, opts),
+      saveNarration: (scene, entry) => saveNarration(sceneFrom(scene), entry),
+      narrations:    (scene) => narrationsOf(sceneFrom(scene)),
       stopAllAudio: _stopAllAudio,
 
       // ── Cross-module bio-generation status (used by ace-token-art) ──
@@ -4274,6 +4324,12 @@ function _discoverSceneNpcs() {
 // ── Scene & Combat awareness ───────────────────────────────────
 let _lastSceneName = null;  // track scene transitions for memory
 
+// A narration saved, played or deleted on the scene being viewed: redraw its list.
+Hooks.on("updateScene", (scene, changes) => {
+  if (!panel?.rendered || scene?.id !== canvas?.scene?.id) return;
+  if (foundry.utils.hasProperty(changes ?? {}, `flags.${MODULE_ID}.narrations`)) panel._refreshSavedNarrationsUI();
+});
+
 Hooks.on("canvasReady", () => {
   if (!game.user.isGM || !sceneCtx) return;
   sceneCtx.refresh();
@@ -4288,6 +4344,7 @@ Hooks.on("canvasReady", () => {
     panel.updateContext();
     panel.trackSceneTransition();   // advance survival tracker on scene change
     panel.refreshSelectPanel();     // refresh Select panel for new scene
+    panel._refreshSavedNarrationsUI();  // the Narration tab lists THIS scene's saved narrations
   }
   // Re-inject toolbar button on scene changes (controls re-render)
   _injectAceControl();
@@ -6101,24 +6158,74 @@ function openPanel() {
       ui.notifications?.warn("ACE is still loading — please wait a moment and try again.");
       return;
     }
-    panel = new AcePanel({
-      aiProvider,
-      sceneCtx,
-      npcMemory,
-      lkMemory:          aceMemory,
-      suggestionEngine,
-      reputationEngine,
-      subtleRolls,
-      documentEngine,
-      digestEngine,
-      worldBible,
-      vaultEngine,
-      vaultSearch,
-      triggerSfx: _triggerSfx,
-      stopSfx:    stopAllSfx,
-    });
+    // A panel a narration built before the window was ever opened is reused,
+    // so its narration history shows and its one hook is not left behind.
+    const neverDrawn = panel && panel.state === foundry.applications.api.ApplicationV2.RENDER_STATES.NONE;
+    if (!neverDrawn) panel = _newPanel();
     panel.render(true);
   }
+}
+
+/** The ACE panel, built with everything it needs. Rendering it is the caller's choice. */
+function _newPanel() {
+  return new AcePanel({
+    aiProvider,
+    sceneCtx,
+    npcMemory,
+    lkMemory:          aceMemory,
+    suggestionEngine,
+    reputationEngine,
+    subtleRolls,
+    documentEngine,
+    digestEngine,
+    worldBible,
+    vaultEngine,
+    vaultSearch,
+    triggerSfx: _triggerSfx,
+    stopSfx:    stopAllSfx,
+  });
+}
+
+/**
+ * ⚠️🔴 NARRATION NEVER NEEDED THE WINDOW OPEN (2026-10-15). A narration asked
+ * for before the GM had opened ACE this session was dropped with a console
+ * warning: a region at the X5 doors would have played nothing. The narration
+ * path checks the window before every touch of it, so it runs on a panel that
+ * has not been drawn yet.
+ */
+function _narrate(text) {
+  if (!panel) {
+    if (!_aceReady) {
+      ui.notifications?.warn("ACE: still loading, so that narration was not played. Try again in a moment.");
+      return undefined;
+    }
+    panel = _newPanel();
+  }
+  return panel._narrateText(text);
+}
+
+/**
+ * Play a narration saved on a scene: the chat card and the narrator voice,
+ * through the one narration path. The active GM plays it; any other screen
+ * returns false and says nothing, because a region asks every screen at once.
+ * @param {string} which  its title ("X5 entry") or id
+ * @param {{scene?: (Scene|string)}} [opts]  defaults to the scene being viewed
+ * @returns {Promise<boolean>} whether it played
+ */
+async function _playNarration(which, { scene } = {}) {
+  // SILENT-OK: a region asks every connected screen; only the active GM speaks
+  if (game.users?.activeGM !== game.user) return false;
+  const where = sceneFrom(scene);
+  const entry = findNarration(where, which);
+  if (!entry) {
+    const have = narrationsOf(where).map(n => `"${n.title}"`).join(", ") || "none";
+    ui.notifications?.warn(`ACE: no narration called "${which}" is saved on ${where?.name ?? "this scene"}. Saved there: ${have}.`);
+    return false;
+  }
+  await _narrate(entry.text);
+  try { await markPlayed(where, entry.id); }
+  catch (err) { console.warn(`${MODULE_ID} | "${entry.title}" played, but could not be marked as played:`, err); }
+  return true;
 }
 
 export { MODULE_ID };

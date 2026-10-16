@@ -12,6 +12,7 @@ import { writeBiography, appendToBiography } from "./bio-writer.mjs";
 import { getSecret, getSecretVault } from "./settings.mjs";
 import { damageLine } from "./read-item-damage.mjs";
 import { speechCard, speechColour } from "./npc/speech-card.mjs";
+import { narrationsOf, findNarration, saveNarration, deleteNarration } from "./narration-library.mjs";
 
 // dnd5e 5.3 moved senses to `senses.ranges.*`; the old path logs a deprecation
 // on every read and is REMOVED in 6.1 (it would silently return 0 — every
@@ -309,6 +310,10 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
       narrateSend:         AcePanel._onNarrateSend,
       clearNarration:      AcePanel._onClearNarration,
       copyNarration:       AcePanel._onCopyNarration,
+      saveSceneNarration:  AcePanel._onSaveSceneNarration,
+      playSavedNarration:  AcePanel._onPlaySavedNarration,
+      loadSavedNarration:  AcePanel._onLoadSavedNarration,
+      deleteSavedNarration: AcePanel._onDeleteSavedNarration,
       sfxLightning:        AcePanel._onSfxLightning,
       sfxEarthquake:       AcePanel._onSfxEarthquake,
       sfxStealthFail:      AcePanel._onSfxStealthFail,
@@ -548,6 +553,10 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
            NARRATION TAB — Content broadcast to players
            ═══════════════════════════════════════════════════ -->
       <div class="ace-tab-content ${this._activeTab === "narration" ? "active" : ""}" data-tab-content="narration">
+        <!-- Saved on this scene: narrations prepared ahead, each with Play -->
+        <div class="ace-saved-narrations" id="ace-saved-narrations">
+          ${this._renderSavedNarrations()}
+        </div>
         <!-- History: what has been narrated to players this session -->
         <div class="ace-narration-log" id="ace-narration-log">
           ${this._renderNarrationMessages()}
@@ -563,6 +572,10 @@ export class AcePanel extends foundry.applications.api.ApplicationV2 {
             <i class="fas fa-mountain"></i> Earthquake
           </button>
           <!-- Stealth/Perception buttons removed -->
+          <button class="ace-divider-action" data-action="saveSceneNarration"
+                  title="Save what is in the narration box below on this scene, under a title you choose">
+            <i class="fas fa-bookmark"></i> Save to Scene
+          </button>
           <div class="ace-input-spacer"></div>
           ${this._renderSessionRecapButton()}
         </div>
@@ -3796,6 +3809,99 @@ Do NOT include game mechanics or stat blocks — just narrative flavor.`;
     ui.notifications.info("Sent to Narration tab — review and edit before broadcasting.");
   }
 
+  /** Save the narration box on this scene, under a title the GM chooses. */
+  static async _onSaveSceneNarration(event, target) {
+    const box = this.element?.querySelector("#ace-narration-input");
+    const text = box?.value?.trim() ?? "";
+    const scene = canvas?.scene ?? null;
+    if (!text) {
+      ui.notifications?.warn("ACE: type the narration in the box below first, then Save to Scene.");
+      return;
+    }
+    if (!scene) {
+      ui.notifications?.warn("ACE: there is no scene open to save it on.");
+      return;
+    }
+    const esc = (s) => this._escapeHtml(String(s ?? ""));
+    let title = null;
+    try {
+      title = await foundry.applications.api.DialogV2.prompt({
+        window: { title: "ACE — Save Narration" },
+        position: { width: 460 },
+        content: `
+          <div style="background:linear-gradient(180deg,#15110d 0%,#0c0a08 100%);
+                      border:2px solid #d4af37;border-radius:8px;padding:14px 16px;
+                      color:#f0e4c0;font-size:16px;line-height:1.5;">
+            <div style="font-size:18px;font-weight:700;color:#f5d060;margin-bottom:6px;">
+              <i class="fas fa-bookmark" style="margin-right:8px;"></i>Save on ${esc(scene.name)}
+            </div>
+            <label style="display:block;margin-bottom:6px;">Title</label>
+            <input type="text" name="title" value="${esc(this._loadedNarrationTitle ?? "")}"
+                   placeholder="X5 entry" autofocus
+                   style="width:100%;font-size:16px;padding:6px 8px;color:#f0e4c0;
+                          background:#1a1612;border:1px solid #6b5a2e;border-radius:4px;">
+            <div style="font-size:14px;color:#b8a878;margin-top:8px;">
+              The same title replaces what is saved under it.
+            </div>
+          </div>`,
+        ok: { label: "Save", icon: "fas fa-bookmark", callback: (_e, button) => button.form.elements.title.value },
+        rejectClose: false,
+      });
+    } catch (err) {
+      console.warn(`${MODULE_ID} | the save box could not open, so nothing was saved:`, err);
+      return;
+    }
+    if (!title?.trim()) return;  // closed, or no title given
+    try {
+      const { entry, replaced } = await saveNarration(scene, { title, text });
+      this._loadedNarrationTitle = entry.title;
+      ui.notifications?.info(`ACE: "${entry.title}" ${replaced ? "replaced" : "saved"} on ${scene.name}.`);
+    } catch (err) {
+      ui.notifications?.error(`ACE: the narration was not saved: ${err.message ?? err}`);
+    }
+  }
+
+  /** Play a saved narration: the one path every narration takes. */
+  static async _onPlaySavedNarration(event, target) {
+    const id = target?.dataset?.narrationId;
+    const api = game.modules.get(MODULE_ID)?.api;
+    if (!id || typeof api?.playNarration !== "function") return;
+    target.disabled = true;
+    try { await api.playNarration(id, { scene: canvas?.scene }); }
+    finally { target.disabled = false; }
+  }
+
+  /** Put a saved narration in the box, to read or change before saving it again. */
+  static _onLoadSavedNarration(event, target) {
+    const entry = findNarration(canvas?.scene, target?.dataset?.narrationId);
+    if (!entry) {
+      ui.notifications?.warn("ACE: that narration is no longer saved on this scene.");
+      this._refreshSavedNarrationsUI();
+      return;
+    }
+    const box = this.element?.querySelector("#ace-narration-input");
+    if (!box) return;
+    box.value = entry.text;
+    this._loadedNarrationTitle = entry.title;
+    box.style.height = "auto";
+    box.style.height = Math.min(box.scrollHeight, 200) + "px";
+    box.focus();
+    ui.notifications?.info(`ACE: "${entry.title}" is in the box. Change it, then Save to Scene with the same title to replace it.`);
+  }
+
+  static async _onDeleteSavedNarration(event, target) {
+    const scene = canvas?.scene ?? null;
+    const entry = findNarration(scene, target?.dataset?.narrationId);
+    if (!entry) { this._refreshSavedNarrationsUI(); return; }
+    const esc = (s) => this._escapeHtml(String(s ?? ""));
+    const yes = await _aceConfirmDialog("ACE — Delete Narration",
+      `<p>Delete <strong>${esc(entry.title)}</strong> from ${esc(scene.name)}?</p>`,
+      { yesLabel: "Delete", yesIcon: "fas fa-trash", rejectClose: false });
+    if (!yes) return;
+    await deleteNarration(scene, entry.id);
+    ui.notifications?.info(`ACE: "${entry.title}" deleted from ${scene.name}.`);
+  }
+
   static _onCopyNarration(event, target) {
     const idx = parseInt(target.dataset.index ?? target.closest("[data-index]")?.dataset.index);
     const entry = this._narrationHistory[idx];
@@ -6427,6 +6533,55 @@ Appropriate loot, XP, and story rewards.
       log.innerHTML = this._renderChatMessages();
       this._scrollChatToBottom();
     }
+  }
+
+  /**
+   * The narrations saved on the scene being viewed (narration-library.mjs).
+   * Each row is a narration entry with its title where the time would be, and
+   * Play beside it: the same card and voice as the box below.
+   */
+  _renderSavedNarrations() {
+    const scene = canvas?.scene ?? null;
+    const list = narrationsOf(scene);
+    const esc = (s) => this._escapeHtml(String(s ?? ""));
+    const head = `<div class="ace-saved-narrations-head">
+        <i class="fas fa-bookmark"></i> Saved on ${esc(scene?.name ?? "no scene")}
+        <span class="ace-saved-count">${list.length}</span>
+      </div>`;
+    if (!list.length) {
+      return head + `<p class="ace-welcome-hint">Nothing saved on this scene yet. Type a narration in the box below, then <strong>Save to Scene</strong>.</p>`;
+    }
+    return head + list.map(n => {
+      const words = String(n.text);
+      const preview = words.length > 180 ? `${words.slice(0, 180).trimEnd()}…` : words;
+      return `
+      <div class="ace-narration-entry ace-saved-narration${n.played ? " ace-saved-played" : ""}" data-narration-id="${esc(n.id)}">
+        <div class="ace-narration-timestamp">
+          <span class="ace-saved-title">${esc(n.title)}</span>
+          ${n.played ? `<i class="fas fa-check" title="Already played to the table"></i>` : ""}
+          <span class="ace-saved-actions">
+            <button class="ace-divider-action" data-action="playSavedNarration" data-narration-id="${esc(n.id)}"
+                    title="Send it to every player and speak it in the narrator voice">
+              <i class="fas fa-play"></i> Play
+            </button>
+            <button class="ace-icon-btn" data-action="loadSavedNarration" data-narration-id="${esc(n.id)}"
+                    title="Put it in the box below to read or change">
+              <i class="fas fa-pen"></i>
+            </button>
+            <button class="ace-icon-btn" data-action="deleteSavedNarration" data-narration-id="${esc(n.id)}"
+                    title="Delete it from this scene">
+              <i class="fas fa-trash"></i>
+            </button>
+          </span>
+        </div>
+        <div class="ace-narration-text ace-saved-preview">${esc(preview)}</div>
+      </div>`;
+    }).join("");
+  }
+
+  _refreshSavedNarrationsUI() {
+    const box = this.element?.querySelector("#ace-saved-narrations");
+    if (box) box.innerHTML = this._renderSavedNarrations();
   }
 
   _refreshNarrationUI() {

@@ -2204,6 +2204,55 @@ li.ace-toolbar-btn:hover {
   -webkit-user-select: text;
 }
 
+/* ── Saved on this scene (narration-library.mjs) ──────────────
+   The same narration entry as the history below it; only the list's own
+   frame is new. Its height is capped so the history keeps its room. */
+.ace-saved-narrations {
+  flex-shrink: 0;
+  max-height: 38%;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.25);
+}
+.ace-saved-narrations-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ace-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+.ace-saved-count {
+  margin-left: auto;
+  color: var(--ace-text-primary);
+  letter-spacing: 0;
+}
+/* A long title wraps onto its own line, never squeezed beside the buttons. */
+.ace-saved-narration .ace-narration-timestamp {
+  flex-wrap: wrap;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.ace-saved-title {
+  overflow-wrap: anywhere;
+}
+.ace-saved-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ace-saved-played {
+  opacity: 0.72;
+}
+
 /* ── SFX Bar ──────────────────────────────────────────────── */
 /* Legacy — replaced by .ace-gold-divider */
 .ace-sfx-bar {
