@@ -2961,6 +2961,19 @@ Hooks.once("ready", async () => {
          title, save one, or list a scene's. A scene is a Scene, an id or a
          name; leave it out for the scene being viewed. */
       playNarration: (which, opts) => _playNarration(which, opts),
+      /* Open this screen's NPC chat with an NPC's token, under the same rules as
+         the token HUD's chat button (party spokesperson, one conversation at a
+         time). ACE QOL's fight pop-up uses it for Talk (2026-10-16). Distance
+         and sight are not asked: a character may shout through a door. */
+      talkTo: async (npcTokenDoc, speakerToken = null) => {
+        const { whyCannotTalk, openNpcConversation } = await import("./npc/ui-hooks.mjs");
+        const why = whyCannotTalk(npcTokenDoc?.actor);
+        if (why) {
+          ui.notifications?.warn(`You can't speak to ${npcTokenDoc?.name ?? "them"} right now: ${why}.`);
+          return false;
+        }
+        return !!openNpcConversation(npcTokenDoc, speakerToken);
+      },
       saveNarration: (scene, entry) => saveNarration(sceneFrom(scene), entry),
       narrations:    (scene) => narrationsOf(sceneFrom(scene)),
       stopAllAudio: _stopAllAudio,

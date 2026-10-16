@@ -92,6 +92,38 @@ function hasLOS(tokenA, tokenB) {
 
 function isLockedByMe(actorId) { return npcLocks.get(actorId)?.userId === game.user.id; }
 
+/**
+ * Why this screen may not open a conversation with this NPC right now, or null.
+ * The token HUD's chat button and ACE QOL's fight pop-up (Talk, 2026-10-16) ask
+ * the same two rules: the party's spokesperson speaks for the party, and one
+ * conversation at a time.
+ */
+export function whyCannotTalk(actor) {
+    const partyFaceId = (() => {
+        try { return game.settings.get(MODULE_ID, "partyFace") || ""; }
+        catch (_) { return ""; }
+    })();
+    const faceActor = partyFaceId ? game.actors.get(partyFaceId) : null;
+    if (faceActor && !faceActor.testUserPermission(game.user, "OWNER")) {
+        return `${faceActor.name || "the Party Face"} is the party's spokesperson`;
+    }
+    if (npcLocks.size > 0 && !isLockedByMe(actor?.id)) return "someone is already in a conversation";
+    return null;
+}
+
+/** Open, or bring forward, this screen's conversation with this NPC. The one way it is opened. */
+export function openNpcConversation(tokenDoc, speakerToken = null) {
+    const actor = tokenDoc?.actor;
+    if (!actor) return null;
+    const key = _convoKey(actor.id, tokenDoc);
+    const existing = openConversations.get(key);
+    if (existing) { existing.render(true); return existing; }
+    const convoApp = new ConversationApp(actor, { isOwner: true, tokenDocument: tokenDoc, speakerToken: speakerToken || undefined });
+    openConversations.set(key, convoApp);
+    convoApp.render(true);
+    return convoApp;
+}
+
 async function _resolveSpeakerToken(npcActorId) {
     const candidates = (canvas.tokens?.controlled ?? []).filter(t => {
         const a = t.actor;
@@ -510,7 +542,6 @@ export function registerUiHooks() {
 
             const chatControls = $(chatHtml);
             const tokenDoc = token.document;
-            const playerConvoKey = _convoKey(actor.id, tokenDoc);
             const capturedPlayerToken = canvas.tokens?.controlled?.find(t => {
                 const a = t.actor;
                 return a && a.id !== actor.id && (a.type === "character" || a.hasPlayerOwner);
@@ -519,11 +550,7 @@ export function registerUiHooks() {
             chatControls.find(".ace-engine-trigger").on("click", async (ev) => {
                 ev.preventDefault();
                 ev.stopPropagation();
-                const existing = openConversations.get(playerConvoKey);
-                if (existing) { existing.render(true); return; }
-                const convoApp = new ConversationApp(actor, { isOwner: true, tokenDocument: tokenDoc, speakerToken: capturedPlayerToken || undefined });
-                openConversations.set(playerConvoKey, convoApp);
-                convoApp.render(true);
+                openNpcConversation(tokenDoc, capturedPlayerToken);
                 canvas.hud.token.clear();
             });
             chatControls.find(".ace-engine-trigger").on("mouseenter", function() {
